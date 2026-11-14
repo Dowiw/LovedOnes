@@ -1,0 +1,40 @@
+{
+  "name": "@loved-ones/mobile-app",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@loved-ones/shared": "workspace:*",
+    "@maplibre/maplibre-react-native": "^11.5.1",
+    "expo": "^58.0.25",
+    "expo-battery": "^58.0.4",
+    "expo-camera": "^58.0.14",
+    "expo-dev-client": "^58.0.20",
+    "expo-file-system": "^58.0.13",
+    "expo-location": "^58.0.22",
+    "expo-secure-store": "^58.0.3",
+    "expo-sqlite": "^58.0.17",
+    "expo-status-bar": "^58.0.5",
+    "expo-task-manager": "^58.0.14",
+    "expo-updates": "^58.0.22",
+    "react": "^19.3.0",
+    "react-native": "0.88.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
