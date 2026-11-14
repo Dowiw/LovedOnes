@@ -1,0 +1,68 @@
+{
+  "version": 8,
+  "name": "LovedOnes Vector Style",
+  "sources": {
+    "openmaptiles": {
+      "type": "vector",
+      "url": "pmtiles:///tiles/region.pmtiles"
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#0f172a"
+      }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#1e3a5f"
+      }
+    },
+    {
+      "id": "landuse",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "landuse",
+      "paint": {
+        "fill-color": "#162032"
+      }
+    },
+    {
+      "id": "roads",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "transportation",
+      "paint": {
+        "line-color": "#334155",
+        "line-width": 1.2
+      }
+    },
+    {
+      "id": "buildings",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "building",
+      "paint": {
+        "fill-color": "#1e293b",
+        "fill-outline-color": "#334155"
+      }
+    },
+    {
+      "id": "boundaries",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "boundary",
+      "paint": {
+        "line-color": "#475569",
+        "line-dasharray": [2, 2],
+        "line-width": 1
+      }
+    }
+  ]
+}

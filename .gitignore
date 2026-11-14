@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.next/
+.turbo/
+.expo/
+*.tsbuildinfo
+.env
+logs/*.log*
+logs/*.json
+!logs/.gitkeep
+!infra/tiles/.gitkeep
+coverage/
+.DS_Store

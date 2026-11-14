@@ -1,0 +1,159 @@
+networks:
+  internal_net:
+    driver: bridge
+
+services:
+  gateway:
+    image: caddy:2-alpine
+    container_name: lovedones-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-80}:80"
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal_net
+    depends_on:
+      - auth-admin-service
+      - realtime-service
+      - map-service
+      - web-dashboard
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: lovedones-cloudflared
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --url http://gateway:80
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    networks:
+      - internal_net
+    depends_on:
+      - gateway
+
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: lovedones-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-lovedones}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./packages/db/migrations/0001_init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    networks:
+      - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-lovedones}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: lovedones-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    networks:
+      - internal_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  auth-admin-service:
+    build:
+      context: .
+      dockerfile: apps/auth-admin-service/Dockerfile
+    container_name: lovedones-auth-admin
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-lovedones}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      LOG_DIR: /var/log/app
+      MAX_LOG_STORAGE_MB: ${MAX_LOG_STORAGE_MB:-500}
+      PUBLIC_SERVER_URL: ${PUBLIC_SERVER_URL:-http://localhost}
+    volumes:
+      - ./logs:/var/log/app
+    networks:
+      - internal_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  realtime-service:
+    build:
+      context: .
+      dockerfile: apps/realtime-service/Dockerfile
+    container_name: lovedones-realtime
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4002
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-lovedones}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      LOG_DIR: /var/log/app
+    volumes:
+      - ./logs:/var/log/app
+    networks:
+      - internal_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  map-service:
+    build:
+      context: .
+      dockerfile: apps/map-service/Dockerfile
+    container_name: lovedones-map-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      TILES_DIR: /srv/tiles
+      LOG_DIR: /var/log/app
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./infra/tiles:/srv/tiles:ro
+      - ./logs:/var/log/app
+    networks:
+      - internal_net
+
+  web-dashboard:
+    build:
+      context: .
+      dockerfile: apps/web-dashboard/Dockerfile
+    container_name: lovedones-web-dashboard
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      NEXT_PUBLIC_GATEWAY_URL: ${PUBLIC_SERVER_URL:-http://localhost}
+    networks:
+      - internal_net
+    depends_on:
+      - auth-admin-service
+      - realtime-service
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:

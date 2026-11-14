@@ -1,0 +1,26 @@
+:80 {
+	encode zstd gzip
+
+	@authAdmin path /api/auth/* /api/admin/*
+	handle @authAdmin {
+		reverse_proxy auth-admin-service:4001
+	}
+
+	@realtime path /api/realtime/* /socket.io/*
+	handle @realtime {
+		reverse_proxy realtime-service:4002
+	}
+
+	@tiles path /tiles/*
+	handle @tiles {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+		header Access-Control-Allow-Headers "Range, If-Modified-Since, Cache-Control, Content-Type"
+		header Access-Control-Expose-Headers "Accept-Ranges, Content-Range, Content-Length, ETag"
+		reverse_proxy map-service:8080
+	}
+
+	handle {
+		reverse_proxy web-dashboard:3000
+	}
+}
