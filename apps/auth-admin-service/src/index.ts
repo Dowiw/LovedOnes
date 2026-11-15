@@ -956,7 +956,13 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
       socket.send(entry);
     }
 
-    const subscriber = new Redis(redisUrl, { maxRetriesPerRequest: 3 });
+    const subscriber = new Redis(redisUrl, {
+      maxRetriesPerRequest: 3,
+      enableReadyCheck: false,
+    });
+    subscriber.on('error', (err) => {
+      loggerHandle.logger.error({ err }, 'log stream subscriber error');
+    });
     subscriber.on('message', (_channel, message) => {
       if (socket.readyState === 1) {
         socket.send(message);

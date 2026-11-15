@@ -66,17 +66,31 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   const pool = createPool(databaseUrl);
   await runMigrations(pool);
 
-  const redis = new Redis(redisUrl, { maxRetriesPerRequest: 3 });
-  const pubClient = new Redis(redisUrl, { maxRetriesPerRequest: 3 });
-  const subClient = pubClient.duplicate();
-  const logSubClient = new Redis(redisUrl, { maxRetriesPerRequest: 3 });
-
   const loggerHandle = await createServiceLogger('realtime-service', {
     logDir,
     redisUrl,
     disableFile: options.disableFileLog,
     disableRedis: options.disableRedisLog,
   });
+
+  const redis = new Redis(redisUrl, { maxRetriesPerRequest: 3 });
+  const pubClient = new Redis(redisUrl, { maxRetriesPerRequest: 3 });
+  const subClient = pubClient.duplicate({ enableReadyCheck: false });
+  const logSubClient = new Redis(redisUrl, {
+    maxRetriesPerRequest: 3,
+    enableReadyCheck: false,
+  });
+
+  for (const [name, client] of [
+    ['redis', redis],
+    ['pubClient', pubClient],
+    ['subClient', subClient],
+    ['logSubClient', logSubClient],
+  ] as const) {
+    client.on('error', (err) => {
+      loggerHandle.logger.error({ err, client: name }, 'redis client error');
+    });
+  }
 
   const app = Fastify({ logger: false });
   await app.register(cors, {
