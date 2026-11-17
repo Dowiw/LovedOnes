@@ -2,7 +2,7 @@
 
 Share your live location and chat with family or close friends on a server you own — no third-party tracking, no subscriptions, and no selling your location history.
 
-Designed to run comfortably at home on a Raspberry Pi 5 (`arm64`), a home server, or a small VPS (`amd64`).
+Runs anywhere Docker runs — cloud VMs, bare-metal Linux servers, home servers, single-board `arm64` devices, or local Linux/macOS/WSL2 machines — and scales horizontally behind any reverse proxy or load balancer.
 
 ---
 
@@ -32,6 +32,7 @@ Open `.env` and update these essentials:
 - **`JWT_SECRET`** and **`JWT_REFRESH_SECRET`** — set each to a long random string (at least 32 characters).
 - **`GATEWAY_PORT`** — the port you want the web app on locally (use `8080`, or `80` if nothing else uses port 80).
 - **`PUBLIC_SERVER_URL`** — the address people use to open the app (e.g. `http://localhost:8080` for local testing, or `https://track.yourdomain.com` if using a domain).
+- **`POSTGIS_IMAGE`** *(optional, for native `arm64` hosts)* — set `POSTGIS_IMAGE=imresamu/postgis:16-3.4-alpine` instead of the default `amd64` image.
 
 ### 2. Start everything
 
@@ -51,7 +52,7 @@ Open `http://localhost:8080` (or `http://localhost` if using port 80) in your br
 
 If you don't want to open ports on your router, you can put LovedOnes behind a Cloudflare Tunnel:
 
-- **If you already run `cloudflared` on your Pi / host:**
+- **If you already run `cloudflared` on your host:**
   1. Point your domain/subdomain in Cloudflare Zero Trust to `http://localhost:8080` (matching `GATEWAY_PORT=8080`).
   2. Set `PUBLIC_SERVER_URL=https://your-subdomain.example.com` in `.env` so QR codes and invite links use your public address.
   3. Apply the `.env` change:
@@ -71,7 +72,26 @@ If you don't want to open ports on your router, you can put LovedOnes behind a C
 
 ## Adding Real Map Data
 
-A tiny placeholder map is included at [`infra/tiles/region.pmtiles`](infra/tiles/region.pmtiles) so the stack starts right away. To see full streets and labels for your area, download a regional `.pmtiles` extract (for example from Protomaps) and replace [`infra/tiles/region.pmtiles`](infra/tiles/region.pmtiles).
+The [`infra/tiles/region.pmtiles`](infra/tiles/region.pmtiles) file checked into git is intentionally a **264-byte stub** (a minimal valid PMTiles v3 header for CI and range-request tests). Until you replace it, the map displays a dark background with pins but no streets or buildings.
+
+To drop in a real regional `.pmtiles` extract (for example **Berlin/Brandenburg** via [Protomaps](https://docs.protomaps.com/pmtiles/cli)):
+
+1. Install the `pmtiles` CLI (`brew install pmtiles` on macOS, or grab a binary from [protomaps/go-pmtiles](https://github.com/protomaps/go-pmtiles/releases)), check the latest build date at [maps.protomaps.com/builds](https://maps.protomaps.com/builds/), and extract your region directly to `infra/tiles/region.pmtiles`:
+   ```bash
+   # Berlin/Brandenburg (replace YYYYMMDD with the latest build date)
+   pmtiles extract https://build.protomaps.com/YYYYMMDD.pmtiles infra/tiles/region.pmtiles \
+     --bbox=11.2,51.3,14.8,53.6
+   ```
+   *(For Berlin only, use `--bbox=13.0883,52.3382,13.7612,52.6755`; for other regions, look up `MIN_LON,MIN_LAT,MAX_LON,MAX_LAT` via [bboxfinder.com](http://bboxfinder.com/).)*
+
+2. **Match your tile schema in [`infra/tiles/style.json`](infra/tiles/style.json):** The bundled `style.json` targets OpenMapTiles layer names (`transportation`, `building`, `boundary`). If your `.pmtiles` uses Protomaps v4 basemap layers, update those `source-layer` names in `infra/tiles/style.json` (e.g., `roads`, `buildings`, `boundaries`).
+
+3. **Reload without rebuilding:** `infra/tiles/` is bind-mounted into `map-service`, so no Docker rebuild is needed — hard-refresh your browser (`Ctrl+Shift+R`).
+
+4. **Avoid committing large map files:** Keep git from staging your local extract with:
+   ```bash
+   git update-index --assume-unchanged infra/tiles/region.pmtiles
+   ```
 
 ---
 
@@ -95,7 +115,7 @@ Because the mobile app uses native MapLibre maps, it needs a custom **Expo Devel
 
 If you're modifying the code (Node.js 22+ and `pnpm` 11+ required):
 
-> **Windows WSL2 users:** Keep this repository inside your Linux home directory (e.g. `~/project_repos/LovedOnes`), not `/mnt/c/...`, so Docker mounts and file watching stay fast. See [AGENTS.md](AGENTS.md).
+> **Note (Windows WSL2):** Keep the repo inside your Linux home directory (e.g. `~/project_repos/LovedOnes`), not `/mnt/c/...`, so Docker mounts and file watching stay fast. See [AGENTS.md](AGENTS.md).
 
 ```bash
 # 1. Install packages

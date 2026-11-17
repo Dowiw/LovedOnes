@@ -2,13 +2,13 @@
 
 Read `SPEC.md` at the repository root as the single source of truth for schemas, services, logging, telemetry, and monorepo boundaries.
 
-## Windows + WSL2 Development Rules
+## Cross-Platform Development & Scaling Rules
 
-Building a Dockerized microservices stack alongside React Native on Windows works best when you split the workload across **WSL2** and **Windows Native** properly:
+The stack targets Linux, macOS, and Windows (WSL2) workstations as well as `amd64` and `arm64` servers and cloud hosts:
 
-1. **Keep the Repository Inside the WSL2 Filesystem:** Clone and run code inside your Linux home directory (e.g., `~/project_repos/LovedOnes`), **never** inside `/mnt/c/Users/...`. Running Docker volume mounts and `pnpm install` across the Windows-to-Linux 9P filesystem bridge causes massive I/O bottlenecks and breaks file-watching (`inotify`) for hot reload.
-2. **Docker Desktop WSL2 Backend:** Enable the WSL2 integration in Docker Desktop so `docker compose` runs natively inside your Linux distro while exposing ports to `localhost` on Windows.
-3. **Mobile Testing from WSL2 (Android + Expo Dev Client):** Because `@maplibre/maplibre-react-native` (v11+) includes custom native C++ code, it cannot run inside the standard Expo Go app. Compile a custom **Development Build APK** (`eas build --platform android --profile development` or locally via Android Studio on Windows) once, install it on your Android phone, and connect it to the Metro bundler running in WSL2 using `npx expo start --dev-client --tunnel` (or via LAN with WSL2 mirrored networking enabled in `.wslconfig`).
+1. **Multi-Arch & External Backing Stores:** Both Compose stacks default to `postgis/postgis:16-3.4-alpine` (`amd64`), support overriding `POSTGIS_IMAGE=imresamu/postgis:16-3.4-alpine` for native `arm64` hosts (Apple Silicon, AWS Graviton, ARM SBCs), and accept external `DATABASE_URL` / `REDIS_URL` endpoints for managed or horizontally scaled deployments.
+2. **Filesystem Hygiene (Windows WSL2 Note):** On Linux and macOS, run directly on the native filesystem. On Windows WSL2, keep the repository inside the Linux home directory (e.g., `~/project_repos/LovedOnes`) rather than `/mnt/c/...` so Docker mounts and file-watching (`inotify`) stay fast.
+3. **Mobile Testing Across Host OSes (Android & iOS Expo Dev Client):** Because `@maplibre/maplibre-react-native` (v11+) includes custom native C++ code, it cannot run inside the standard Expo Go app. Compile a custom **Development Build** (`eas build --platform android --profile development`, `eas build --platform ios --profile development`, or locally via Android Studio / Xcode) once, install it on a device, and connect to Metro using `npx expo start --dev-client --tunnel` (or direct LAN).
 
 ## Monorepo Architecture & Package Ownership
 

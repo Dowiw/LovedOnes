@@ -198,7 +198,7 @@ Standard **Expo Go** cannot load `@maplibre/maplibre-react-native` because it co
    cd apps/mobile-app
    eas build --platform android --profile development
    ```
-2. **Start Metro from WSL2** (use `--tunnel` if your phone is not on WSL2 mirrored LAN):
+2. **Start Metro** (use `--tunnel` if your phone isn't on the same local network as your dev machine):
    ```bash
    pnpm --filter @loved-ones/mobile-app start
    # or: npx expo start --dev-client --tunnel

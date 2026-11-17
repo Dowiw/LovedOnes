@@ -1,23 +1,22 @@
 # Project Specification: Self-Hosted Group Location & Messaging Platform
-**License:** GNU Affero General Public License v3.0 (AGPLv3)
-**Target Architectures:** `linux/amd64` (Windows WSL2 / x86 VPS) and `linux/arm64` (Raspberry Pi 5)
+**Target Architectures:** `linux/amd64` and `linux/arm64` (cloud VMs, bare-metal Linux servers, macOS/Linux/WSL2 workstations, and ARM64 edge/SBC hosts)
 **Monorepo Tooling:** `pnpm` workspaces + `Turborepo`
 
 ---
 
 ## 1. System Architecture & Services
 
-The system is a decoupled microservices appliance orchestrated via Docker Compose. All internal services communicate over an isolated Docker bridge network (`internal_net`) and a shared Redis instance.
+The system is a decoupled microservices platform orchestrated via Docker Compose and designed to run either as a single-node appliance or scaled horizontally behind a reverse proxy or load balancer. All application services are stateless and coordinate through PostgreSQL/PostGIS and Redis.
 
 ### 1.1 Infrastructure & Ingress Containers
-* **`gateway` (Caddy 2 Alpine):** Single HTTP/WebSocket entry point. Routes traffic by path or subdomain:
+* **`gateway` (Caddy 2 Alpine):** Single HTTP/WebSocket entry point (or replaceable by an external reverse proxy / cloud load balancer). Routes traffic by path or subdomain:
   * `/api/auth/*` and `/api/admin/*` -> `auth-admin-service:4001`
   * `/api/realtime/*` and `/socket.io/*` -> `realtime-service:4002`
   * `/tiles/*` -> `map-service:8080`
   * `/*` -> `web-dashboard:3000`
-* **`cloudflared` (Optional Profile):** Official `cloudflare/cloudflared` container for zero-port-forward residential/Raspberry Pi 5 hosting. Connects directly to `http://gateway:80`.
-* **`postgres` (`postgis/postgis:16-3.4-alpine`):** Primary relational and spatial datastore.
-* **`redis` (`redis:7-alpine`):** Pub/Sub message broker, Socket.io adapter, live log ring-buffer, and per-user telemetry counter store.
+* **`cloudflared` (Optional Profile):** Official `cloudflare/cloudflared` container for zero-port-forward hosting on any NATted or firewalled network. Connects directly to `http://gateway:80`.
+* **`postgres` (`${POSTGIS_IMAGE:-postgis/postgis:16-3.4-alpine}`):** Primary relational and spatial datastore (use `imresamu/postgis:16-3.4-alpine` for native `linux/arm64`, or point `DATABASE_URL` at an external managed PostgreSQL/PostGIS cluster).
+* **`redis` (`redis:7-alpine` or managed Redis via `REDIS_URL`):** Pub/Sub message broker, Socket.io adapter, live log ring-buffer, session store, and per-user telemetry counter store.
 
 ### 1.2 Application Microservices & Clients (Monorepo Packages)
 1. **`packages/shared`:** Shared TypeScript interfaces, Zod validation schemas, Socket.io event payloads, and Pino logger configuration.
@@ -39,6 +38,10 @@ The system is a decoupled microservices appliance orchestrated via Docker Compos
    * Native Android & iOS client using `expo-dev-client`, `expo-location`, `expo-task-manager`, and `@maplibre/maplibre-react-native` (v11+ New Architecture).
    * Supports QR code onboarding scan, offline SQLite location queue when disconnected, native PMTiles map rendering (`pmtiles://https://...` and local cached `pmtiles://file://...`), and OTA updates via `expo-updates`.
 
+### 1.3 Scaling Across Systems & Topologies
+* **Stateless Horizontal Scaling:** Multiple replicas of `auth-admin-service` (stateless JWTs + Redis sessions) and `realtime-service` (`@socket.io/redis-adapter`) can run behind Caddy or any L7 load balancer without sticky state in process memory.
+* **Edge & Cloud Storage Options:** Static `.pmtiles` archives served via HTTP Byte-Range requests can sit behind CDN caching or object storage proxies for multi-region clients.
+
 ---
 
 ## 2. Monorepo Directory Structure
@@ -58,8 +61,8 @@ The system is a decoupled microservices appliance orchestrated via Docker Compos
 │   ├── caddy/Caddyfile         # Reverse proxy & PMTiles static range-request server
 │   └── tiles/                  # Mounted volume for regional .pmtiles files & fonts
 ├── logs/                       # Mounted host volume (/var/log/app) for rotating logs
-├── docker-compose.yml          # Production & Pi 5 multi-arch stack
-├── docker-compose.dev.yml      # Local WSL2 dev overrides (Postgres, Redis, Caddy)
+├── docker-compose.yml          # Multi-arch production stack (amd64 / arm64)
+├── docker-compose.dev.yml      # Local dev backing services (Postgres, Redis, Caddy)
 ├── turbo.json
 └── pnpm-workspace.yaml
 ```

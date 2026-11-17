@@ -11,8 +11,6 @@ Thanks for helping improve LovedOnes! Whether it's a bug fix, doc tweak, or new 
 
 ## Local Setup
 
-> **Windows WSL2:** Keep the repo inside your Linux home directory (e.g. `~/project_repos/LovedOnes`), not `/mnt/c/...`.
-
 ```bash
 cp .env.example .env
 pnpm install
