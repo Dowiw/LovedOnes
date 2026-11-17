@@ -305,10 +305,13 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   return { app, pool, redis, loggerHandle };
 }
 
+/**
+ * main for auth server for the admin
+ */
 async function main() {
   const port = Number.parseInt(process.env.PORT ?? process.env.AUTH_ADMIN_PORT ?? '4001', 10);
   const { app, loggerHandle } = await createAuthAdminServer();
-  await app.listen({ port, host: '0.0.0.0' });
+  await app.listen({ port, host: '0.0.0.0' }); // listen to local and port
   loggerHandle.logger.info({ port }, 'auth-admin-service listening');
 }
 
