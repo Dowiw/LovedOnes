@@ -17,6 +17,10 @@
     "./telemetry": {
       "types": "./dist/telemetry.d.ts",
       "import": "./dist/telemetry.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js"
     }
   },
   "scripts": {
@@ -27,12 +31,22 @@
   },
   "dependencies": {
     "ioredis": "^5.4.1",
+    "jose": "^5.9.6",
     "pino": "^9.5.0",
     "pino-roll": "^2.1.0",
     "zod": "^3.24.1"
   },
+  "peerDependencies": {
+    "fastify": "^5.2.0"
+  },
+  "peerDependenciesMeta": {
+    "fastify": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "fastify": "^5.2.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

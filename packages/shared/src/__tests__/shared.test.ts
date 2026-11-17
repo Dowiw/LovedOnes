@@ -9,6 +9,7 @@ import {
   QrInvitePayloadSchema,
 } from '../index.js';
 import { createServiceLogger } from '../logger.js';
+import { createTokenService, extractBearerToken } from '../auth.js';
 
 describe('@loved-ones/shared', () => {
   it('validates QR invite payloads', () => {
@@ -78,5 +79,27 @@ describe('@loved-ones/shared', () => {
     expect(contents).toContain('"service":"test-service"');
     expect(contents).toContain('"msg":"logger test event"');
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('issues and strictly verifies access vs refresh JWTs via jose', async () => {
+    const tokens = createTokenService({
+      jwtSecret: 'shared-test-secret-minimum-32-chars!!',
+      jwtRefreshSecret: 'shared-test-secret-minimum-32-chars!!',
+    });
+    const pair = await tokens.issueTokenPair({
+      id: '11111111-1111-4111-8111-111111111111',
+      email: 'alice@example.com',
+      username: 'Alice',
+      role: 'HOST_ADMIN',
+    });
+
+    const verifiedAccess = await tokens.verifyAccessToken(pair.accessToken);
+    expect(verifiedAccess.type).toBe('access');
+    expect(verifiedAccess.role).toBe('HOST_ADMIN');
+
+    await expect(tokens.verifyAccessToken(pair.refreshToken)).rejects.toThrow();
+    await expect(tokens.verifyRefreshToken(pair.accessToken)).rejects.toThrow();
+    expect(extractBearerToken(`Bearer ${pair.accessToken}`)).toBe(pair.accessToken);
+    expect(extractBearerToken('Basic abc')).toBeNull();
   });
 });
