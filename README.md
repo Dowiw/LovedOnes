@@ -1,120 +1,132 @@
 # LovedOnes
 
-Self-hosted, privacy-first group location sharing and real-time messaging platform built as a TypeScript monorepo and orchestrated via Docker Compose. Designed to run on both `linux/amd64` (VPS / Windows WSL2) and `linux/arm64` (Raspberry Pi 5) behind Caddy and an optional Cloudflare Tunnel.
+Share your live location and chat with family or close friends on a server you own — no third-party tracking, no subscriptions, and no selling your location history.
 
-## Features
+Designed to run comfortably at home on a Raspberry Pi 5 (`arm64`), a home server, or a small VPS (`amd64`).
 
-- **Private Group Location & Chat:** Live location updates and group chat powered by Fastify, Socket.io + Redis Pub/Sub adapter, and PostgreSQL/PostGIS (`GEOGRAPHY(Point, 4326)`).
-- **Per-Group Privacy Modes:** Members can switch visibility per group between `EXACT`, `FUZZED` (~1 km grid hashed deterministically per 10-minute `recordedAt` bucket), and `GHOST`.
-- **Role-Based Access & Zero-Config QR Invites:** First registered account is promoted to `HOST_ADMIN`. Admins generate single- or multi-use QR/web invites (`/admin/invites` -> `/join?token=...`) with `ADMIN`, `MEMBER`, or `SPECTATOR` roles.
-- **Self-Hosted Vector Maps (PMTiles):** Serves regional `.pmtiles` archives and MapLibre styles over HTTP `206 Partial Content` range requests (`map-service`), rendered in browsers via MapLibre GL JS and natively on mobile via `@maplibre/maplibre-react-native`.
-- **Host Observability:** Unified `jose` JWT auth (`access` / `refresh`), rotating NDJSON logs (`STDOUT` + `pino-roll` + Redis `logs:ring` / `logs:stream`), WebSocket live log terminal (`/admin`), and per-account storage/compute telemetry.
-- **Offline-Resilient Mobile Client:** Expo SDK 58 app with `expo-secure-store` server binding, `expo-task-manager` background location, SQLite offline point queue, and cached offline `.pmtiles` support.
+---
 
-## Architecture & Workspace Layout
+## What It Does
 
-```text
-├── apps/
-│   ├── auth-admin-service/   # Fastify REST + WS (:4001): Argon2id auth, JWT, RBAC, QR invites, telemetry, log stream
-│   ├── realtime-service/     # Fastify + Socket.io (:4002): GPS batch ingestion, privacy filtering, group chat
-│   ├── map-service/          # Fastify static range server (:8080 internal): .pmtiles, style.json, glyphs
-│   ├── web-dashboard/        # Next.js App Router (:3000 internal): live map UI, /join flow, /admin console
-│   └── mobile-app/           # Expo SDK 58 React Native client (Android & iOS)
-├── packages/
-│   ├── shared/               # Zod schemas, privacy fuzzing, ./auth (jose + Fastify hooks), ./logger, ./telemetry
-│   └── db/                   # PostGIS SQL migrations (0001_init.sql), Drizzle schema, spatial/telemetry queries
-├── infra/
-│   ├── caddy/                # Caddyfile (production) and Caddyfile.dev (WSL2 hot-reload)
-│   └── tiles/                # Regional region.pmtiles archive and style.json
-├── docker-compose.yml        # Full production stack (Caddy, PostGIS, Redis, 4 app services, optional cloudflared)
-└── docker-compose.dev.yml    # Local dev backing services (PostGIS :5432, Redis :6379, Caddy dev :8080)
-```
+- **Private location sharing & group chat:** See where your groups are on a live map and message each other in real time.
+- **Privacy per group:** Choose whether each group sees your **Exact** location, an **Approximate (~1 km)** area, or **Ghost** mode (hidden).
+- **Easy QR code invites:** Generate an invite link or QR code from the admin page — family members scan it to connect automatically without typing server URLs or settings.
+- **Self-hosted maps:** Map tiles live on your own server ([`infra/tiles/`](infra/tiles/)) instead of relying on commercial map APIs.
+- **Works in browsers & on mobile:** Use the web dashboard from any desktop or phone browser, or run the Expo mobile app with background tracking and offline location caching when signal drops.
+- **Admin console:** Monitor server health, disk/database usage, and live server logs right in your browser at `/admin`.
 
-All external HTTP and WebSocket traffic enters through **Caddy (`gateway`)**:
+---
 
-| Path | Upstream | Purpose |
-| :--- | :--- | :--- |
-| `/api/auth/*`, `/api/admin/*` | `auth-admin-service:4001` | Auth, groups, invites, telemetry, `/api/admin/logs/stream` WS |
-| `/api/realtime/*`, `/socket.io/*` | `realtime-service:4002` | GPS ingestion, location/message snapshots, Socket.io |
-| `/tiles/*` | `map-service:8080` | `.pmtiles` byte-range requests & MapLibre `style.json` |
-| `/*` | `web-dashboard:3000` | Next.js web portal & admin console |
+## Quick Start (Docker)
 
-## Quick Start (Docker Compose)
+You'll need **Docker** and **Docker Compose** installed.
 
-### Prerequisites
-- Docker & Docker Compose v2
-- *(Optional)* Regional `.pmtiles` extract placed at [`infra/tiles/region.pmtiles`](infra/tiles/region.pmtiles) (a minimal placeholder archive and [`style.json`](infra/tiles/style.json) are included for initial startup)
+### 1. Create your config file
 
-### 1. Configure Environment
 ```bash
 cp .env.example .env
 ```
-Update `.env` with strong random values and your host settings:
 
-- `JWT_SECRET` and `JWT_REFRESH_SECRET` — minimum 32 characters each
-- `GATEWAY_PORT` — host port for Caddy HTTP (defaults to `80`; set `GATEWAY_PORT=8080` if `80` is occupied or proxied by a local tunnel)
-- `PUBLIC_SERVER_URL` — public origin embedded in QR codes and `/join` links (e.g. `http://localhost:8080` locally or `https://track.example.com` behind Cloudflare)
-- `CLOUDFLARE_TUNNEL_TOKEN` — *(only if running the bundled `cloudflared` container)*
+Open `.env` and update these essentials:
 
-### 2. Start the Stack
+- **`JWT_SECRET`** and **`JWT_REFRESH_SECRET`** — set each to a long random string (at least 32 characters).
+- **`GATEWAY_PORT`** — the port you want the web app on locally (use `8080`, or `80` if nothing else uses port 80).
+- **`PUBLIC_SERVER_URL`** — the address people use to open the app (e.g. `http://localhost:8080` for local testing, or `https://track.yourdomain.com` if using a domain).
+
+### 2. Start everything
+
 ```bash
 docker compose up -d --build
 ```
-Open `http://localhost:8080` (or `http://localhost` if `GATEWAY_PORT` is unset) and register the first account — the first user in an empty database is automatically promoted to `HOST_ADMIN`.
 
-### 3. Exposing via Cloudflare Tunnel (No Port Forwarding)
-- **Option A — Bundled `cloudflared` container:** Set `CLOUDFLARE_TUNNEL_TOKEN` and `PUBLIC_SERVER_URL=https://track.example.com` in `.env`, configure the Public Hostname in Cloudflare Zero Trust to point to `http://gateway:80`, and run:
-  ```bash
-  docker compose --profile tunnel up -d
-  ```
-- **Option B — Existing `cloudflared` daemon on host/Pi 5:** Point your tunnel's Public Hostname to `http://localhost:8080` (matching `GATEWAY_PORT=8080`), set `PUBLIC_SERVER_URL=https://track.example.com` in `.env`, and recreate `auth-admin-service` if `.env` changed:
-  ```bash
-  docker compose up -d auth-admin-service
-  ```
+### 3. Create your admin account
 
-## Local Development (Node 22 + pnpm 11)
+Open `http://localhost:8080` (or `http://localhost` if using port 80) in your browser and register your first account.
 
-> **Windows WSL2 note:** Keep the repository inside your Linux filesystem (e.g., `~/project_repos/LovedOnes`), not `/mnt/c/...`, to avoid 9P filesystem bottlenecks and broken file watching. See [AGENTS.md](AGENTS.md).
+> The very first account created on a fresh database automatically becomes the **Host Admin**, giving you access to `/admin` and `/admin/invites`.
 
-1. **Install dependencies:**
+---
+
+## Accessing It Outside Your Home (Cloudflare Tunnel)
+
+If you don't want to open ports on your router, you can put LovedOnes behind a Cloudflare Tunnel:
+
+- **If you already run `cloudflared` on your Pi / host:**
+  1. Point your domain/subdomain in Cloudflare Zero Trust to `http://localhost:8080` (matching `GATEWAY_PORT=8080`).
+  2. Set `PUBLIC_SERVER_URL=https://your-subdomain.example.com` in `.env` so QR codes and invite links use your public address.
+  3. Apply the `.env` change:
+     ```bash
+     docker compose up -d auth-admin-service
+     ```
+
+- **If you want Docker to run `cloudflared` for you:**
+  1. Paste your tunnel token into `CLOUDFLARE_TUNNEL_TOKEN` in `.env` and set `PUBLIC_SERVER_URL=https://your-subdomain.example.com`.
+  2. In Cloudflare Zero Trust, point the tunnel's Public Hostname to `http://gateway:80`.
+  3. Start with the tunnel profile enabled:
+     ```bash
+     docker compose --profile tunnel up -d
+     ```
+
+---
+
+## Adding Real Map Data
+
+A tiny placeholder map is included at [`infra/tiles/region.pmtiles`](infra/tiles/region.pmtiles) so the stack starts right away. To see full streets and labels for your area, download a regional `.pmtiles` extract (for example from Protomaps) and replace [`infra/tiles/region.pmtiles`](infra/tiles/region.pmtiles).
+
+---
+
+## Mobile App (`apps/mobile-app`)
+
+Because the mobile app uses native MapLibre maps, it needs a custom **Expo Development Build** instead of the standard Expo Go app:
+
+1. Build the Android development APK once:
    ```bash
-   pnpm install
+   cd apps/mobile-app
+   eas build --platform android --profile development
    ```
-2. **Start PostGIS, Redis, and the dev Caddy gateway:**
+2. Install the APK on your phone, start Metro from the repo root, and scan the QR code from `/admin/invites`:
    ```bash
-   docker compose -f docker-compose.dev.yml up -d --wait
-   ```
-3. **Run dev servers** (requires host ports `3000`, `4001`, `4002` free):
-   ```bash
-   set -a && source .env && set +a
-   pnpm dev
-   ```
-4. **Build, typecheck, and run tests** (with `docker-compose.dev.yml` PostGIS & Redis up on `:5432` and `:6379`):
-   ```bash
-   pnpm build
-   pnpm typecheck
-   pnpm test
+   pnpm --filter @loved-ones/mobile-app start
    ```
 
-## Mobile Client Setup (`apps/mobile-app`)
+---
 
-Because `@maplibre/maplibre-react-native` includes custom native C++ code, standard Expo Go cannot run it. Compile a custom **Development Build APK** once:
+## Developing Locally
+
+If you're modifying the code (Node.js 22+ and `pnpm` 11+ required):
+
+> **Windows WSL2 users:** Keep this repository inside your Linux home directory (e.g. `~/project_repos/LovedOnes`), not `/mnt/c/...`, so Docker mounts and file watching stay fast. See [AGENTS.md](AGENTS.md).
 
 ```bash
-cd apps/mobile-app
-eas build --platform android --profile development
+# 1. Install packages
+pnpm install
+
+# 2. Start only Postgres, Redis, and the dev Caddy proxy
+docker compose -f docker-compose.dev.yml up -d --wait
+
+# 3. Load .env and start all dev servers (uses ports 3000, 4001, 4002)
+set -a && source .env && set +a
+pnpm dev
 ```
 
-Install the APK on your device, start Metro in the repo, and scan a QR code generated on `/admin/invites` to configure the server URL automatically:
+Useful workspace checks:
 
 ```bash
-pnpm --filter @loved-ones/mobile-app start
-# or: npx expo start --dev-client --tunnel
+pnpm build
+pnpm typecheck
+pnpm test
 ```
 
-## Documentation & License
+---
 
-- [SPEC.md](SPEC.md) — System specification and database schema
-- [AGENTS.md](AGENTS.md) — Monorepo ownership and WSL2 development rules
-- [GLOSSARY.md](GLOSSARY.md) — Canonical domain vocabulary
-- [LICENSE](LICENSE) — MIT License
+## Under the Hood
+
+Everything sits behind a single **Caddy** reverse proxy (`gateway`), so only one port is exposed:
+
+- **Web App (`apps/web-dashboard`):** Next.js user map, `/join` invite page, and `/admin` console.
+- **Auth & Admin (`apps/auth-admin-service`):** Accounts, Argon2id passwords, JWT sessions, group permissions, QR invites, and system telemetry.
+- **Live Tracking & Chat (`apps/realtime-service`):** Socket.io + Redis real-time location updates, privacy filtering, and chat.
+- **Map Tiles (`apps/map-service`):** Byte-range server for `.pmtiles` and map styles.
+- **Database (`packages/db` & PostGIS):** PostgreSQL + PostGIS spatial storage and Redis pub/sub.
+
+For deeper technical details, see [SPEC.md](SPEC.md), [GLOSSARY.md](GLOSSARY.md), and [AGENTS.md](AGENTS.md). Licensed under the [MIT License](LICENSE).
