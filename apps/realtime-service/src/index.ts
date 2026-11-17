@@ -1,30 +1,20 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import cors from '@fastify/cors';
-import fastifyJwt from '@fastify/jwt';
 import { createAdapter } from '@socket.io/redis-adapter';
-import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import Fastify, { FastifyInstance } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
 import { Server as SocketIOServer, Socket } from 'socket.io';
+import { createPool, runMigrations } from '@loved-ones/db';
+import { JwtUserPayload } from '@loved-ones/shared';
 import {
-  createPool,
-  getLatestGroupLocations,
-  insertLocationBatch,
-  runMigrations,
-} from '@loved-ones/db';
-import {
-  applyPrivacyFuzzing,
-  ChatMessage,
-  GroupRole,
-  JwtUserPayload,
-  JwtUserPayloadSchema,
-  LocationBatchSchema,
-  LocationBroadcast,
-  LocationPoint,
-  PrivacyMode,
-  SendMessageSchema,
-} from '@loved-ones/shared';
+  attachAuthAndTelemetry,
+  AuthenticatedRequest,
+  createTokenService,
+  DomainError,
+  extractBearerToken,
+} from '@loved-ones/shared/auth';
 import {
   createServiceLogger,
   LOGS_RING_KEY,
@@ -32,6 +22,11 @@ import {
   ServiceLoggerHandle,
 } from '@loved-ones/shared/logger';
 import { recordUserTelemetry, trackUserSocket } from '@loved-ones/shared/telemetry';
+import {
+  PostgresRealtimeStore,
+  SocketIoBroadcaster,
+} from './adapters/postgres-socketio-adapters.js';
+import { RealtimeModule } from './domain/realtime-module.js';
 
 export interface RealtimeServiceOptions {
   databaseUrl?: string;
@@ -40,11 +35,6 @@ export interface RealtimeServiceOptions {
   logDir?: string;
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
-}
-
-interface AuthenticatedRequest extends FastifyRequest {
-  authUser?: JwtUserPayload;
-  perfStartMs?: number;
 }
 
 export async function createRealtimeServer(options: RealtimeServiceOptions = {}): Promise<{
@@ -98,8 +88,22 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
-  await app.register(fastifyJwt, {
-    secret: jwtSecret,
+
+  app.setErrorHandler((err, _request, reply) => {
+    if (err instanceof DomainError) {
+      return reply
+        .code(err.statusCode)
+        .send(err.details ? { error: err.message, details: err.details } : { error: err.message });
+    }
+    loggerHandle.logger.error({ err }, 'unhandled realtime error');
+    return reply.code(500).send({ error: 'Internal server error' });
+  });
+
+  const tokenService = createTokenService({ jwtSecret });
+  const { requireAuth } = attachAuthAndTelemetry(app, {
+    verifyAccessToken: (token) => tokenService.verifyAccessToken(token),
+    recordTelemetry: (userId, elapsedMs, weight) =>
+      recordUserTelemetry(redis, userId, elapsedMs, weight),
   });
 
   const io = new SocketIOServer(app.server, {
@@ -110,111 +114,17 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     adapter: createAdapter(pubClient, subClient),
   });
 
+  const realtime = new RealtimeModule({
+    store: new PostgresRealtimeStore(pool),
+    broadcaster: new SocketIoBroadcaster(io),
+  });
+
   logSubClient.on('message', (_channel, message) => {
     io.to('admin:logs').emit('logs:line', message);
   });
   await logSubClient.subscribe(LOGS_STREAM_CHANNEL);
 
-  async function requireAuth(request: AuthenticatedRequest, reply: FastifyReply): Promise<void> {
-    try {
-      const decoded = await request.jwtVerify<JwtUserPayload>();
-      request.authUser = JwtUserPayloadSchema.parse(decoded);
-    } catch {
-      await reply.code(401).send({ error: 'Unauthorized' });
-    }
-  }
-
-  async function isGroupMember(userId: string, groupId: string): Promise<boolean> {
-    const res = await pool.query<{ exists: boolean }>(
-      'SELECT EXISTS(SELECT 1 FROM group_memberships WHERE user_id = $1 AND group_id = $2) AS exists',
-      [userId, groupId],
-    );
-    return Boolean(res.rows[0]?.exists);
-  }
-
-  async function processAndBroadcastLocations(
-    user: JwtUserPayload,
-    points: LocationPoint[],
-  ): Promise<number> {
-    const inserted = await insertLocationBatch(pool, user.id, points);
-    const latest = points[points.length - 1];
-    if (!latest) return inserted;
-
-    const memberships = await pool.query<{
-      group_id: string;
-      role: GroupRole;
-      privacy: PrivacyMode;
-    }>(
-      'SELECT group_id, role, privacy FROM group_memberships WHERE user_id = $1',
-      [user.id],
-    );
-
-    for (const m of memberships.rows) {
-      if (m.role === 'SPECTATOR') continue;
-
-      const fuzzed = applyPrivacyFuzzing(latest.latitude, latest.longitude, m.privacy, user.id);
-      if (!fuzzed.visible) continue;
-
-      const broadcast: LocationBroadcast = {
-        userId: user.id,
-        username: user.username,
-        groupId: m.group_id,
-        latitude: fuzzed.latitude,
-        longitude: fuzzed.longitude,
-        altitude: latest.altitude ?? null,
-        speed: latest.speed ?? null,
-        batteryLevel: latest.batteryLevel ?? null,
-        recordedAt: latest.recordedAt,
-        privacyMode: m.privacy,
-        isFuzzed: fuzzed.isFuzzed,
-      };
-      io.to(`group:${m.group_id}`).emit('location:update', broadcast);
-    }
-
-    return inserted;
-  }
-
-  async function persistAndBroadcastChat(
-    user: JwtUserPayload,
-    groupId: string,
-    content: string,
-  ): Promise<ChatMessage> {
-    const inserted = await pool.query<{
-      id: string;
-      group_id: string;
-      sender_id: string;
-      content: string;
-      created_at: Date;
-    }>(
-      `INSERT INTO messages (group_id, sender_id, content)
-       VALUES ($1, $2, $3)
-       RETURNING id, group_id, sender_id, content, created_at`,
-      [groupId, user.id, content],
-    );
-    const row = inserted.rows[0];
-    const message: ChatMessage = {
-      id: row.id,
-      groupId: row.group_id,
-      senderId: row.sender_id,
-      senderUsername: user.username,
-      content: row.content,
-      createdAt: row.created_at.toISOString(),
-    };
-    io.to(`group:${groupId}`).emit('chat:message', message);
-    return message;
-  }
-
-  // REST telemetry hook
-  app.addHook('onRequest', async (request: AuthenticatedRequest) => {
-    request.perfStartMs = performance.now();
-  });
-
-  app.addHook('onResponse', async (request: AuthenticatedRequest) => {
-    if (request.authUser?.id && request.perfStartMs !== undefined) {
-      const elapsedMs = Math.max(0, performance.now() - request.perfStartMs);
-      void recordUserTelemetry(redis, request.authUser.id, elapsedMs, 1).catch(() => {});
-    }
-  });
+  // ---- REST Routes ----
 
   app.get('/health', async () => {
     return { status: 'ok', service: 'realtime-service' };
@@ -223,17 +133,11 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   app.post(
     '/api/realtime/locations',
     { preHandler: [requireAuth] },
-    async (request: AuthenticatedRequest, reply) => {
-      const startMs = performance.now();
-      const parsed = LocationBatchSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: 'Invalid location batch', details: parsed.error.flatten() });
-      }
+    async (request: AuthenticatedRequest) => {
       const user = request.authUser!;
-      const inserted = await processAndBroadcastLocations(user, parsed.data.points);
-      const elapsedMs = Math.max(0, performance.now() - startMs);
-      await recordUserTelemetry(redis, user.id, elapsedMs, parsed.data.points.length);
-
+      const body = request.body as { points?: unknown[] } | undefined;
+      const inserted = await realtime.ingestLocationBatch(user, body);
+      request.telemetryEventWeight = inserted;
       loggerHandle.logger.info({ userId: user.id, points: inserted }, 'ingested location batch via REST');
       return { inserted };
     },
@@ -242,32 +146,9 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   app.get(
     '/api/realtime/groups/:groupId/locations',
     { preHandler: [requireAuth] },
-    async (request: AuthenticatedRequest, reply) => {
+    async (request: AuthenticatedRequest) => {
       const { groupId } = request.params as { groupId: string };
-      const user = request.authUser!;
-      if (!(await isGroupMember(user.id, groupId))) {
-        return reply.code(403).send({ error: 'Not a member of this group' });
-      }
-
-      const rows = await getLatestGroupLocations(pool, groupId);
-      const locations: LocationBroadcast[] = [];
-      for (const row of rows) {
-        const fuzzed = applyPrivacyFuzzing(row.latitude, row.longitude, row.privacy, row.userId);
-        if (!fuzzed.visible) continue;
-        locations.push({
-          userId: row.userId,
-          username: row.username,
-          groupId,
-          latitude: fuzzed.latitude,
-          longitude: fuzzed.longitude,
-          altitude: row.altitude,
-          speed: row.speed,
-          batteryLevel: row.batteryLevel,
-          recordedAt: row.recordedAt,
-          privacyMode: row.privacy,
-          isFuzzed: fuzzed.isFuzzed,
-        });
-      }
+      const locations = await realtime.getGroupLocations(request.authUser!, groupId);
       return { locations };
     },
   );
@@ -275,38 +156,9 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   app.get(
     '/api/realtime/groups/:groupId/messages',
     { preHandler: [requireAuth] },
-    async (request: AuthenticatedRequest, reply) => {
+    async (request: AuthenticatedRequest) => {
       const { groupId } = request.params as { groupId: string };
-      const user = request.authUser!;
-      if (!(await isGroupMember(user.id, groupId))) {
-        return reply.code(403).send({ error: 'Not a member of this group' });
-      }
-
-      const res = await pool.query<{
-        id: string;
-        group_id: string;
-        sender_id: string;
-        sender_username: string;
-        content: string;
-        created_at: Date;
-      }>(
-        `SELECT m.id, m.group_id, m.sender_id, u.username AS sender_username, m.content, m.created_at
-         FROM messages m
-         JOIN users u ON u.id = m.sender_id
-         WHERE m.group_id = $1
-         ORDER BY m.created_at DESC
-         LIMIT 100`,
-        [groupId],
-      );
-
-      const messages: ChatMessage[] = res.rows.reverse().map((r) => ({
-        id: r.id,
-        groupId: r.group_id,
-        senderId: r.sender_id,
-        senderUsername: r.sender_username,
-        content: r.content,
-        createdAt: r.created_at.toISOString(),
-      }));
+      const messages = await realtime.getGroupMessages(request.authUser!, groupId);
       return { messages };
     },
   );
@@ -317,17 +169,11 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     async (request: AuthenticatedRequest, reply) => {
       const { groupId } = request.params as { groupId: string };
       const body = (request.body ?? {}) as { content?: string };
-      const parsed = SendMessageSchema.safeParse({ groupId, content: body.content });
-      if (!parsed.success) {
-        return reply.code(400).send({ error: 'Invalid message payload' });
-      }
-      const user = request.authUser!;
-      if (!(await isGroupMember(user.id, groupId))) {
-        return reply.code(403).send({ error: 'Not a member of this group' });
-      }
-
-      const message = await persistAndBroadcastChat(user, groupId, parsed.data.content);
-      loggerHandle.logger.info({ userId: user.id, groupId }, 'chat message sent via REST');
+      const message = await realtime.sendChatMessage(request.authUser!, {
+        groupId,
+        content: body.content,
+      });
+      loggerHandle.logger.info({ userId: request.authUser!.id, groupId }, 'chat message sent via REST');
       return reply.code(201).send({ message });
     },
   );
@@ -338,22 +184,14 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     try {
       const authToken =
         (socket.handshake.auth?.token as string | undefined) ??
-        (socket.handshake.headers.authorization?.startsWith('Bearer ')
-          ? socket.handshake.headers.authorization.slice(7)
-          : undefined);
+        extractBearerToken(socket.handshake.headers.authorization);
       if (!authToken) {
         next(new Error('Unauthorized'));
         return;
       }
-      const decoded = app.jwt.verify<JwtUserPayload>(authToken);
-      const user = JwtUserPayloadSchema.parse(decoded);
+      const user = await tokenService.verifyAccessToken(authToken);
       socket.data.user = user;
-
-      const groupsRes = await pool.query<{ group_id: string }>(
-        'SELECT group_id FROM group_memberships WHERE user_id = $1',
-        [user.id],
-      );
-      socket.data.groupIds = groupsRes.rows.map((r) => r.group_id);
+      socket.data.groupIds = await realtime.resolveAuthorizedGroupIds(user.id);
       await trackUserSocket(redis, user.id, socket.id, 'connect');
       next();
     } catch {
@@ -380,7 +218,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
 
     socket.on('group:join', async (groupId: string, ack?: (res: { ok: boolean }) => void) => {
       try {
-        if (typeof groupId === 'string' && (await isGroupMember(user.id, groupId))) {
+        if (typeof groupId === 'string' && (await realtime.canJoinGroupRoom(user.id, groupId))) {
           await socket.join(`group:${groupId}`);
           ack?.({ ok: true });
         } else {
@@ -399,14 +237,9 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       ) => {
         const startMs = performance.now();
         try {
-          const parsed = LocationBatchSchema.safeParse(payload);
-          if (!parsed.success) {
-            ack?.({ ok: false, error: 'Invalid location batch' });
-            return;
-          }
-          const inserted = await processAndBroadcastLocations(user, parsed.data.points);
+          const inserted = await realtime.ingestLocationBatch(user, payload);
           const elapsedMs = Math.max(0, performance.now() - startMs);
-          await recordUserTelemetry(redis, user.id, elapsedMs, parsed.data.points.length);
+          await recordUserTelemetry(redis, user.id, elapsedMs, inserted);
           loggerHandle.logger.info(
             { userId: user.id, points: inserted },
             'ingested location batch via socket',
@@ -422,28 +255,15 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       'chat:send',
       async (
         payload: unknown,
-        ack?: (res: { ok: boolean; message?: ChatMessage; error?: string }) => void,
+        ack?: (res: { ok: boolean; message?: unknown; error?: string }) => void,
       ) => {
         const startMs = performance.now();
         try {
-          const parsed = SendMessageSchema.safeParse(payload);
-          if (!parsed.success) {
-            ack?.({ ok: false, error: 'Invalid chat message' });
-            return;
-          }
-          if (!(await isGroupMember(user.id, parsed.data.groupId))) {
-            ack?.({ ok: false, error: 'Not a group member' });
-            return;
-          }
-          const message = await persistAndBroadcastChat(
-            user,
-            parsed.data.groupId,
-            parsed.data.content,
-          );
+          const message = await realtime.sendChatMessage(user, payload);
           const elapsedMs = Math.max(0, performance.now() - startMs);
           await recordUserTelemetry(redis, user.id, elapsedMs, 1);
           loggerHandle.logger.info(
-            { userId: user.id, groupId: parsed.data.groupId },
+            { userId: user.id, groupId: message.groupId },
             'chat message sent via socket',
           );
           ack?.({ ok: true, message });
