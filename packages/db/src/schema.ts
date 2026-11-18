@@ -9,6 +9,7 @@ import {
   smallint,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -69,18 +70,27 @@ export const groupInvites = pgTable('group_invites', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
 
-export const locationHistory = pgTable('location_history', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  coords: geographyPoint('coords').notNull(),
-  altitude: doublePrecision('altitude'),
-  speed: doublePrecision('speed'),
-  batteryLevel: smallint('battery_level'),
-  recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
-  receivedAt: timestamp('received_at', { withTimezone: true }).defaultNow().notNull(),
-});
+export const locationHistory = pgTable(
+  'location_history',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    coords: geographyPoint('coords').notNull(),
+    altitude: doublePrecision('altitude'),
+    speed: doublePrecision('speed'),
+    batteryLevel: smallint('battery_level'),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    userRecordedUniqueIdx: uniqueIndex('idx_location_user_recorded_unique').on(
+      table.userId,
+      table.recordedAt,
+    ),
+  }),
+);
 
 export const messages = pgTable('messages', {
   id: uuid('id').defaultRandom().primaryKey(),

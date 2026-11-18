@@ -137,7 +137,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       const user = request.authUser!;
       const body = request.body as { points?: unknown[] } | undefined;
       const inserted = await realtime.ingestLocationBatch(user, body);
-      request.telemetryEventWeight = inserted;
+      request.telemetryEventWeight = Math.max(1, inserted);
       loggerHandle.logger.info({ userId: user.id, points: inserted }, 'ingested location batch via REST');
       return { inserted };
     },
@@ -239,7 +239,9 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         try {
           const inserted = await realtime.ingestLocationBatch(user, payload);
           const elapsedMs = Math.max(0, performance.now() - startMs);
-          await recordUserTelemetry(redis, user.id, elapsedMs, inserted);
+          if (inserted > 0) {
+            await recordUserTelemetry(redis, user.id, elapsedMs, inserted);
+          }
           loggerHandle.logger.info(
             { userId: user.id, points: inserted },
             'ingested location batch via socket',

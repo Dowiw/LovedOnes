@@ -68,6 +68,23 @@ CREATE TABLE IF NOT EXISTS location_history (
 CREATE INDEX IF NOT EXISTS idx_location_user_time ON location_history (user_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_location_gist ON location_history USING GIST (coords);
 
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname = 'idx_location_user_recorded_unique'
+    ) THEN
+        DELETE FROM location_history a
+        USING location_history b
+        WHERE a.id > b.id
+          AND a.user_id = b.user_id
+          AND a.recorded_at = b.recorded_at;
+
+        CREATE UNIQUE INDEX idx_location_user_recorded_unique
+        ON location_history (user_id, recorded_at);
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     group_id UUID REFERENCES groups(id) ON DELETE CASCADE,

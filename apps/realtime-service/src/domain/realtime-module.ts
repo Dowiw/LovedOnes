@@ -60,7 +60,7 @@ export class RealtimeModule {
     const points = parsed.data.points;
     const inserted = await this.store.insertLocationBatch(user.id, points);
     const latest = points[points.length - 1];
-    if (!latest) return inserted;
+    if (!latest || inserted === 0) return inserted;
 
     const recordedAtMs = new Date(latest.recordedAt).getTime();
     const memberships = await this.store.listMembershipsForUser(user.id);

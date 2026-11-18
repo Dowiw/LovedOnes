@@ -37,39 +37,73 @@ export async function runMigrations(pool: pg.Pool): Promise<void> {
   await pool.query(sql);
 }
 
+/**
+ * Deduplicates incoming points by normalized epoch millisecond so intra-batch
+ * duplicate timestamps (including equivalent ISO offset representations) do not
+ * collide during bulk UNNEST inserts.
+ */
+export function deduplicateLocationPoints(points: LocationPoint[]): LocationPoint[] {
+  if (points.length <= 1) return points;
+  const seenEpochMs = new Set<number>();
+  const unique: LocationPoint[] = [];
+
+  for (const pt of points) {
+    const epochMs = new Date(pt.recordedAt).getTime();
+    if (Number.isNaN(epochMs) || seenEpochMs.has(epochMs)) {
+      continue;
+    }
+    seenEpochMs.add(epochMs);
+    unique.push(pt);
+  }
+  return unique;
+}
+
 export async function insertLocationBatch(
   pool: pg.Pool,
   userId: string,
   points: LocationPoint[],
 ): Promise<number> {
-  if (points.length === 0) return 0;
+  const uniquePoints = deduplicateLocationPoints(points);
+  if (uniquePoints.length === 0) return 0;
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    for (const pt of points) {
-      await client.query(
-        `INSERT INTO location_history (user_id, coords, altitude, speed, battery_level, recorded_at)
-         VALUES ($1, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4, $5, $6, $7)`,
-        [
-          userId,
-          pt.longitude,
-          pt.latitude,
-          pt.altitude ?? null,
-          pt.speed ?? null,
-          pt.batteryLevel ?? null,
-          pt.recordedAt,
-        ],
-      );
-    }
-    await client.query('COMMIT');
-    return points.length;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+  const longitudes: number[] = [];
+  const latitudes: number[] = [];
+  const altitudes: Array<number | null> = [];
+  const speeds: Array<number | null> = [];
+  const batteryLevels: Array<number | null> = [];
+  const recordedAts: string[] = [];
+
+  for (const pt of uniquePoints) {
+    longitudes.push(pt.longitude);
+    latitudes.push(pt.latitude);
+    altitudes.push(pt.altitude ?? null);
+    speeds.push(pt.speed ?? null);
+    batteryLevels.push(pt.batteryLevel ?? null);
+    recordedAts.push(pt.recordedAt);
   }
+
+  const result = await pool.query(
+    `INSERT INTO location_history (user_id, coords, altitude, speed, battery_level, recorded_at)
+     SELECT
+       $1::uuid,
+       ST_SetSRID(ST_MakePoint(u.lon, u.lat), 4326)::geography,
+       u.alt,
+       u.spd,
+       u.batt,
+       u.rec_at
+     FROM UNNEST(
+       $2::double precision[],
+       $3::double precision[],
+       $4::double precision[],
+       $5::double precision[],
+       $6::smallint[],
+       $7::timestamptz[]
+     ) AS u(lon, lat, alt, spd, batt, rec_at)
+     ON CONFLICT (user_id, recorded_at) DO NOTHING`,
+    [userId, longitudes, latitudes, altitudes, speeds, batteryLevels, recordedAts],
+  );
+
+  return result.rowCount ?? 0;
 }
 
 export interface GroupMemberLocationRow {

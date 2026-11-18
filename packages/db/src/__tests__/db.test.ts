@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import {
   createPool,
+  deduplicateLocationPoints,
   getDatabaseTelemetry,
   getLatestGroupLocations,
   insertLocationBatch,
@@ -72,5 +73,59 @@ describe('@loved-ones/db PostGIS integration', () => {
     // Clean up test rows
     await pool.query('DELETE FROM groups WHERE id = $1', [groupId]);
     await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+  });
+
+  it('deduplicates intra-batch points and performs idempotent bulk UNNEST upserts on retry', async () => {
+    const t1 = '2026-11-18T12:00:00.000Z';
+    const t1Equivalent = '2026-11-18T12:00:00.000+00:00';
+    const t2 = '2026-11-18T12:01:00.000Z';
+
+    const deduped = deduplicateLocationPoints([
+      { latitude: 52.52, longitude: 13.405, recordedAt: t1 },
+      { latitude: 52.5201, longitude: 13.4051, recordedAt: t1Equivalent },
+      { latitude: 52.53, longitude: 13.41, recordedAt: t2 },
+    ]);
+    expect(deduped).toHaveLength(2);
+
+    const email = `dbdedup-${Date.now()}@example.com`;
+    const userRes = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, username, password_hash, role)
+       VALUES ($1, 'deduptester', 'hash', 'USER')
+       RETURNING id`,
+      [email],
+    );
+    const userId = userRes.rows[0].id;
+
+    try {
+      const batch = [
+        { latitude: 52.52, longitude: 13.405, batteryLevel: 85, recordedAt: t1 },
+        { latitude: 52.52, longitude: 13.405, batteryLevel: 85, recordedAt: t1Equivalent },
+        { latitude: 52.53, longitude: 13.41, batteryLevel: 84, recordedAt: t2 },
+      ];
+
+      // First batch insert: 2 unique timestamps inserted
+      const firstInsertCount = await insertLocationBatch(pool, userId, batch);
+      expect(firstInsertCount).toBe(2);
+
+      // Exact retry of the same batch: 0 newly inserted rows (idempotent)
+      const retryInsertCount = await insertLocationBatch(pool, userId, batch);
+      expect(retryInsertCount).toBe(0);
+
+      // Partial overlap batch (t2 already exists, t3 is new): only 1 inserted
+      const t3 = '2026-11-18T12:02:00.000Z';
+      const partialRetryCount = await insertLocationBatch(pool, userId, [
+        { latitude: 52.53, longitude: 13.41, recordedAt: t2 },
+        { latitude: 52.54, longitude: 13.42, recordedAt: t3 },
+      ]);
+      expect(partialRetryCount).toBe(1);
+
+      const countRes = await pool.query<{ cnt: number }>(
+        'SELECT COUNT(*)::int AS cnt FROM location_history WHERE user_id = $1',
+        [userId],
+      );
+      expect(countRes.rows[0].cnt).toBe(3);
+    } finally {
+      await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+    }
   });
 });

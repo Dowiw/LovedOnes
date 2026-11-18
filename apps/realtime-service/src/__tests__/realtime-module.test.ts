@@ -62,10 +62,18 @@ function createInMemoryRealtimeHarness() {
       return memberships.filter((m) => m.userId === userId).map((m) => m.groupId);
     },
     async insertLocationBatch(userId, points) {
+      let inserted = 0;
       for (const point of points) {
-        storedPoints.push({ userId, point });
+        const epochMs = new Date(point.recordedAt).getTime();
+        const exists = storedPoints.some(
+          (p) => p.userId === userId && new Date(p.point.recordedAt).getTime() === epochMs,
+        );
+        if (!exists) {
+          storedPoints.push({ userId, point });
+          inserted += 1;
+        }
       }
-      return points.length;
+      return inserted;
     },
     async listMembershipsForUser(userId) {
       return memberships
@@ -155,6 +163,13 @@ describe('RealtimeModule domain interface', () => {
     // GHOST and SPECTATOR snapshots return empty
     expect(await mod.getGroupLocations(alice, GROUP_GHOST)).toHaveLength(0);
     expect(await mod.getGroupLocations(alice, GROUP_SPECTATOR)).toHaveLength(0);
+
+    // Retrying the exact same batch is idempotent and does not emit duplicate broadcasts
+    const retryInserted = await mod.ingestLocationBatch(alice, {
+      points: [{ latitude: 48.8566, longitude: 2.3522, recordedAt }],
+    });
+    expect(retryInserted).toBe(0);
+    expect(locationBroadcasts).toHaveLength(2);
   });
 
   it('rejects non-members with 403 and validates payloads', async () => {
