@@ -58,6 +58,20 @@ export interface CreatedInviteResponse extends QrInvitePayload {
   expiresAt: string;
 }
 
+export interface TrackerTokenResponse {
+  token: string;
+  expiresInDays: number;
+  expiresAt: string;
+  serverUrl: string;
+  owntracksUrl: string;
+  overlandUrl: string;
+}
+
+export interface TrackerTokenStatusResponse {
+  active: boolean;
+  ttlSeconds: number;
+}
+
 const SESSION_STORAGE_KEY = 'lovedones_session_v1';
 
 export function getServiceBaseUrls(): {
@@ -300,5 +314,36 @@ export async function apiSendLocationBatch(
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ points }),
+  });
+}
+
+export async function apiGetTrackerTokenStatus(
+  accessToken: string,
+): Promise<TrackerTokenStatusResponse> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson<TrackerTokenStatusResponse>(`${authBase}/api/auth/tracker-token`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export async function apiCreateTrackerToken(
+  accessToken: string,
+  expiresInDays: number,
+): Promise<TrackerTokenResponse> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson<TrackerTokenResponse>(`${authBase}/api/auth/tracker-token`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ expiresInDays }),
+  });
+}
+
+export async function apiRevokeTrackerToken(
+  accessToken: string,
+): Promise<{ revoked: boolean }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson<{ revoked: boolean }>(`${authBase}/api/auth/tracker-token`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
 }

@@ -5,7 +5,11 @@ import pg from 'pg';
 import { getDatabaseTelemetry } from '@loved-ones/db';
 import { GroupRole, PrivacyMode, SystemRole } from '@loved-ones/shared';
 import { LOGS_RING_KEY } from '@loved-ones/shared/logger';
-import { getUserTelemetryFromRedis, SESSION_USER_PREFIX } from '@loved-ones/shared/telemetry';
+import {
+  getUserTelemetryFromRedis,
+  SESSION_USER_PREFIX,
+  TRACKER_JTI_USER_PREFIX,
+} from '@loved-ones/shared/telemetry';
 import {
   AccountRecord,
   AuthGroupStore,
@@ -399,6 +403,28 @@ export class RedisSessionStore implements SessionStore {
       'EX',
       60 * 60 * 24 * 7,
     );
+  }
+
+  async saveTrackerTokenJti(userId: string, jti: string, expiresInDays: number): Promise<void> {
+    await this.redis.set(
+      `${TRACKER_JTI_USER_PREFIX}${userId}`,
+      jti,
+      'EX',
+      Math.max(60, Math.round(expiresInDays * 24 * 60 * 60)),
+    );
+  }
+
+  async revokeTrackerTokenJti(userId: string): Promise<void> {
+    await this.redis.del(`${TRACKER_JTI_USER_PREFIX}${userId}`);
+  }
+
+  async getTrackerTokenStatus(userId: string): Promise<{ active: boolean; ttlSeconds: number }> {
+    const key = `${TRACKER_JTI_USER_PREFIX}${userId}`;
+    const [val, ttl] = await Promise.all([this.redis.get(key), this.redis.ttl(key)]);
+    return {
+      active: Boolean(val) && ttl > 0,
+      ttlSeconds: ttl > 0 ? ttl : 0,
+    };
   }
 }
 

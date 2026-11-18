@@ -53,9 +53,15 @@ export const JwtUserPayloadSchema = z.object({
   email: z.string().email(),
   username: z.string(),
   role: SystemRoleSchema,
-  type: z.enum(['access', 'refresh']).optional(),
+  type: z.enum(['access', 'refresh', 'tracker']).optional(),
+  jti: z.string().optional(),
 });
 export type JwtUserPayload = z.infer<typeof JwtUserPayloadSchema>;
+
+export const CreateTrackerTokenSchema = z.object({
+  expiresInDays: z.number().int().min(1).max(365).default(30),
+});
+export type CreateTrackerTokenInput = z.infer<typeof CreateTrackerTokenSchema>;
 
 export const CreateGroupSchema = z.object({
   name: z.string().min(2).max(100).trim(),
@@ -171,3 +177,169 @@ export const LogEntrySchema = z.object({
   msg: z.string().optional(),
 }).passthrough();
 export type LogEntry = z.infer<typeof LogEntrySchema>;
+
+// ---- Third-Party Tracker Schemas (OwnTracks & Overland) ----
+
+export const OwnTracksLocationItemSchema = z
+  .object({
+    _type: z.string(),
+    lat: z.number().min(-90).max(90).optional(),
+    lon: z.number().min(-180).max(180).optional(),
+    tst: z.number().optional(),
+    alt: z.number().nullable().optional(),
+    vel: z.number().nullable().optional(),
+    batt: z.number().nullable().optional(),
+  })
+  .passthrough();
+
+export const OwnTracksPayloadSchema = z.union([
+  OwnTracksLocationItemSchema,
+  z.array(OwnTracksLocationItemSchema).max(500),
+]);
+
+/**
+ * Normalizes OwnTracks HTTP payloads into LocationPoint[].
+ * Non-location OwnTracks events (_type !== 'location', such as 'lwt', 'status',
+ * 'transition', 'waypoints') return an empty array so OwnTracks clears its queue.
+ * Throws a ZodError if a '_type: location' item is missing valid coordinates.
+ */
+export function normalizeOwnTracksToPoints(
+  rawInput: unknown,
+  nowMs = Date.now(),
+): LocationPoint[] {
+  const parsed = OwnTracksPayloadSchema.parse(rawInput);
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  const points: LocationPoint[] = [];
+
+  for (const item of items) {
+    if (item._type !== 'location') {
+      continue;
+    }
+    if (typeof item.lat !== 'number' || typeof item.lon !== 'number') {
+      throw new z.ZodError([
+        {
+          code: z.ZodIssueCode.custom,
+          path: ['lat', 'lon'],
+          message: 'OwnTracks location payload requires numeric lat and lon',
+        },
+      ]);
+    }
+
+    const recordedDate =
+      typeof item.tst === 'number' && Number.isFinite(item.tst) && item.tst > 0
+        ? new Date(item.tst * 1000)
+        : new Date(nowMs);
+    const recordedAt = Number.isNaN(recordedDate.getTime())
+      ? new Date(nowMs).toISOString()
+      : recordedDate.toISOString();
+
+    // OwnTracks vel is reported in km/h; convert to m/s
+    const speed =
+      typeof item.vel === 'number' && Number.isFinite(item.vel) && item.vel >= 0
+        ? Number((item.vel / 3.6).toFixed(2))
+        : null;
+
+    const batteryLevel =
+      typeof item.batt === 'number' && Number.isFinite(item.batt) && item.batt >= 0
+        ? Math.min(100, Math.max(0, Math.round(item.batt)))
+        : null;
+
+    const altitude =
+      typeof item.alt === 'number' && Number.isFinite(item.alt) ? item.alt : null;
+
+    points.push({
+      latitude: item.lat,
+      longitude: item.lon,
+      altitude,
+      speed,
+      batteryLevel,
+      recordedAt,
+    });
+  }
+
+  return points;
+}
+
+export const OverlandFeatureSchema = z
+  .object({
+    type: z.literal('Feature').optional(),
+    geometry: z.object({
+      type: z.literal('Point'),
+      coordinates: z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90)]).rest(z.number()),
+    }),
+    properties: z
+      .object({
+        timestamp: z.union([z.string(), z.number()]).optional(),
+        altitude: z.number().nullable().optional(),
+        speed: z.number().nullable().optional(),
+        battery_level: z.number().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+export const OverlandPayloadSchema = z
+  .object({
+    locations: z.array(OverlandFeatureSchema).max(500),
+  })
+  .passthrough();
+
+/**
+ * Normalizes Overland GeoJSON batch payloads into LocationPoint[].
+ * Overland coordinates use GeoJSON [longitude, latitude] order and report
+ * battery_level as a 0.0-1.0 float (or negative when unknown).
+ */
+export function normalizeOverlandToPoints(
+  rawInput: unknown,
+  nowMs = Date.now(),
+): LocationPoint[] {
+  const parsed = OverlandPayloadSchema.parse(rawInput);
+  const points: LocationPoint[] = [];
+
+  for (const loc of parsed.locations) {
+    const [longitude, latitude, coordAlt] = loc.geometry.coordinates;
+    const props = loc.properties;
+
+    let recordedAt = new Date(nowMs).toISOString();
+    if (props?.timestamp !== undefined) {
+      const tsDate =
+        typeof props.timestamp === 'number'
+          ? new Date(props.timestamp * 1000)
+          : new Date(props.timestamp);
+      if (!Number.isNaN(tsDate.getTime())) {
+        recordedAt = tsDate.toISOString();
+      }
+    }
+
+    const rawBatt = props?.battery_level;
+    let batteryLevel: number | null = null;
+    if (typeof rawBatt === 'number' && Number.isFinite(rawBatt) && rawBatt >= 0) {
+      const scaled = rawBatt <= 1 ? rawBatt * 100 : rawBatt;
+      batteryLevel = Math.min(100, Math.max(0, Math.round(scaled)));
+    }
+
+    const speed =
+      typeof props?.speed === 'number' && Number.isFinite(props.speed) && props.speed >= 0
+        ? props.speed
+        : null;
+
+    const altitude =
+      typeof props?.altitude === 'number' && Number.isFinite(props.altitude)
+        ? props.altitude
+        : typeof coordAlt === 'number' && Number.isFinite(coordAlt)
+          ? coordAlt
+          : null;
+
+    points.push({
+      latitude,
+      longitude,
+      altitude,
+      speed,
+      batteryLevel,
+      recordedAt,
+    });
+  }
+
+  return points;
+}

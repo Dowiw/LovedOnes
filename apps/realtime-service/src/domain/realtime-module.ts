@@ -7,6 +7,8 @@ import {
   LocationBatchSchema,
   LocationBroadcast,
   LocationPoint,
+  normalizeOverlandToPoints,
+  normalizeOwnTracksToPoints,
   PrivacyMode,
   SendMessageSchema,
 } from '@loved-ones/shared';
@@ -94,6 +96,50 @@ export class RealtimeModule {
     }
 
     return inserted;
+  }
+
+  async ingestOwnTracks(
+    user: JwtUserPayload,
+    rawInput: unknown,
+    nowMs = Date.now(),
+  ): Promise<{ inserted: number; response: [] }> {
+    let points: LocationPoint[];
+    try {
+      points = normalizeOwnTracksToPoints(rawInput, nowMs);
+    } catch (err) {
+      throw new DomainError(
+        400,
+        'Invalid OwnTracks payload',
+        err instanceof Error ? err.message : undefined,
+      );
+    }
+    if (points.length === 0) {
+      return { inserted: 0, response: [] };
+    }
+    const inserted = await this.ingestLocationBatch(user, { points });
+    return { inserted, response: [] };
+  }
+
+  async ingestOverland(
+    user: JwtUserPayload,
+    rawInput: unknown,
+    nowMs = Date.now(),
+  ): Promise<{ inserted: number; result: 'ok' }> {
+    let points: LocationPoint[];
+    try {
+      points = normalizeOverlandToPoints(rawInput, nowMs);
+    } catch (err) {
+      throw new DomainError(
+        400,
+        'Invalid Overland payload',
+        err instanceof Error ? err.message : undefined,
+      );
+    }
+    if (points.length === 0) {
+      return { inserted: 0, result: 'ok' };
+    }
+    const inserted = await this.ingestLocationBatch(user, { points });
+    return { inserted, result: 'ok' };
   }
 
   async getGroupLocations(user: JwtUserPayload, groupId: string): Promise<LocationBroadcast[]> {

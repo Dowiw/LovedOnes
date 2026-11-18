@@ -240,4 +240,88 @@ describe('RealtimeModule domain interface', () => {
     expect(recorded).toEqual([{ userId: alice.id, weight: 3 }]);
     await app.close();
   });
+
+  it('ingests OwnTracks and Overland payloads and enforces scoped tracker token JTI revocation', async () => {
+    const { mod, locationBroadcasts } = createInMemoryRealtimeHarness();
+
+    // 1. OwnTracks location ping returns [] and broadcasts
+    const otResult = await mod.ingestOwnTracks(alice, {
+      _type: 'location',
+      lat: 52.52,
+      lon: 13.405,
+      tst: 1_700_000_100,
+      vel: 18,
+      batt: 90,
+    });
+    expect(otResult).toEqual({ inserted: 1, response: [] });
+    expect(locationBroadcasts).toHaveLength(2); // EXACT + FUZZED groups
+
+    // Non-location OwnTracks event returns [] with 0 inserts
+    const lwtResult = await mod.ingestOwnTracks(alice, { _type: 'lwt', tst: 1_700_000_200 });
+    expect(lwtResult).toEqual({ inserted: 0, response: [] });
+
+    // 2. Overland GeoJSON batch returns { result: 'ok', inserted: 1 }
+    const overlandResult = await mod.ingestOverland(alice, {
+      locations: [
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [13.41, 52.53] },
+          properties: { timestamp: '2026-11-18T21:00:00Z', battery_level: 0.65, speed: 3.1 },
+        },
+      ],
+    });
+    expect(overlandResult).toEqual({ inserted: 1, result: 'ok' });
+
+    // 3. Scoped tracker token works on requireIngestionAuth (via Basic Auth / ?token=)
+    //    but is blocked on requireAuth and blocked when JTI is revoked/rotated
+    const tokenService = createTokenService({
+      jwtSecret: 'test-access-secret-minimum-32-chars!!',
+      jwtRefreshSecret: 'test-refresh-secret-minimum-32-chars!',
+    });
+    let activeJti: string | null = 'jti-active-1';
+    const tracker = await tokenService.issueTrackerToken(alice, {
+      jti: activeJti,
+      expiresInDays: 30,
+    });
+
+    const app = Fastify({ logger: false });
+    const { requireAuth, requireIngestionAuth } = attachAuthAndTelemetry(app, {
+      verifyAccessToken: (t) => tokenService.verifyAccessToken(t),
+      verifyIngestionToken: (t) => tokenService.verifyIngestionToken(t),
+      verifyTrackerJti: async (_userId, jti) => activeJti === jti,
+      async recordTelemetry() {},
+    });
+
+    app.post('/api/realtime/owntracks', { preHandler: [requireIngestionAuth] }, async () => []);
+    app.get('/api/realtime/groups/messages', { preHandler: [requireAuth] }, async () => ({
+      messages: [],
+    }));
+
+    // OwnTracks HTTP Basic Auth with tracker token succeeds on /owntracks
+    const basicAuth = `Basic ${Buffer.from(`alice:${tracker.token}`, 'utf8').toString('base64')}`;
+    const otHttpRes = await app.inject({
+      method: 'POST',
+      url: '/api/realtime/owntracks',
+      headers: { Authorization: basicAuth },
+    });
+    expect(otHttpRes.statusCode).toBe(200);
+    expect(otHttpRes.json()).toEqual([]);
+
+    // Same tracker token is rejected on non-ingestion requireAuth route
+    const chatHttpRes = await app.inject({
+      method: 'GET',
+      url: '/api/realtime/groups/messages',
+      headers: { Authorization: `Bearer ${tracker.token}` },
+    });
+    expect(chatHttpRes.statusCode).toBe(401);
+
+    // Revoking JTI blocks subsequent tracker requests
+    activeJti = null;
+    const revokedRes = await app.inject({
+      method: 'POST',
+      url: `/api/realtime/owntracks?token=${encodeURIComponent(tracker.token)}`,
+    });
+    expect(revokedRes.statusCode).toBe(401);
+    await app.close();
+  });
 });

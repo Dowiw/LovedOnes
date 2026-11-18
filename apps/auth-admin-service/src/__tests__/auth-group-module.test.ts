@@ -217,9 +217,22 @@ function createTestHarness(publicServerUrl = 'https://track.example.com', nowMs 
   let currentMs = nowMs;
   const store = createInMemoryAuthGroupStore();
   const savedSessions: string[] = [];
+  const activeTrackerJtis = new Map<string, { jti: string; ttlSeconds: number }>();
   const sessionStore: SessionStore = {
     async saveSession(account) {
       savedSessions.push(account.id);
+    },
+    async saveTrackerTokenJti(userId, jti, expiresInDays) {
+      activeTrackerJtis.set(userId, { jti, ttlSeconds: expiresInDays * 86400 });
+    },
+    async revokeTrackerTokenJti(userId) {
+      activeTrackerJtis.delete(userId);
+    },
+    async getTrackerTokenStatus(userId) {
+      const entry = activeTrackerJtis.get(userId);
+      return entry
+        ? { active: true, ttlSeconds: entry.ttlSeconds }
+        : { active: false, ttlSeconds: 0 };
     },
   };
   const tokenService = createTokenService({
@@ -417,6 +430,51 @@ describe('AuthGroupModule domain interface', () => {
       'http://192.168.1.50:8080',
     );
     expect(invite.serverUrl).toBe('http://192.168.1.50:8080');
+  });
+
+  it('issues, rotates, and revokes scoped tracker tokens with OwnTracks and Overland URLs', async () => {
+    const { mod, tokenService } = createTestHarness('https://track.example.com');
+    const reg = await mod.register({
+      email: 'tracker@example.com',
+      username: 'TrackerUser',
+      password: 'Password1234',
+    });
+
+    const userClaims = {
+      id: reg.user.id,
+      email: reg.user.email,
+      username: reg.user.username,
+      role: reg.user.role,
+    };
+
+    expect(await mod.getTrackerTokenStatus(reg.user.id)).toEqual({
+      active: false,
+      ttlSeconds: 0,
+    });
+
+    const created = await mod.createTrackerToken(userClaims, { expiresInDays: 30 });
+    expect(created.expiresInDays).toBe(30);
+    expect(created.owntracksUrl).toBe(
+      `https://track.example.com/api/realtime/owntracks?token=${created.token}`,
+    );
+    expect(created.overlandUrl).toBe(
+      `https://track.example.com/api/realtime/overland?token=${created.token}`,
+    );
+
+    const verified = await tokenService.verifyIngestionToken(created.token);
+    expect(verified.type).toBe('tracker');
+    await expect(tokenService.verifyAccessToken(created.token)).rejects.toThrow();
+
+    expect(await mod.getTrackerTokenStatus(reg.user.id)).toEqual({
+      active: true,
+      ttlSeconds: 30 * 86400,
+    });
+
+    await mod.revokeTrackerToken(reg.user.id);
+    expect(await mod.getTrackerTokenStatus(reg.user.id)).toEqual({
+      active: false,
+      ttlSeconds: 0,
+    });
   });
 });
 

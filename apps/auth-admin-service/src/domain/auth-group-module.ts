@@ -3,6 +3,7 @@ import argon2 from 'argon2';
 import {
   CreateGroupSchema,
   CreateInviteSchema,
+  CreateTrackerTokenSchema,
   GroupRole,
   JoinInviteSchema,
   JwtUserPayload,
@@ -139,6 +140,9 @@ export interface SessionStore {
     username: string;
     role: SystemRole;
   }): Promise<void>;
+  saveTrackerTokenJti?(userId: string, jti: string, expiresInDays: number): Promise<void>;
+  revokeTrackerTokenJti?(userId: string): Promise<void>;
+  getTrackerTokenStatus?(userId: string): Promise<{ active: boolean; ttlSeconds: number }>;
 }
 
 export interface PasswordHasher {
@@ -196,6 +200,15 @@ export interface CreatedInviteResult extends QrInvitePayload {
   assignedRole: GroupRole;
   maxUses: number;
   expiresAt: string;
+}
+
+export interface CreatedTrackerTokenResult {
+  token: string;
+  expiresInDays: number;
+  expiresAt: string;
+  serverUrl: string;
+  owntracksUrl: string;
+  overlandUrl: string;
 }
 
 /**
@@ -585,5 +598,52 @@ export class AuthGroupModule {
         expiresAt: r.expiresAt.toISOString(),
       })),
     };
+  }
+
+  async createTrackerToken(
+    caller: JwtUserPayload,
+    rawInput: unknown,
+    requestOrigin?: string,
+  ): Promise<CreatedTrackerTokenResult> {
+    const parsed = CreateTrackerTokenSchema.safeParse(rawInput ?? {});
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid tracker token payload', parsed.error.flatten());
+    }
+    const { expiresInDays } = parsed.data;
+    const jti = crypto.randomUUID();
+    const issued = await this.tokenService.issueTrackerToken(caller, {
+      jti,
+      expiresInDays,
+      nowMs: this.now(),
+    });
+    if (this.sessionStore.saveTrackerTokenJti) {
+      await this.sessionStore.saveTrackerTokenJti(caller.id, jti, expiresInDays);
+    }
+
+    const serverUrl = this.resolveInviteServerUrl(requestOrigin).replace(/\/$/, '');
+    return {
+      token: issued.token,
+      expiresInDays: issued.expiresInDays,
+      expiresAt: issued.expiresAt,
+      serverUrl,
+      owntracksUrl: `${serverUrl}/api/realtime/owntracks?token=${issued.token}`,
+      overlandUrl: `${serverUrl}/api/realtime/overland?token=${issued.token}`,
+    };
+  }
+
+  async revokeTrackerToken(userId: string): Promise<{ revoked: true }> {
+    if (this.sessionStore.revokeTrackerTokenJti) {
+      await this.sessionStore.revokeTrackerTokenJti(userId);
+    }
+    return { revoked: true };
+  }
+
+  async getTrackerTokenStatus(
+    userId: string,
+  ): Promise<{ active: boolean; ttlSeconds: number }> {
+    if (this.sessionStore.getTrackerTokenStatus) {
+      return this.sessionStore.getTrackerTokenStatus(userId);
+    }
+    return { active: false, ttlSeconds: 0 };
   }
 }

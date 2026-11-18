@@ -21,7 +21,11 @@ import {
   LOGS_STREAM_CHANNEL,
   ServiceLoggerHandle,
 } from '@loved-ones/shared/logger';
-import { recordUserTelemetry, trackUserSocket } from '@loved-ones/shared/telemetry';
+import {
+  recordUserTelemetry,
+  TRACKER_JTI_USER_PREFIX,
+  trackUserSocket,
+} from '@loved-ones/shared/telemetry';
 import {
   PostgresRealtimeStore,
   SocketIoBroadcaster,
@@ -100,8 +104,13 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   });
 
   const tokenService = createTokenService({ jwtSecret });
-  const { requireAuth } = attachAuthAndTelemetry(app, {
+  const { requireAuth, requireIngestionAuth } = attachAuthAndTelemetry(app, {
     verifyAccessToken: (token) => tokenService.verifyAccessToken(token),
+    verifyIngestionToken: (token) => tokenService.verifyIngestionToken(token),
+    verifyTrackerJti: async (userId, jti) => {
+      const activeJti = await redis.get(`${TRACKER_JTI_USER_PREFIX}${userId}`);
+      return activeJti === jti;
+    },
     recordTelemetry: (userId, elapsedMs, weight) =>
       recordUserTelemetry(redis, userId, elapsedMs, weight),
   });
@@ -132,7 +141,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
 
   app.post(
     '/api/realtime/locations',
-    { preHandler: [requireAuth] },
+    { preHandler: [requireIngestionAuth] },
     async (request: AuthenticatedRequest) => {
       const user = request.authUser!;
       const body = request.body as { points?: unknown[] } | undefined;
@@ -140,6 +149,30 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       request.telemetryEventWeight = Math.max(1, inserted);
       loggerHandle.logger.info({ userId: user.id, points: inserted }, 'ingested location batch via REST');
       return { inserted };
+    },
+  );
+
+  app.post(
+    '/api/realtime/owntracks',
+    { preHandler: [requireIngestionAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const { inserted, response } = await realtime.ingestOwnTracks(user, request.body);
+      request.telemetryEventWeight = Math.max(1, inserted);
+      loggerHandle.logger.info({ userId: user.id, points: inserted }, 'ingested OwnTracks payload');
+      return response;
+    },
+  );
+
+  app.post(
+    '/api/realtime/overland',
+    { preHandler: [requireIngestionAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const { inserted, result } = await realtime.ingestOverland(user, request.body);
+      request.telemetryEventWeight = Math.max(1, inserted);
+      loggerHandle.logger.info({ userId: user.id, points: inserted }, 'ingested Overland payload');
+      return { result, inserted };
     },
   );
 

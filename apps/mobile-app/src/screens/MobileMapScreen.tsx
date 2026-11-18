@@ -18,6 +18,10 @@ import {
   stopBackgroundTracking,
 } from '../services/backgroundLocation';
 import {
+  LocationPermissionResult,
+  requestLocationPermissionsOnLaunch,
+} from '../services/locationPermissions';
+import {
   enqueueLocationPoints,
   flushOfflineLocations,
   getPendingLocationCount,
@@ -56,6 +60,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
+  const [permissionInfo, setPermissionInfo] = useState<LocationPermissionResult | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
 
@@ -75,10 +80,25 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   }, []);
 
   useEffect(() => {
+    void requestLocationPermissionsOnLaunch()
+      .then((perm) => {
+        setPermissionInfo(perm);
+      })
+      .catch(() => {});
     void isBackgroundTrackingActive().then(setTracking).catch(() => {});
     void getCachedRegionPmtilesUri().then(setLocalPmtilesUri).catch(() => {});
     void refreshQueueCount().catch(() => {});
   }, [refreshQueueCount]);
+
+  async function handleRequestPermissions() {
+    try {
+      const perm = await requestLocationPermissionsOnLaunch();
+      setPermissionInfo(perm);
+      setStatusBanner(perm.label);
+    } catch (err) {
+      setStatusBanner(err instanceof Error ? err.message : 'Unable to request location permission');
+    }
+  }
 
   useEffect(() => {
     if (!serverUrl || !accessToken) return;
@@ -154,14 +174,19 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       if (tracking) {
         await stopBackgroundTracking();
         setTracking(false);
-        setStatusBanner('Background tracking paused');
+        setStatusBanner('Location tracking paused');
       } else {
-        await startBackgroundTracking();
+        const started = await startBackgroundTracking();
+        setPermissionInfo(started.permission);
         setTracking(true);
-        setStatusBanner('Background GPS beacon active');
+        setStatusBanner(
+          started.mode === 'background'
+            ? 'Background GPS beacon active (Always Allow)'
+            : 'Foreground GPS beacon active (While Using App fallback)',
+        );
       }
     } catch (err) {
-      setStatusBanner(err instanceof Error ? err.message : 'Unable to toggle background tracking');
+      setStatusBanner(err instanceof Error ? err.message : 'Unable to toggle location tracking');
     }
   }
 
@@ -275,6 +300,14 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             <Text style={styles.smallBtnText}>Sign Out</Text>
           </TouchableOpacity>
         </View>
+        {permissionInfo && (
+          <TouchableOpacity
+            onPress={() => void handleRequestPermissions()}
+            style={styles.permBannerBtn}
+          >
+            <Text style={styles.permBannerText}>{permissionInfo.label}</Text>
+          </TouchableOpacity>
+        )}
         {statusBanner && <Text style={styles.statusText}>{statusBanner}</Text>}
       </View>
 
@@ -391,6 +424,15 @@ const styles = StyleSheet.create({
   },
   hudRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   hudTitle: { color: '#f8fafc', fontWeight: '700', fontSize: 15 },
+  permBannerBtn: {
+    marginTop: 6,
+    backgroundColor: '#1e293b',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignSelf: 'flex-start',
+  },
+  permBannerText: { color: '#38bdf8', fontSize: 11, fontWeight: '600' },
   statusText: { color: '#94a3b8', fontSize: 11, marginTop: 4 },
   smallBtn: { backgroundColor: '#1e293b', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
   smallBtnText: { color: '#cbd5e1', fontSize: 11, fontWeight: '600' },

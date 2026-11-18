@@ -109,6 +109,14 @@ Because the mobile app uses native MapLibre maps, it needs a custom **Expo Devel
    pnpm --filter @loved-ones/mobile-app start
    ```
 
+### Using OwnTracks or Overland (HTTP Ingestion)
+
+You can also stream background GPS from **OwnTracks** or **Overland** on iOS and Android:
+
+1. Sign in to the web dashboard and open the **Tracker Setup (OwnTracks / Overland)** panel in the left sidebar.
+2. Pick a token expiration (`7 days`, `30 days`, `90 days`, or `1 year`) and click **Generate Token**.
+3. Copy the generated **OwnTracks HTTP URL** (`/api/realtime/owntracks?token=...`) or **Overland Receiver URL** (`/api/realtime/overland?token=...`) into your tracker app. (You can rotate or revoke the token anytime from the dashboard.)
+
 ---
 
 ## Developing Locally

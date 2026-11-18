@@ -3,15 +3,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
+  Check,
   Compass,
+  Copy,
   Eye,
   EyeOff,
+  KeyRound,
   LocateFixed,
   MessageSquare,
   Plus,
   Radio,
   Send,
   ShieldCheck,
+  Trash2,
   Users,
 } from 'lucide-react';
 import type { ChatMessage, LocationBroadcast, PrivacyMode } from '@loved-ones/shared';
@@ -19,11 +23,14 @@ import { MapCanvas } from '@/components/MapCanvas';
 import { NavBar } from '@/components/NavBar';
 import {
   apiCreateGroup,
+  apiCreateTrackerToken,
   apiFetchGroupLocations,
   apiFetchGroupMessages,
   apiFetchGroups,
+  apiGetTrackerTokenStatus,
   apiLogin,
   apiRegister,
+  apiRevokeTrackerToken,
   apiSendLocationBatch,
   apiUpdatePrivacy,
   getServiceBaseUrls,
@@ -31,6 +38,7 @@ import {
   loadSession,
   saveSession,
   StoredSession,
+  TrackerTokenResponse,
 } from '@/lib/api';
 
 export default function HomePage() {
@@ -57,6 +65,13 @@ export default function HomePage() {
   const watchIdRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
+  const [trackerDays, setTrackerDays] = useState<number>(30);
+  const [trackerActive, setTrackerActive] = useState(false);
+  const [trackerTtlSeconds, setTrackerTtlSeconds] = useState(0);
+  const [trackerIssued, setTrackerIssued] = useState<TrackerTokenResponse | null>(null);
+  const [trackerLoading, setTrackerLoading] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
   useEffect(() => {
     setSession(loadSession());
   }, []);
@@ -75,7 +90,49 @@ export default function HomePage() {
   useEffect(() => {
     if (!session) return;
     void refreshGroups(session.accessToken).catch(() => {});
+    void apiGetTrackerTokenStatus(session.accessToken)
+      .then((st) => {
+        setTrackerActive(st.active);
+        setTrackerTtlSeconds(st.ttlSeconds);
+      })
+      .catch(() => {});
   }, [session, refreshGroups]);
+
+  async function handleGenerateTrackerToken() {
+    if (!session) return;
+    setTrackerLoading(true);
+    try {
+      const created = await apiCreateTrackerToken(session.accessToken, trackerDays);
+      setTrackerIssued(created);
+      setTrackerActive(true);
+      setTrackerTtlSeconds(created.expiresInDays * 86400);
+    } catch (err) {
+      setGeoStatus(err instanceof Error ? err.message : 'Failed to generate tracker token');
+    } finally {
+      setTrackerLoading(false);
+    }
+  }
+
+  async function handleRevokeTrackerToken() {
+    if (!session) return;
+    setTrackerLoading(true);
+    try {
+      await apiRevokeTrackerToken(session.accessToken);
+      setTrackerIssued(null);
+      setTrackerActive(false);
+      setTrackerTtlSeconds(0);
+    } catch {
+      // ignore
+    } finally {
+      setTrackerLoading(false);
+    }
+  }
+
+  function handleCopyText(key: string, value: string) {
+    void navigator.clipboard.writeText(value);
+    setCopiedField(key);
+    setTimeout(() => setCopiedField((prev) => (prev === key ? null : prev)), 2000);
+  }
 
   // Socket.io connection for live updates
   useEffect(() => {
@@ -468,6 +525,125 @@ export default function HomePage() {
               </button>
             </div>
             {geoStatus && <p className="mt-2 text-[11px] text-slate-400">{geoStatus}</p>}
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <KeyRound className="h-4 w-4 text-sky-400" />
+                Tracker Setup (OwnTracks / Overland)
+              </div>
+              {trackerActive && (
+                <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                  Active ({Math.max(1, Math.ceil(trackerTtlSeconds / 86400))}d left)
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Generate a scoped, expiring ingestion token for iOS/Android background tracker apps.
+            </p>
+
+            <div className="mt-3 flex items-center gap-2">
+              <select
+                value={trackerDays}
+                onChange={(e) => setTrackerDays(Number(e.target.value))}
+                className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-white"
+              >
+                <option value={7}>Expires in 7 days</option>
+                <option value={30}>Expires in 30 days</option>
+                <option value={90}>Expires in 90 days</option>
+                <option value={365}>Expires in 1 year</option>
+              </select>
+              <button
+                type="button"
+                disabled={trackerLoading}
+                onClick={() => void handleGenerateTrackerToken()}
+                className="flex-1 rounded-lg bg-sky-500 px-2.5 py-1.5 text-xs font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50"
+              >
+                {trackerActive ? 'Rotate Token' : 'Generate Token'}
+              </button>
+              {trackerActive && (
+                <button
+                  type="button"
+                  disabled={trackerLoading}
+                  onClick={() => void handleRevokeTrackerToken()}
+                  title="Revoke active tracker token"
+                  className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 hover:bg-rose-500/20"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+
+            {trackerIssued && (
+              <div className="mt-3 space-y-2 rounded-lg border border-slate-800 bg-slate-950/80 p-2.5 text-[11px]">
+                <div>
+                  <div className="text-slate-400">OwnTracks HTTP URL</div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <input
+                      readOnly
+                      value={trackerIssued.owntracksUrl}
+                      className="w-full rounded border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-[10px] text-slate-200"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyText('owntracks', trackerIssued.owntracksUrl)}
+                      className="shrink-0 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-slate-200 hover:bg-slate-700"
+                    >
+                      {copiedField === 'owntracks' ? (
+                        <Check className="h-3 w-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-slate-400">Overland Receiver URL</div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <input
+                      readOnly
+                      value={trackerIssued.overlandUrl}
+                      className="w-full rounded border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-[10px] text-slate-200"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyText('overland', trackerIssued.overlandUrl)}
+                      className="shrink-0 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-slate-200 hover:bg-slate-700"
+                    >
+                      {copiedField === 'overland' ? (
+                        <Check className="h-3 w-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-slate-400">Scoped Ingestion Token (Bearer / Basic Password)</div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <input
+                      readOnly
+                      value={trackerIssued.token}
+                      className="w-full rounded border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-[10px] text-emerald-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyText('token', trackerIssued.token)}
+                      className="shrink-0 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-slate-200 hover:bg-slate-700"
+                    >
+                      {copiedField === 'token' ? (
+                        <Check className="h-3 w-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">

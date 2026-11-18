@@ -11,6 +11,7 @@ import {
   getStoredConfig,
   parseAndBindQrInvite,
 } from '../services/secureConfig';
+import { requestLocationPermissionsOnLaunch } from '../services/locationPermissions';
 
 describe('@loved-ones/mobile-app', () => {
   it('parses QR invite JSON and binds serverUrl into secure store', async () => {
@@ -92,5 +93,38 @@ describe('@loved-ones/mobile-app', () => {
       type: 'vector',
       url: 'pmtiles://https://track.example.com/tiles/region.pmtiles',
     });
+  });
+
+  it('requests foreground + background permissions on launch and falls back to foreground when Always Allow is denied', async () => {
+    const always = await requestLocationPermissionsOnLaunch({
+      async requestForegroundPermissionsAsync() {
+        return { status: 'granted', canAskAgain: true };
+      },
+      async requestBackgroundPermissionsAsync() {
+        return { status: 'granted', canAskAgain: true };
+      },
+    });
+    expect(always.level).toBe('always');
+
+    const foregroundFallback = await requestLocationPermissionsOnLaunch({
+      async requestForegroundPermissionsAsync() {
+        return { status: 'granted', canAskAgain: true };
+      },
+      async requestBackgroundPermissionsAsync() {
+        return { status: 'denied', canAskAgain: false };
+      },
+    });
+    expect(foregroundFallback.level).toBe('foreground');
+    expect(foregroundFallback.label).toContain('Foreground Fallback');
+
+    const denied = await requestLocationPermissionsOnLaunch({
+      async requestForegroundPermissionsAsync() {
+        return { status: 'denied', canAskAgain: true };
+      },
+      async requestBackgroundPermissionsAsync() {
+        return { status: 'denied', canAskAgain: true };
+      },
+    });
+    expect(denied.level).toBe('denied');
   });
 });

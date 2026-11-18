@@ -155,6 +155,41 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     return authGroup.getMe(request.authUser!.id);
   });
 
+  app.get(
+    '/api/auth/tracker-token',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      return authGroup.getTrackerTokenStatus(request.authUser!.id);
+    },
+  );
+
+  app.post(
+    '/api/auth/tracker-token',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest, reply) => {
+      const created = await authGroup.createTrackerToken(
+        request.authUser!,
+        request.body,
+        request.headers.origin,
+      );
+      loggerHandle.logger.info(
+        { userId: request.authUser!.id, expiresInDays: created.expiresInDays },
+        'issued scoped tracker token',
+      );
+      return reply.code(201).send(created);
+    },
+  );
+
+  app.delete(
+    '/api/auth/tracker-token',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const res = await authGroup.revokeTrackerToken(request.authUser!.id);
+      loggerHandle.logger.info({ userId: request.authUser!.id }, 'revoked scoped tracker token');
+      return res;
+    },
+  );
+
   app.get('/api/auth/invites/:token', async (request) => {
     const { token } = request.params as { token: string };
     return authGroup.previewInvite(token);
