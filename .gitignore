@@ -11,3 +11,5 @@ logs/*.json
 !infra/tiles/.gitkeep
 coverage/
 .DS_Store
+apps/mobile-app/android/
+apps/mobile-app/ios/

@@ -1,5 +1,7 @@
 # LovedOnes
 
+[![CI](https://github.com/Dowiw/LovedOnes/actions/workflows/ci.yml/badge.svg)](https://github.com/Dowiw/LovedOnes/actions/workflows/ci.yml)
+
 Share your live location and chat with family or close friends on a server you own — no third-party tracking, no subscriptions, and no selling your location history.
 
 Runs anywhere Docker runs — cloud VMs, bare-metal Linux servers, home servers, single-board `arm64` devices, or local Linux/macOS/WSL2 machines — and scales horizontally behind any reverse proxy or load balancer.
