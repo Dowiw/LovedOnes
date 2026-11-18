@@ -94,10 +94,15 @@ export const QrInvitePayloadSchema = z.object({
 });
 export type QrInvitePayload = z.infer<typeof QrInvitePayloadSchema>;
 
+function parseNonNegativeFinite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 export const LocationPointSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   altitude: z.number().nullable().optional(),
+  accuracy: z.number().min(0).nullable().optional(),
   speed: z.number().min(0).nullable().optional(),
   batteryLevel: z.number().int().min(0).max(100).nullable().optional(),
   recordedAt: z.string().datetime(),
@@ -187,6 +192,7 @@ export const OwnTracksLocationItemSchema = z
     lon: z.number().min(-180).max(180).optional(),
     tst: z.number().optional(),
     alt: z.number().nullable().optional(),
+    acc: z.number().nullable().optional(),
     vel: z.number().nullable().optional(),
     batt: z.number().nullable().optional(),
   })
@@ -246,11 +252,13 @@ export function normalizeOwnTracksToPoints(
 
     const altitude =
       typeof item.alt === 'number' && Number.isFinite(item.alt) ? item.alt : null;
+    const accuracy = parseNonNegativeFinite(item.acc);
 
     points.push({
       latitude: item.lat,
       longitude: item.lon,
       altitude,
+      accuracy,
       speed,
       batteryLevel,
       recordedAt,
@@ -271,6 +279,7 @@ export const OverlandFeatureSchema = z
       .object({
         timestamp: z.union([z.string(), z.number()]).optional(),
         altitude: z.number().nullable().optional(),
+        horizontal_accuracy: z.number().nullable().optional(),
         speed: z.number().nullable().optional(),
         battery_level: z.number().nullable().optional(),
       })
@@ -330,11 +339,13 @@ export function normalizeOverlandToPoints(
         : typeof coordAlt === 'number' && Number.isFinite(coordAlt)
           ? coordAlt
           : null;
+    const accuracy = parseNonNegativeFinite(props?.horizontal_accuracy);
 
     points.push({
       latitude,
       longitude,
       altitude,
+      accuracy,
       speed,
       batteryLevel,
       recordedAt,

@@ -47,21 +47,29 @@ export async function getSqliteQueueStorage(): Promise<OfflineQueueStorage> {
           latitude REAL NOT NULL,
           longitude REAL NOT NULL,
           altitude REAL,
+          accuracy REAL,
           speed REAL,
           battery_level INTEGER,
           recorded_at TEXT NOT NULL
         );
       `);
+      // Migrate existing device queues created before accuracy tracking was added
+      try {
+        await db.execAsync('ALTER TABLE queued_locations ADD COLUMN accuracy REAL;');
+      } catch {
+        // Column already exists
+      }
 
       return {
         async enqueue(points: LocationPoint[]) {
           for (const pt of points) {
             await db.runAsync(
-              `INSERT INTO queued_locations (latitude, longitude, altitude, speed, battery_level, recorded_at)
-               VALUES (?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO queued_locations (latitude, longitude, altitude, accuracy, speed, battery_level, recorded_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
               pt.latitude,
               pt.longitude,
               pt.altitude ?? null,
+              pt.accuracy ?? null,
               pt.speed ?? null,
               pt.batteryLevel ?? null,
               pt.recordedAt,
@@ -74,6 +82,7 @@ export async function getSqliteQueueStorage(): Promise<OfflineQueueStorage> {
             latitude: number;
             longitude: number;
             altitude: number | null;
+            accuracy: number | null;
             speed: number | null;
             battery_level: number | null;
             recorded_at: string;
@@ -84,6 +93,7 @@ export async function getSqliteQueueStorage(): Promise<OfflineQueueStorage> {
             latitude: r.latitude,
             longitude: r.longitude,
             altitude: r.altitude,
+            accuracy: r.accuracy,
             speed: r.speed,
             batteryLevel: r.battery_level,
             recordedAt: r.recorded_at,
@@ -137,6 +147,7 @@ export async function flushOfflineLocations(
     latitude: row.latitude,
     longitude: row.longitude,
     altitude: row.altitude ?? null,
+    accuracy: row.accuracy ?? null,
     speed: row.speed ?? null,
     batteryLevel: row.batteryLevel ?? null,
     recordedAt: row.recordedAt,

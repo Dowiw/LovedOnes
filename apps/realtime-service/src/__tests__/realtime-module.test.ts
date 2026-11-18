@@ -15,6 +15,8 @@ import {
   createTokenService,
 } from '@loved-ones/shared/auth';
 import {
+  filterAnomalousLocationPoints,
+  isNullIsland,
   RealtimeBroadcaster,
   RealtimeModule,
   RealtimeStore,
@@ -129,7 +131,7 @@ function createInMemoryRealtimeHarness() {
   };
 
   const mod = new RealtimeModule({ store, broadcaster });
-  return { mod, locationBroadcasts, chatBroadcasts };
+  return { mod, locationBroadcasts, chatBroadcasts, storedPoints };
 }
 
 describe('RealtimeModule domain interface', () => {
@@ -323,5 +325,126 @@ describe('RealtimeModule domain interface', () => {
     });
     expect(revokedRes.statusCode).toBe(401);
     await app.close();
+  });
+
+  it('filters Null Island (0, 0), coarse accuracy (> 1000m), and impossible intra-batch velocity jumps', async () => {
+    expect(isNullIsland(0, 0)).toBe(true);
+    expect(isNullIsland(0.00005, -0.00005)).toBe(true);
+    expect(isNullIsland(0, 13.4)).toBe(false);
+    expect(isNullIsland(52.52, 0)).toBe(false);
+
+    const { mod, locationBroadcasts, storedPoints } = createInMemoryRealtimeHarness();
+
+    // 1. All-invalid batch (Null Island + coarse accuracy) drops cleanly without throwing or broadcasting
+    const allBadInserted = await mod.ingestLocationBatch(alice, {
+      points: [
+        { latitude: 0, longitude: 0, accuracy: 5, recordedAt: '2026-11-18T22:00:00.000Z' },
+        {
+          latitude: 52.52,
+          longitude: 13.405,
+          accuracy: 1500,
+          recordedAt: '2026-11-18T22:00:05.000Z',
+        },
+      ],
+    });
+    expect(allBadInserted).toBe(0);
+    expect(storedPoints).toHaveLength(0);
+    expect(locationBroadcasts).toHaveLength(0);
+
+    // 2. Mixed batch drops Null Island + >1000m + teleport jump (Berlin -> Munich in 10s),
+    //    while keeping valid Berlin fixes (including exact 1000m boundary) and broadcasting the latest valid point
+    const mixedInput = [
+      {
+        latitude: 0.00002,
+        longitude: -0.00002,
+        accuracy: 10,
+        recordedAt: '2026-11-18T22:01:00.000Z',
+      },
+      {
+        latitude: 52.52,
+        longitude: 13.405,
+        accuracy: 1000,
+        recordedAt: '2026-11-18T22:01:05.000Z',
+      },
+      {
+        latitude: 48.1351, // Munich (~504 km jump in 10s -> impossible)
+        longitude: 11.582,
+        accuracy: 12,
+        recordedAt: '2026-11-18T22:01:15.000Z',
+      },
+      {
+        latitude: 52.5205,
+        longitude: 13.406,
+        accuracy: 2500, // Too coarse -> dropped
+        recordedAt: '2026-11-18T22:01:20.000Z',
+      },
+      {
+        latitude: 52.521,
+        longitude: 13.407,
+        accuracy: 15,
+        recordedAt: '2026-11-18T22:01:25.000Z',
+      },
+    ];
+
+    const filtered = filterAnomalousLocationPoints(mixedInput);
+    expect(filtered.map((p) => p.latitude)).toEqual([52.52, 52.521]);
+
+    const mixedInserted = await mod.ingestLocationBatch(alice, { points: mixedInput });
+    expect(mixedInserted).toBe(2);
+    expect(storedPoints.map((s) => s.point.latitude)).toEqual([52.52, 52.521]);
+    expect(locationBroadcasts).toHaveLength(2); // EXACT + FUZZED groups for latest valid point
+    expect(locationBroadcasts[0]?.latitude).toBe(52.521);
+    expect(locationBroadcasts[0]?.longitude).toBe(13.407);
+
+    // 3. Configurable accuracy threshold respects custom maxAccuracyMeters
+    expect(
+      filterAnomalousLocationPoints(
+        [{ latitude: 52.52, longitude: 13.405, accuracy: 100, recordedAt: '2026-11-18T22:02:00.000Z' }],
+        { maxAccuracyMeters: 50 },
+      ),
+    ).toHaveLength(0);
+
+    // 4. Valid long-distance travel over sufficient elapsed time (Berlin -> Munich over 4 hours) is preserved
+    const validTrip = filterAnomalousLocationPoints([
+      {
+        latitude: 52.52,
+        longitude: 13.405,
+        accuracy: 10,
+        recordedAt: '2026-11-18T10:00:00.000Z',
+      },
+      {
+        latitude: 48.1351,
+        longitude: 11.582,
+        accuracy: 10,
+        recordedAt: '2026-11-18T14:00:00.000Z',
+      },
+    ]);
+    expect(validTrip).toHaveLength(2);
+
+    // 5. OwnTracks and Overland ingestion also apply coordinate hygiene filtering
+    locationBroadcasts.length = 0;
+    const otBad = await mod.ingestOwnTracks(alice, {
+      _type: 'location',
+      lat: 0,
+      lon: 0,
+      acc: 10,
+      tst: 1_700_000_500,
+    });
+    expect(otBad).toEqual({ inserted: 0, response: [] });
+
+    const overlandBad = await mod.ingestOverland(alice, {
+      locations: [
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [13.405, 52.52] },
+          properties: {
+            timestamp: '2026-11-18T22:05:00Z',
+            horizontal_accuracy: 1201,
+          },
+        },
+      ],
+    });
+    expect(overlandBad).toEqual({ inserted: 0, result: 'ok' });
+    expect(locationBroadcasts).toHaveLength(0);
   });
 });

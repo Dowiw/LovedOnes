@@ -211,6 +211,10 @@ export default function HomePage() {
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
           altitude: pos.coords.altitude ?? null,
+          accuracy:
+            typeof pos.coords.accuracy === 'number' && pos.coords.accuracy >= 0
+              ? pos.coords.accuracy
+              : null,
           speed: pos.coords.speed && pos.coords.speed >= 0 ? pos.coords.speed : null,
           batteryLevel: null,
           recordedAt: new Date(pos.timestamp || Date.now()).toISOString(),

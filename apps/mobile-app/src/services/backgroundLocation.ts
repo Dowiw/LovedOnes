@@ -36,6 +36,10 @@ async function ingestLocationsAndOpportunisticFlush(
     latitude: loc.coords.latitude,
     longitude: loc.coords.longitude,
     altitude: loc.coords.altitude ?? null,
+    accuracy:
+      typeof loc.coords.accuracy === 'number' && loc.coords.accuracy >= 0
+        ? loc.coords.accuracy
+        : null,
     speed: loc.coords.speed && loc.coords.speed >= 0 ? loc.coords.speed : null,
     batteryLevel,
     recordedAt: new Date(loc.timestamp || Date.now()).toISOString(),

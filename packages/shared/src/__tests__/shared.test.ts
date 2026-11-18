@@ -149,6 +149,7 @@ describe('@loved-ones/shared', () => {
         vel: 36, // 36 km/h -> 10 m/s
         batt: 82,
         alt: 44,
+        acc: 12.5,
       },
       {
         _type: 'lwt',
@@ -160,6 +161,7 @@ describe('@loved-ones/shared', () => {
         latitude: 52.52,
         longitude: 13.405,
         altitude: 44,
+        accuracy: 12.5,
         speed: 10,
         batteryLevel: 82,
         recordedAt: new Date(1_700_000_000 * 1000).toISOString(),
@@ -178,7 +180,19 @@ describe('@loved-ones/shared', () => {
           properties: {
             timestamp: '2026-11-18T20:00:00Z',
             battery_level: 0.76,
+            horizontal_accuracy: 18,
             speed: 4.5,
+          },
+        },
+        {
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: [13.406, 52.521],
+          },
+          properties: {
+            timestamp: '2026-11-18T20:00:05Z',
+            horizontal_accuracy: -1,
           },
         },
       ],
@@ -188,9 +202,19 @@ describe('@loved-ones/shared', () => {
         latitude: 52.52,
         longitude: 13.405,
         altitude: 48,
+        accuracy: 18,
         speed: 4.5,
         batteryLevel: 76,
         recordedAt: '2026-11-18T20:00:00.000Z',
+      },
+      {
+        latitude: 52.521,
+        longitude: 13.406,
+        altitude: null,
+        accuracy: null,
+        speed: null,
+        batteryLevel: null,
+        recordedAt: '2026-11-18T20:00:05.000Z',
       },
     ]);
   });
