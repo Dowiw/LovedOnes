@@ -3,20 +3,32 @@
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
-import type { LocationBroadcast } from '@loved-ones/shared';
+import type { GroupPlace, LocationBroadcast } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
 
 let pmtilesProtocolRegistered = false;
 
 interface MapCanvasProps {
   locations: LocationBroadcast[];
+  places?: GroupPlace[];
   selectedUserId?: string | null;
+  selectedPlaceId?: string | null;
+  onMapSelectCoords?: (latitude: number, longitude: number) => void;
 }
 
-export function MapCanvas({ locations, selectedUserId }: MapCanvasProps) {
+export function MapCanvas({
+  locations,
+  places = [],
+  selectedUserId,
+  selectedPlaceId,
+  onMapSelectCoords,
+}: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const onSelectCoordsRef = useRef(onMapSelectCoords);
+  onSelectCoordsRef.current = onMapSelectCoords;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -56,12 +68,22 @@ export function MapCanvas({ locations, selectedUserId }: MapCanvasProps) {
     });
 
     mapRef.current = map;
+    map.on('click', (e) => {
+      onSelectCoordsRef.current?.(
+        Number(e.lngLat.lat.toFixed(6)),
+        Number(e.lngLat.lng.toFixed(6)),
+      );
+    });
 
     return () => {
       for (const marker of markersRef.current.values()) {
         marker.remove();
       }
       markersRef.current.clear();
+      for (const marker of placeMarkersRef.current.values()) {
+        marker.remove();
+      }
+      placeMarkersRef.current.clear();
       map.remove();
       mapRef.current = null;
     };
@@ -131,6 +153,67 @@ export function MapCanvas({ locations, selectedUserId }: MapCanvasProps) {
       map.fitBounds(bounds, { padding: 70, maxZoom: 14, duration: 600 });
     }
   }, [locations, selectedUserId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const activePlaceIds = new Set<string>();
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+    for (const place of places) {
+      activePlaceIds.add(place.id);
+      const existing = placeMarkersRef.current.get(place.id);
+      const safeName = escapeHtml(place.name);
+      const popupHtml = `
+        <div class="text-xs space-y-0.5">
+          <div class="font-semibold text-sky-300">${safeName}</div>
+          <div class="text-slate-400">Radius: ${Math.round(place.radiusMeters)} m</div>
+        </div>
+      `;
+      if (existing) {
+        existing.setLngLat([place.longitude, place.latitude]);
+        existing.getPopup()?.setHTML(popupHtml);
+      } else {
+        const el = document.createElement('div');
+        el.className = 'flex flex-col items-center cursor-pointer';
+        const label = document.createElement('div');
+        label.className =
+          'rounded border border-sky-400/70 bg-slate-900/90 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 shadow';
+        label.textContent = `${place.name} (${Math.round(place.radiusMeters)}m)`;
+        const dot = document.createElement('div');
+        dot.className =
+          'mt-0.5 h-3 w-3 rounded-full border-2 border-dashed border-sky-400 bg-sky-400/30';
+        el.append(label, dot);
+        const marker = new maplibregl.Marker({ element: el })
+          .setLngLat([place.longitude, place.latitude])
+          .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(popupHtml))
+          .addTo(map);
+        placeMarkersRef.current.set(place.id, marker);
+      }
+    }
+
+    for (const [pid, marker] of placeMarkersRef.current.entries()) {
+      if (!activePlaceIds.has(pid)) {
+        marker.remove();
+        placeMarkersRef.current.delete(pid);
+      }
+    }
+
+    if (selectedPlaceId) {
+      const target = places.find((p) => p.id === selectedPlaceId);
+      if (target) {
+        map.flyTo({ center: [target.longitude, target.latitude], zoom: 14, duration: 700 });
+      }
+    }
+  }, [places, selectedPlaceId]);
 
   return (
     <div className="relative h-full w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-900">

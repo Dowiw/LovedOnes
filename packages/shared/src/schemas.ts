@@ -206,6 +206,81 @@ export const ChatMessageSchema = z.object({
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
+// ---- Location Check-In Requests & Geofenced Group Places ----
+
+export const LocationRequestStatusSchema = z.enum([
+  'pending',
+  'accepted',
+  'declined',
+  'expired',
+]);
+export type LocationRequestStatus = z.infer<typeof LocationRequestStatusSchema>;
+
+export const CreateLocationRequestSchema = z.object({
+  targetUserId: z.string().uuid(),
+  suggestedDurationMinutes: z.number().int().min(1).max(240).default(15),
+  expiresInMinutes: z.number().int().min(1).max(60).default(15),
+  message: z.string().trim().max(240).optional(),
+});
+export type CreateLocationRequestInput = z.infer<typeof CreateLocationRequestSchema>;
+
+export const RespondLocationRequestSchema = z.object({
+  action: z.enum(['accept', 'decline']),
+  durationMinutes: z.number().int().min(1).max(240).optional(),
+});
+export type RespondLocationRequestInput = z.infer<typeof RespondLocationRequestSchema>;
+
+export const LocationRequestItemSchema = z.object({
+  id: z.string().uuid(),
+  groupId: z.string().uuid(),
+  requesterId: z.string().uuid(),
+  requesterUsername: z.string(),
+  targetUserId: z.string().uuid(),
+  targetUsername: z.string(),
+  status: LocationRequestStatusSchema,
+  suggestedDurationMinutes: z.number().int(),
+  message: z.string().nullable(),
+  expiresAt: z.string(),
+  respondedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type LocationRequestItem = z.infer<typeof LocationRequestItemSchema>;
+
+export const CreateGroupPlaceSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  radiusMeters: z.number().min(25).max(10000).default(150),
+});
+export type CreateGroupPlaceInput = z.infer<typeof CreateGroupPlaceSchema>;
+
+export const GroupPlaceSchema = z.object({
+  id: z.string().uuid(),
+  groupId: z.string().uuid(),
+  name: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  radiusMeters: z.number(),
+  createdBy: z.string().uuid().nullable(),
+  createdAt: z.string(),
+});
+export type GroupPlace = z.infer<typeof GroupPlaceSchema>;
+
+export const PlaceTransitionTypeSchema = z.enum(['enter', 'exit']);
+export type PlaceTransitionType = z.infer<typeof PlaceTransitionTypeSchema>;
+
+export const PlaceTransitionEventSchema = z.object({
+  id: z.string().uuid().optional(),
+  groupId: z.string().uuid(),
+  placeId: z.string().uuid(),
+  placeName: z.string(),
+  userId: z.string().uuid(),
+  username: z.string(),
+  transition: PlaceTransitionTypeSchema,
+  recordedAt: z.string(),
+});
+export type PlaceTransitionEvent = z.infer<typeof PlaceTransitionEventSchema>;
+
 export const UserTelemetrySchema = z.object({
   userId: z.string().uuid(),
   username: z.string(),

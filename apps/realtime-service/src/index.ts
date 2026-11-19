@@ -239,6 +239,72 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     },
   );
 
+  app.get(
+    '/api/realtime/groups/:groupId/location-requests',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const { groupId } = request.params as { groupId: string };
+      return realtime.listCheckInRequests(request.authUser!, groupId);
+    },
+  );
+
+  app.post(
+    '/api/realtime/groups/:groupId/location-requests',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest, reply) => {
+      const { groupId } = request.params as { groupId: string };
+      const created = await realtime.createCheckInRequest(
+        request.authUser!,
+        groupId,
+        request.body,
+      );
+      return reply.code(201).send({ request: created });
+    },
+  );
+
+  app.post(
+    '/api/realtime/groups/:groupId/location-requests/:requestId/respond',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const { groupId, requestId } = request.params as { groupId: string; requestId: string };
+      return realtime.respondToCheckInRequest(
+        request.authUser!,
+        groupId,
+        requestId,
+        request.body,
+      );
+    },
+  );
+
+  app.get(
+    '/api/realtime/groups/:groupId/places',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const { groupId } = request.params as { groupId: string };
+      return realtime.listGroupPlaces(request.authUser!, groupId);
+    },
+  );
+
+  app.post(
+    '/api/realtime/groups/:groupId/places',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest, reply) => {
+      const { groupId } = request.params as { groupId: string };
+      const place = await realtime.createGroupPlace(request.authUser!, groupId, request.body);
+      return reply.code(201).send({ place });
+    },
+  );
+
+  app.delete(
+    '/api/realtime/groups/:groupId/places/:placeId',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const { groupId, placeId } = request.params as { groupId: string; placeId: string };
+      await realtime.deleteGroupPlace(request.authUser!, groupId, placeId);
+      return { ok: true };
+    },
+  );
+
   // ---- Socket.io Auth & Handlers ----
 
   io.use(async (socket: Socket, next) => {
@@ -264,6 +330,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     const user = socket.data.user as JwtUserPayload;
     const groupIds = (socket.data.groupIds as string[] | undefined) ?? [];
 
+    void socket.join(`user:${user.id}`);
     for (const gid of groupIds) {
       void socket.join(`group:${gid}`);
     }
@@ -332,6 +399,39 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
           ack?.({ ok: true, message });
         } catch (err) {
           ack?.({ ok: false, error: err instanceof Error ? err.message : 'Failed to send' });
+        }
+      },
+    );
+
+    socket.on(
+      'checkin:request',
+      async (
+        payload: { groupId?: string } & Record<string, unknown>,
+        ack?: (res: { ok: boolean; request?: unknown; error?: string }) => void,
+      ) => {
+        try {
+          const groupId = typeof payload?.groupId === 'string' ? payload.groupId : '';
+          const created = await realtime.createCheckInRequest(user, groupId, payload);
+          ack?.({ ok: true, request: created });
+        } catch (err) {
+          ack?.({ ok: false, error: err instanceof Error ? err.message : 'Failed to request check-in' });
+        }
+      },
+    );
+
+    socket.on(
+      'checkin:respond',
+      async (
+        payload: { groupId?: string; requestId?: string } & Record<string, unknown>,
+        ack?: (res: { ok: boolean; request?: unknown; privacyOverrideUntil?: string | null; error?: string }) => void,
+      ) => {
+        try {
+          const groupId = typeof payload?.groupId === 'string' ? payload.groupId : '';
+          const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
+          const res = await realtime.respondToCheckInRequest(user, groupId, requestId, payload);
+          ack?.({ ok: true, ...res });
+        } catch (err) {
+          ack?.({ ok: false, error: err instanceof Error ? err.message : 'Failed to respond' });
         }
       },
     );

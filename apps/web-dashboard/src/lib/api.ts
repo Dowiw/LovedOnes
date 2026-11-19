@@ -1,8 +1,11 @@
 import type {
   ChatMessage,
+  GroupPlace,
   GroupRole,
   LocationBroadcast,
   LocationPoint,
+  LocationRequestItem,
+  PlaceTransitionEvent,
   PrivacyMode,
   QrInvitePayload,
   SystemRole,
@@ -346,4 +349,93 @@ export async function apiRevokeTrackerToken(
     method: 'DELETE',
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+}
+
+export async function apiFetchLocationRequests(
+  accessToken: string,
+  groupId: string,
+): Promise<{ requests: LocationRequestItem[]; myPrivacyOverrideUntil: string | null }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestJson<{ requests: LocationRequestItem[]; myPrivacyOverrideUntil: string | null }>(
+    `${realtimeBase}/api/realtime/groups/${groupId}/location-requests`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}
+
+export async function apiCreateLocationRequest(
+  accessToken: string,
+  groupId: string,
+  payload: { targetUserId: string; suggestedDurationMinutes?: number; message?: string },
+): Promise<LocationRequestItem> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await requestJson<{ request: LocationRequestItem }>(
+    `${realtimeBase}/api/realtime/groups/${groupId}/location-requests`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(payload),
+    },
+  );
+  return res.request;
+}
+
+export async function apiRespondLocationRequest(
+  accessToken: string,
+  groupId: string,
+  requestId: string,
+  action: 'accept' | 'decline',
+  durationMinutes?: number,
+): Promise<{ request: LocationRequestItem; privacyOverrideUntil: string | null }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestJson<{ request: LocationRequestItem; privacyOverrideUntil: string | null }>(
+    `${realtimeBase}/api/realtime/groups/${groupId}/location-requests/${requestId}/respond`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ action, durationMinutes }),
+    },
+  );
+}
+
+export async function apiFetchGroupPlaces(
+  accessToken: string,
+  groupId: string,
+): Promise<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestJson<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }>(
+    `${realtimeBase}/api/realtime/groups/${groupId}/places`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}
+
+export async function apiCreateGroupPlace(
+  accessToken: string,
+  groupId: string,
+  payload: { name: string; latitude: number; longitude: number; radiusMeters: number },
+): Promise<GroupPlace> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await requestJson<{ place: GroupPlace }>(
+    `${realtimeBase}/api/realtime/groups/${groupId}/places`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(payload),
+    },
+  );
+  return res.place;
+}
+
+export async function apiDeleteGroupPlace(
+  accessToken: string,
+  groupId: string,
+  placeId: string,
+): Promise<void> {
+  const { realtimeBase } = getServiceBaseUrls();
+  await requestJson<{ ok: boolean }>(
+    `${realtimeBase}/api/realtime/groups/${groupId}/places/${placeId}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    },
+  );
 }

@@ -1,12 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import {
+  createGroupPlaceRecord,
+  createLocationRequestRecord,
   createPool,
   deduplicateLocationPoints,
+  deleteGroupPlaceRecord,
+  evaluateAndRecordPlaceTransitions,
   getDatabaseTelemetry,
+  getGroupMembershipPrivacyInfo,
   getGroupTrails,
   getLatestGroupLocations,
   insertLocationBatch,
+  listLocationRequestsForUser,
+  listRecentPlaceTransitions,
+  respondToLocationRequestRecord,
   runMigrations,
 } from '../index.js';
 
@@ -182,6 +190,173 @@ describe('@loved-ones/db PostGIS integration', () => {
     } finally {
       await pool.query('DELETE FROM groups WHERE id = $1', [groupId]);
       await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[visibleId, ghostId]]);
+    }
+  });
+
+  it('handles expiring location check-in overrides and ST_DWithin geofence enter/exit transitions', async () => {
+    const suffix = Date.now();
+    const adminRes = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, username, password_hash, role)
+       VALUES ($1, 'gf-admin', 'hash', 'USER') RETURNING id`,
+      [`gf-admin-${suffix}@example.com`],
+    );
+    const bobRes = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, username, password_hash, role)
+       VALUES ($1, 'gf-bob', 'hash', 'USER') RETURNING id`,
+      [`gf-bob-${suffix}@example.com`],
+    );
+    const adminId = adminRes.rows[0].id;
+    const bobId = bobRes.rows[0].id;
+
+    const groupRes = await pool.query<{ id: string }>(
+      `INSERT INTO groups (name, created_by) VALUES ('Geofence Group', $1) RETURNING id`,
+      [adminId],
+    );
+    const groupId = groupRes.rows[0].id;
+
+    try {
+      await pool.query(
+        `INSERT INTO group_memberships (user_id, group_id, role, privacy)
+         VALUES ($1, $2, 'ADMIN', 'EXACT'), ($3, $2, 'MEMBER', 'GHOST')`,
+        [adminId, groupId, bobId],
+      );
+
+      const tBase = new Date('2026-11-19T12:00:00.000Z');
+      await insertLocationBatch(pool, bobId, [
+        { latitude: 52.52, longitude: 13.405, recordedAt: tBase.toISOString() },
+      ]);
+
+      // Before override, Bob is GHOST in DB (still returned as GHOST from getLatestGroupLocations)
+      const initialLatest = await getLatestGroupLocations(pool, groupId, tBase);
+      expect(initialLatest.find((r) => r.userId === bobId)?.privacy).toBe('GHOST');
+
+      // 1. Admin creates check-in request that expires at tBase + 10m; test expiration first
+      const expiredReq = await createLocationRequestRecord(pool, {
+        groupId,
+        requesterId: adminId,
+        targetUserId: bobId,
+        suggestedDurationMinutes: 15,
+        expiresAt: new Date(tBase.getTime() + 10 * 60_000),
+        message: 'Check in?',
+        now: tBase,
+      });
+      const lateRespond = await respondToLocationRequestRecord(pool, {
+        groupId,
+        requestId: expiredReq.id,
+        responderUserId: bobId,
+        action: 'accept',
+        now: new Date(tBase.getTime() + 11 * 60_000),
+      });
+      expect(lateRespond.kind).toBe('expired');
+
+      // 2. Fresh request accepted -> temporary EXACT override for 15 minutes
+      const activeReq = await createLocationRequestRecord(pool, {
+        groupId,
+        requesterId: adminId,
+        targetUserId: bobId,
+        suggestedDurationMinutes: 15,
+        expiresAt: new Date(tBase.getTime() + 10 * 60_000),
+        now: tBase,
+      });
+      const accepted = await respondToLocationRequestRecord(pool, {
+        groupId,
+        requestId: activeReq.id,
+        responderUserId: bobId,
+        action: 'accept',
+        now: tBase,
+      });
+      expect(accepted.kind).toBe('ok');
+
+      // During override (tBase + 5m), effective privacy is EXACT
+      const midOverride = new Date(tBase.getTime() + 5 * 60_000);
+      expect(
+        (await getGroupMembershipPrivacyInfo(pool, bobId, groupId, midOverride))?.effectivePrivacy,
+      ).toBe('EXACT');
+      expect(
+        (await getLatestGroupLocations(pool, groupId, midOverride)).find((r) => r.userId === bobId)
+          ?.privacy,
+      ).toBe('EXACT');
+
+      // After override (tBase + 16m), reverts automatically to baseline GHOST
+      const afterOverride = new Date(tBase.getTime() + 16 * 60_000);
+      expect(
+        (await getGroupMembershipPrivacyInfo(pool, bobId, groupId, afterOverride))
+          ?.effectivePrivacy,
+      ).toBe('GHOST');
+      expect(
+        (await getLatestGroupLocations(pool, groupId, afterOverride)).find((r) => r.userId === bobId)
+          ?.privacy,
+      ).toBe('GHOST');
+
+      const listReqs = await listLocationRequestsForUser(pool, groupId, bobId, tBase);
+      expect(listReqs.map((r) => r.status)).toContain('accepted');
+      expect(listReqs.map((r) => r.status)).toContain('expired');
+
+      // 3. ST_DWithin geofenced group place enter/exit detection
+      const home = await createGroupPlaceRecord(pool, {
+        groupId,
+        name: 'Home',
+        latitude: 52.52,
+        longitude: 13.405,
+        radiusMeters: 200,
+        createdBy: adminId,
+      });
+
+      // Initially outside (~5 km away) -> initializes outside quietly, 0 transitions
+      expect(
+        await evaluateAndRecordPlaceTransitions(pool, {
+          groupId,
+          userId: adminId,
+          username: 'gf-admin',
+          latitude: 52.56,
+          longitude: 13.405,
+          recordedAt: '2026-11-19T12:00:00.000Z',
+        }),
+      ).toHaveLength(0);
+
+      // Moves inside (50 m from center) -> emits enter
+      const entered = await evaluateAndRecordPlaceTransitions(pool, {
+        groupId,
+        userId: adminId,
+        username: 'gf-admin',
+        latitude: 52.5203,
+        longitude: 13.405,
+        recordedAt: '2026-11-19T12:05:00.000Z',
+      });
+      expect(entered).toHaveLength(1);
+      expect(entered[0].transition).toBe('enter');
+      expect(entered[0].placeName).toBe('Home');
+
+      // Staying inside -> 0 duplicate transitions
+      expect(
+        await evaluateAndRecordPlaceTransitions(pool, {
+          groupId,
+          userId: adminId,
+          username: 'gf-admin',
+          latitude: 52.5204,
+          longitude: 13.4051,
+          recordedAt: '2026-11-19T12:06:00.000Z',
+        }),
+      ).toHaveLength(0);
+
+      // Moves outside (~1 km away) -> emits exit
+      const exited = await evaluateAndRecordPlaceTransitions(pool, {
+        groupId,
+        userId: adminId,
+        username: 'gf-admin',
+        latitude: 52.53,
+        longitude: 13.405,
+        recordedAt: '2026-11-19T12:10:00.000Z',
+      });
+      expect(exited).toHaveLength(1);
+      expect(exited[0].transition).toBe('exit');
+
+      const recentEvents = await listRecentPlaceTransitions(pool, groupId);
+      expect(recentEvents).toHaveLength(2);
+      expect(await deleteGroupPlaceRecord(pool, groupId, home.id)).toBe(true);
+    } finally {
+      await pool.query('DELETE FROM groups WHERE id = $1', [groupId]);
+      await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[adminId, bobId]]);
     }
   });
 });

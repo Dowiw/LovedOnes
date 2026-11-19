@@ -368,7 +368,98 @@ describe('@loved-ones/realtime-service integration', () => {
       expect(bobTrail.isFuzzed).toBe(true);
       expect(bobTrail.privacyMode).toBe('FUZZED');
 
-      // Verify telemetry reflects active sockets and GPS/chat events (6 instead of 5 section)
+      // 6. Expiring check-in request (REST + Socket.io) and geofenced group place ST_DWithin transitions
+      await authApp.inject({
+        method: 'PATCH',
+        url: `/api/auth/groups/${group.id}/privacy`,
+        headers: { Authorization: `Bearer ${bob.accessToken}` },
+        payload: { privacy: 'GHOST' },
+      });
+
+      const incomingReqPromise = new Promise<Record<string, unknown>>((resolve) => {
+        bobSocket.once('checkin:request', resolve);
+      });
+      const createReqRes = await realtimeApp.inject({
+        method: 'POST',
+        url: `/api/realtime/groups/${group.id}/location-requests`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+        payload: {
+          targetUserId: bob.user.id,
+          suggestedDurationMinutes: 15,
+          expiresInMinutes: 10,
+          message: 'Quick check-in?',
+        },
+      });
+      expect(createReqRes.statusCode).toBe(201);
+      const createdCheckinId = createReqRes.json().request.id as string;
+      const incomingReq = await incomingReqPromise;
+      expect(incomingReq.id).toBe(createdCheckinId);
+
+      // Bob accepts check-in -> Socket.io delivers response + EXACT override pin
+      const responsePromise = new Promise<Record<string, unknown>>((resolve) => {
+        aliceSocket.once('checkin:response', resolve);
+      });
+      const acceptRes = await realtimeApp.inject({
+        method: 'POST',
+        url: `/api/realtime/groups/${group.id}/location-requests/${createdCheckinId}/respond`,
+        headers: { Authorization: `Bearer ${bob.accessToken}` },
+        payload: { action: 'accept' },
+      });
+      expect(acceptRes.statusCode).toBe(200);
+      expect(acceptRes.json().privacyOverrideUntil).toBeTruthy();
+      expect((await responsePromise).status).toBe('accepted');
+
+      // Non-admin Bob cannot create group place; Admin Alice creates 'Studio' (200 m radius)
+      const forbiddenPlaceRes = await realtimeApp.inject({
+        method: 'POST',
+        url: `/api/realtime/groups/${group.id}/places`,
+        headers: { Authorization: `Bearer ${bob.accessToken}` },
+        payload: { name: 'Studio', latitude: 52.5, longitude: 13.4, radiusMeters: 200 },
+      });
+      expect(forbiddenPlaceRes.statusCode).toBe(403);
+
+      const createPlaceRes = await realtimeApp.inject({
+        method: 'POST',
+        url: `/api/realtime/groups/${group.id}/places`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+        payload: { name: 'Studio', latitude: 52.5, longitude: 13.4, radiusMeters: 200 },
+      });
+      expect(createPlaceRes.statusCode).toBe(201);
+      const studioId = createPlaceRes.json().place.id as string;
+
+      // Bob (now under active EXACT override!) enters 'Studio' -> place:transition ('enter') broadcasts live
+      const transitionPromise = new Promise<Record<string, unknown>>((resolve) => {
+        aliceSocket.once('place:transition', resolve);
+      });
+      const bobAtStudio = await realtimeApp.inject({
+        method: 'POST',
+        url: '/api/realtime/locations',
+        headers: { Authorization: `Bearer ${bob.accessToken}` },
+        payload: {
+          points: [{ latitude: 52.5003, longitude: 13.4, recordedAt: '2026-11-19T12:01:00.000Z' }],
+        },
+      });
+      expect(bobAtStudio.statusCode).toBe(200);
+      const enterEvent = await transitionPromise;
+      expect(enterEvent.placeName).toBe('Studio');
+      expect(enterEvent.transition).toBe('enter');
+
+      const placesListRes = await realtimeApp.inject({
+        method: 'GET',
+        url: `/api/realtime/groups/${group.id}/places`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+      });
+      expect(placesListRes.statusCode).toBe(200);
+      expect(placesListRes.json().places).toHaveLength(1);
+      expect(placesListRes.json().recentTransitions[0].transition).toBe('enter');
+
+      await realtimeApp.inject({
+        method: 'DELETE',
+        url: `/api/realtime/groups/${group.id}/places/${studioId}`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+      });
+
+      // 7. Verify telemetry reflects active sockets and GPS/chat events
       await new Promise((r) => setTimeout(r, 50));
       const telemetryRes = await authApp.inject({
         method: 'GET',
@@ -379,8 +470,8 @@ describe('@loved-ones/realtime-service integration', () => {
       const telemetry = telemetryRes.json();
       expect(telemetry.totalActiveSockets).toBeGreaterThanOrEqual(2);
       const bobStats = telemetry.users.find((u: { userId: string }) => u.userId === bob.user.id);
-      expect(bobStats.locationPoints).toBe(4);
-      expect(bobStats.eventsCount).toBeGreaterThanOrEqual(4);
+      expect(bobStats.locationPoints).toBe(5);
+      expect(bobStats.eventsCount).toBeGreaterThanOrEqual(5);
     } finally {
       aliceSocket.disconnect();
       bobSocket.disconnect();

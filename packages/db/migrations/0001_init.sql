@@ -94,3 +94,69 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_group_time ON messages (group_id, created_at DESC);
+
+ALTER TABLE group_memberships
+    ADD COLUMN IF NOT EXISTS privacy_override_until TIMESTAMPTZ NULL;
+
+DO $$ BEGIN
+    CREATE TYPE location_request_status AS ENUM ('pending', 'accepted', 'declined', 'expired');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS location_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    target_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status location_request_status NOT NULL DEFAULT 'pending',
+    suggested_duration_minutes INT NOT NULL DEFAULT 15,
+    message VARCHAR(240),
+    expires_at TIMESTAMPTZ NOT NULL,
+    responded_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_location_requests_group_target
+    ON location_requests (group_id, target_user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS group_places (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    center GEOGRAPHY(Point, 4326) NOT NULL,
+    radius_meters DOUBLE PRECISION NOT NULL,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_places_group ON group_places (group_id);
+CREATE INDEX IF NOT EXISTS idx_group_places_gist ON group_places USING GIST (center);
+
+DO $$ BEGIN
+    CREATE TYPE place_transition_type AS ENUM ('enter', 'exit');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS group_place_states (
+    place_id UUID NOT NULL REFERENCES group_places(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_inside BOOLEAN NOT NULL,
+    last_transition_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (place_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS group_place_events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    place_id UUID NOT NULL REFERENCES group_places(id) ON DELETE CASCADE,
+    place_name VARCHAR(100) NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    transition place_transition_type NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_place_events_group_time
+    ON group_place_events (group_id, created_at DESC);

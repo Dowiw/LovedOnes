@@ -4,6 +4,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   applyPrivacyFuzzing,
+  CreateGroupPlaceSchema,
+  CreateLocationRequestSchema,
   LocationBatchSchema,
   LocationSnapshotQuerySchema,
   normalizeOverlandToPoints,
@@ -11,6 +13,7 @@ import {
   normalizePrivacyMode,
   parseBoundingBox,
   QrInvitePayloadSchema,
+  RespondLocationRequestSchema,
   TrailQuerySchema,
 } from '../index.js';
 import { createServiceLogger } from '../logger.js';
@@ -253,5 +256,34 @@ describe('@loved-ones/shared', () => {
       }).success,
     ).toBe(false);
     expect(TrailQuerySchema.safeParse({ bbox: 'invalid' }).success).toBe(false);
+  });
+
+  it('validates check-in request and geofenced group place payloads', () => {
+    const req = CreateLocationRequestSchema.parse({
+      targetUserId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      message: 'On your way?',
+    });
+    expect(req.suggestedDurationMinutes).toBe(15);
+    expect(req.expiresInMinutes).toBe(15);
+
+    expect(
+      RespondLocationRequestSchema.parse({ action: 'accept', durationMinutes: 30 }),
+    ).toEqual({ action: 'accept', durationMinutes: 30 });
+    expect(RespondLocationRequestSchema.safeParse({ action: 'ignore' }).success).toBe(false);
+
+    const place = CreateGroupPlaceSchema.parse({
+      name: 'Home',
+      latitude: 52.52,
+      longitude: 13.405,
+    });
+    expect(place.radiusMeters).toBe(150);
+    expect(
+      CreateGroupPlaceSchema.safeParse({
+        name: 'TooSmall',
+        latitude: 52.52,
+        longitude: 13.405,
+        radiusMeters: 5,
+      }).success,
+    ).toBe(false);
   });
 });

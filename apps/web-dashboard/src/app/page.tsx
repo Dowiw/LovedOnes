@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
+  BellRing,
   Check,
   Compass,
   Copy,
@@ -10,6 +11,7 @@ import {
   EyeOff,
   KeyRound,
   LocateFixed,
+  MapPin,
   MessageSquare,
   Plus,
   Radio,
@@ -17,19 +19,33 @@ import {
   ShieldCheck,
   Trash2,
   Users,
+  X,
 } from 'lucide-react';
-import type { ChatMessage, LocationBroadcast, PrivacyMode } from '@loved-ones/shared';
+import type {
+  ChatMessage,
+  GroupPlace,
+  LocationBroadcast,
+  LocationRequestItem,
+  PlaceTransitionEvent,
+  PrivacyMode,
+} from '@loved-ones/shared';
 import { MapCanvas } from '@/components/MapCanvas';
 import { NavBar } from '@/components/NavBar';
 import {
   apiCreateGroup,
+  apiCreateGroupPlace,
+  apiCreateLocationRequest,
   apiCreateTrackerToken,
+  apiDeleteGroupPlace,
   apiFetchGroupLocations,
   apiFetchGroupMessages,
+  apiFetchGroupPlaces,
   apiFetchGroups,
+  apiFetchLocationRequests,
   apiGetTrackerTokenStatus,
   apiLogin,
   apiRegister,
+  apiRespondLocationRequest,
   apiRevokeTrackerToken,
   apiSendLocationBatch,
   apiUpdatePrivacy,
@@ -71,6 +87,23 @@ export default function HomePage() {
   const [trackerIssued, setTrackerIssued] = useState<TrackerTokenResponse | null>(null);
   const [trackerLoading, setTrackerLoading] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const [locationRequests, setLocationRequests] = useState<LocationRequestItem[]>([]);
+  const [myPrivacyOverrideUntil, setMyPrivacyOverrideUntil] = useState<string | null>(null);
+  const [checkinTargetUserId, setCheckinTargetUserId] = useState<string>('');
+  const [checkinDuration, setCheckinDuration] = useState<number>(15);
+  const [checkinBusy, setCheckinBusy] = useState(false);
+  const [checkinError, setCheckinError] = useState<string | null>(null);
+
+  const [places, setPlaces] = useState<GroupPlace[]>([]);
+  const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
+  const [placeTransitions, setPlaceTransitions] = useState<PlaceTransitionEvent[]>([]);
+  const [placeName, setPlaceName] = useState('');
+  const [placeLat, setPlaceLat] = useState('');
+  const [placeLon, setPlaceLon] = useState('');
+  const [placeRadius, setPlaceRadius] = useState<number>(150);
+  const [placeBusy, setPlaceBusy] = useState(false);
+  const [placeError, setPlaceError] = useState<string | null>(null);
 
   useEffect(() => {
     setSession(loadSession());
@@ -164,6 +197,35 @@ export default function HomePage() {
       });
     });
 
+    socket.on('checkin:request', (req: LocationRequestItem) => {
+      setLocationRequests((prev) => {
+        if (activeGroup && req.groupId !== activeGroup.id) return prev;
+        if (prev.some((r) => r.id === req.id)) return prev;
+        return [req, ...prev];
+      });
+    });
+
+    socket.on('checkin:response', (req: LocationRequestItem) => {
+      setLocationRequests((prev) => {
+        if (activeGroup && req.groupId !== activeGroup.id) return prev;
+        const exists = prev.some((r) => r.id === req.id);
+        return exists ? prev.map((r) => (r.id === req.id ? req : r)) : [req, ...prev];
+      });
+    });
+
+    socket.on('place:transition', (evt: PlaceTransitionEvent) => {
+      setPlaceTransitions((prev) => {
+        if (activeGroup && evt.groupId !== activeGroup.id) return prev;
+        if (evt.id && prev.some((e) => e.id === evt.id)) return prev;
+        return [evt, ...prev].slice(0, 30);
+      });
+    });
+
+    socket.on('place:updated', (payload: { groupId: string; places: GroupPlace[] }) => {
+      if (activeGroup && payload.groupId !== activeGroup.id) return;
+      setPlaces(payload.places);
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
@@ -175,10 +237,19 @@ export default function HomePage() {
     if (!session || !activeGroup) {
       setLocations([]);
       setMessages([]);
+      setLocationRequests([]);
+      setMyPrivacyOverrideUntil(null);
+      setPlaces([]);
+      setPlaceTransitions([]);
       return;
     }
 
     socketRef.current?.emit('group:join', activeGroup.id);
+
+    const otherMembers = activeGroup.members.filter((m) => m.userId !== session.user.id);
+    setCheckinTargetUserId((prev) =>
+      prev && otherMembers.some((m) => m.userId === prev) ? prev : otherMembers[0]?.userId ?? '',
+    );
 
     void apiFetchGroupLocations(session.accessToken, activeGroup.id)
       .then(setLocations)
@@ -186,6 +257,24 @@ export default function HomePage() {
     void apiFetchGroupMessages(session.accessToken, activeGroup.id)
       .then(setMessages)
       .catch(() => setMessages([]));
+    void apiFetchLocationRequests(session.accessToken, activeGroup.id)
+      .then((res) => {
+        setLocationRequests(res.requests);
+        setMyPrivacyOverrideUntil(res.myPrivacyOverrideUntil);
+      })
+      .catch(() => {
+        setLocationRequests([]);
+        setMyPrivacyOverrideUntil(null);
+      });
+    void apiFetchGroupPlaces(session.accessToken, activeGroup.id)
+      .then((res) => {
+        setPlaces(res.places);
+        setPlaceTransitions(res.recentTransitions);
+      })
+      .catch(() => {
+        setPlaces([]);
+        setPlaceTransitions([]);
+      });
   }, [session, activeGroup]);
 
   // Foreground Web Geolocation watcher
@@ -316,6 +405,89 @@ export default function HomePage() {
     setGroups([]);
     setLocations([]);
     setMessages([]);
+    setLocationRequests([]);
+    setMyPrivacyOverrideUntil(null);
+    setPlaces([]);
+    setPlaceTransitions([]);
+  }
+
+  async function handleSendCheckInRequest(e: React.FormEvent) {
+    e.preventDefault();
+    if (!session || !activeGroup || !checkinTargetUserId) return;
+    setCheckinBusy(true);
+    setCheckinError(null);
+    try {
+      const created = await apiCreateLocationRequest(session.accessToken, activeGroup.id, {
+        targetUserId: checkinTargetUserId,
+        suggestedDurationMinutes: checkinDuration,
+      });
+      setLocationRequests((prev) =>
+        prev.some((r) => r.id === created.id) ? prev : [created, ...prev],
+      );
+    } catch (err) {
+      setCheckinError(err instanceof Error ? err.message : 'Failed to request check-in');
+    } finally {
+      setCheckinBusy(false);
+    }
+  }
+
+  async function handleRespondCheckIn(requestId: string, action: 'accept' | 'decline') {
+    if (!session || !activeGroup) return;
+    setCheckinBusy(true);
+    setCheckinError(null);
+    try {
+      const res = await apiRespondLocationRequest(
+        session.accessToken,
+        activeGroup.id,
+        requestId,
+        action,
+      );
+      setLocationRequests((prev) => prev.map((r) => (r.id === res.request.id ? res.request : r)));
+      if (res.privacyOverrideUntil) {
+        setMyPrivacyOverrideUntil(res.privacyOverrideUntil);
+      }
+    } catch (err) {
+      setCheckinError(err instanceof Error ? err.message : 'Failed to respond');
+    } finally {
+      setCheckinBusy(false);
+    }
+  }
+
+  async function handleCreatePlace(e: React.FormEvent) {
+    e.preventDefault();
+    if (!session || !activeGroup) return;
+    const latitude = Number(placeLat);
+    const longitude = Number(placeLon);
+    if (!placeName.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      setPlaceError('Enter place name and valid numeric coordinates (or click the map).');
+      return;
+    }
+    setPlaceBusy(true);
+    setPlaceError(null);
+    try {
+      const created = await apiCreateGroupPlace(session.accessToken, activeGroup.id, {
+        name: placeName.trim(),
+        latitude,
+        longitude,
+        radiusMeters: placeRadius,
+      });
+      setPlaceName('');
+      setPlaces((prev) => (prev.some((p) => p.id === created.id) ? prev : [...prev, created]));
+    } catch (err) {
+      setPlaceError(err instanceof Error ? err.message : 'Failed to create place');
+    } finally {
+      setPlaceBusy(false);
+    }
+  }
+
+  async function handleDeletePlace(placeId: string) {
+    if (!session || !activeGroup) return;
+    try {
+      await apiDeleteGroupPlace(session.accessToken, activeGroup.id, placeId);
+      setPlaces((prev) => prev.filter((p) => p.id !== placeId));
+    } catch {
+      // ignore
+    }
   }
 
   if (!session) {
@@ -497,6 +669,111 @@ export default function HomePage() {
                   </button>
                 ))}
               </div>
+              {myPrivacyOverrideUntil && Date.parse(myPrivacyOverrideUntil) > Date.now() && (
+                <div className="mt-2.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] text-emerald-300">
+                  Temporary EXACT check-in active until{' '}
+                  {new Date(myPrivacyOverrideUntil).toLocaleTimeString()}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeGroup && (
+            <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <BellRing className="h-4 w-4 text-amber-400" />
+                Location Check-Ins
+              </div>
+              <p className="mt-1 text-xs text-slate-400">
+                Ask a member in GHOST/FUZZED mode for temporary exact sharing.
+              </p>
+
+              {activeGroup.members.some((m) => m.userId !== session.user.id) ? (
+                <form onSubmit={handleSendCheckInRequest} className="mt-3 flex gap-1.5">
+                  <select
+                    value={checkinTargetUserId}
+                    onChange={(e) => setCheckinTargetUserId(e.target.value)}
+                    className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                  >
+                    {activeGroup.members
+                      .filter((m) => m.userId !== session.user.id)
+                      .map((m) => (
+                        <option key={m.userId} value={m.userId}>
+                          {m.username}
+                        </option>
+                      ))}
+                  </select>
+                  <select
+                    value={checkinDuration}
+                    onChange={(e) => setCheckinDuration(Number(e.target.value))}
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                  >
+                    <option value={15}>15m</option>
+                    <option value={30}>30m</option>
+                    <option value={60}>60m</option>
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={checkinBusy || !checkinTargetUserId}
+                    className="shrink-0 rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50"
+                  >
+                    Ask
+                  </button>
+                </form>
+              ) : (
+                <p className="mt-2 text-[11px] text-slate-500">
+                  Invite another member to send check-in requests.
+                </p>
+              )}
+
+              {checkinError && (
+                <p className="mt-2 text-[11px] text-rose-400">{checkinError}</p>
+              )}
+
+              {locationRequests.length > 0 && (
+                <div className="mt-3 max-h-40 space-y-1.5 overflow-y-auto">
+                  {locationRequests.map((req) => {
+                    const isIncoming = req.targetUserId === session.user.id;
+                    return (
+                      <div
+                        key={req.id}
+                        className="rounded-lg border border-slate-800 bg-slate-950/70 p-2 text-[11px]"
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-medium text-slate-200">
+                            {isIncoming
+                              ? `${req.requesterUsername} asked (${req.suggestedDurationMinutes}m)`
+                              : `To ${req.targetUsername} (${req.suggestedDurationMinutes}m)`}
+                          </span>
+                          <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase text-slate-300">
+                            {req.status}
+                          </span>
+                        </div>
+                        {isIncoming && req.status === 'pending' && (
+                          <div className="mt-1.5 flex gap-1.5">
+                            <button
+                              type="button"
+                              disabled={checkinBusy}
+                              onClick={() => void handleRespondCheckIn(req.id, 'accept')}
+                              className="flex flex-1 items-center justify-center gap-1 rounded bg-emerald-500 py-1 text-[10px] font-semibold text-slate-950 hover:bg-emerald-400"
+                            >
+                              <Check className="h-3 w-3" /> Accept
+                            </button>
+                            <button
+                              type="button"
+                              disabled={checkinBusy}
+                              onClick={() => void handleRespondCheckIn(req.id, 'decline')}
+                              className="flex flex-1 items-center justify-center gap-1 rounded border border-slate-700 bg-slate-800 py-1 text-[10px] text-slate-200 hover:bg-slate-700"
+                            >
+                              <X className="h-3 w-3" /> Decline
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -685,11 +962,139 @@ export default function HomePage() {
               )}
             </div>
           </div>
+
+          {activeGroup && (
+            <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <MapPin className="h-4 w-4 text-sky-400" />
+                  Group Places ({places.length})
+                </div>
+              </div>
+              <p className="mt-1 text-xs text-slate-400">
+                Arrival &amp; departure zones (EXACT mode members only).
+              </p>
+
+              {activeGroup.myRole === 'ADMIN' && (
+                <form onSubmit={handleCreatePlace} className="mt-3 space-y-2">
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      value={placeName}
+                      onChange={(e) => setPlaceName(e.target.value)}
+                      placeholder="Home, School, Work..."
+                      className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                    />
+                    <input
+                      type="number"
+                      min={25}
+                      max={10000}
+                      value={placeRadius}
+                      onChange={(e) => setPlaceRadius(Number(e.target.value))}
+                      title="Radius in meters"
+                      className="w-16 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                    />
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      value={placeLat}
+                      onChange={(e) => setPlaceLat(e.target.value)}
+                      placeholder="Lat (click map)"
+                      className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-white"
+                    />
+                    <input
+                      type="text"
+                      value={placeLon}
+                      onChange={(e) => setPlaceLon(e.target.value)}
+                      placeholder="Lon (click map)"
+                      className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-white"
+                    />
+                    <button
+                      type="submit"
+                      disabled={placeBusy}
+                      className="shrink-0 rounded-lg bg-sky-500 px-2.5 py-1 text-xs font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50"
+                    >
+                      Save
+                    </button>
+                  </div>
+                  {placeError && <p className="text-[11px] text-rose-400">{placeError}</p>}
+                </form>
+              )}
+
+              <div className="mt-2.5 space-y-1.5">
+                {places.map((p) => (
+                  <div
+                    key={p.id}
+                    className="flex items-center justify-between rounded-lg bg-slate-950/70 px-2.5 py-1.5 text-xs"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPlaceId(p.id)}
+                      className="min-w-0 flex-1 text-left hover:text-sky-300"
+                    >
+                      <div className="truncate font-medium text-slate-200">{p.name}</div>
+                      <div className="text-[10px] text-slate-400">
+                        {p.latitude.toFixed(4)}, {p.longitude.toFixed(4)} · {Math.round(p.radiusMeters)}m
+                      </div>
+                    </button>
+                    {activeGroup.myRole === 'ADMIN' && (
+                      <button
+                        type="button"
+                        onClick={() => void handleDeletePlace(p.id)}
+                        title="Remove place"
+                        className="ml-2 rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-rose-400"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {places.length === 0 && (
+                  <p className="text-[11px] text-slate-500">No geofenced places defined yet.</p>
+                )}
+              </div>
+
+              {placeTransitions.length > 0 && (
+                <div className="mt-3 border-t border-slate-800 pt-2">
+                  <div className="mb-1 text-[11px] font-medium text-slate-400">
+                    Recent Arrivals &amp; Departures
+                  </div>
+                  <div className="max-h-28 space-y-1 overflow-y-auto text-[11px]">
+                    {placeTransitions.map((evt, idx) => (
+                      <div
+                        key={evt.id ?? `${evt.placeId}-${evt.userId}-${evt.recordedAt}-${idx}`}
+                        className="flex items-center justify-between text-slate-300"
+                      >
+                        <span className="truncate">
+                          <span className="font-medium text-white">{evt.username}</span>{' '}
+                          {evt.transition === 'enter' ? 'arrived at' : 'left'}{' '}
+                          <span className="text-sky-300">{evt.placeName}</span>
+                        </span>
+                        <span className="ml-2 shrink-0 text-[10px] text-slate-500">
+                          {new Date(evt.recordedAt).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </aside>
 
         {/* Center: Live PMTiles Map */}
         <section className="min-h-[420px] lg:min-h-[640px]">
-          <MapCanvas locations={locations} selectedUserId={selectedUserId} />
+          <MapCanvas
+            locations={locations}
+            places={places}
+            selectedUserId={selectedUserId}
+            selectedPlaceId={selectedPlaceId}
+            onMapSelectCoords={(lat, lon) => {
+              setPlaceLat(String(lat));
+              setPlaceLon(String(lon));
+            }}
+          />
         </section>
 
         {/* Right Column: Live Group Chat */}

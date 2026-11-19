@@ -1,19 +1,30 @@
 import { createHash } from 'node:crypto';
-import { GroupMemberLocationRow, GroupTrailQueryOptions } from '@loved-ones/db';
+import {
+  GroupMemberLocationRow,
+  GroupMembershipPrivacyInfo,
+  GroupTrailQueryOptions,
+  RespondLocationRequestDbResult,
+} from '@loved-ones/db';
 import {
   applyPrivacyFuzzing,
   BoundingBox,
   ChatMessage,
+  CreateGroupPlaceSchema,
+  CreateLocationRequestSchema,
+  GroupPlace,
   GroupRole,
   JwtUserPayload,
   LocationBatchSchema,
   LocationBroadcast,
   LocationPoint,
+  LocationRequestItem,
   LocationSnapshotQuerySchema,
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
   parseBoundingBox,
+  PlaceTransitionEvent,
   PrivacyMode,
+  RespondLocationRequestSchema,
   SendMessageSchema,
   TrailQuerySchema,
 } from '@loved-ones/shared';
@@ -25,8 +36,15 @@ export interface RealtimeStore {
   insertLocationBatch(userId: string, points: LocationPoint[]): Promise<number>;
   listMembershipsForUser(
     userId: string,
+    now?: Date,
   ): Promise<Array<{ groupId: string; role: GroupRole; privacy: PrivacyMode }>>;
-  getLatestGroupLocations(groupId: string): Promise<GroupMemberLocationRow[]>;
+  getGroupMembershipPrivacyInfo(
+    userId: string,
+    groupId: string,
+    now?: Date,
+  ): Promise<GroupMembershipPrivacyInfo | null>;
+  getLatestUserLocation(userId: string): Promise<LocationPoint | null>;
+  getLatestGroupLocations(groupId: string, now?: Date): Promise<GroupMemberLocationRow[]>;
   getGroupTrails(options: GroupTrailQueryOptions): Promise<GroupMemberLocationRow[]>;
   getGroupMessages(groupId: string, limit?: number): Promise<ChatMessage[]>;
   insertChatMessage(
@@ -35,11 +53,64 @@ export interface RealtimeStore {
     senderUsername: string,
     content: string,
   ): Promise<ChatMessage>;
+  createLocationRequest(input: {
+    groupId: string;
+    requesterId: string;
+    targetUserId: string;
+    suggestedDurationMinutes: number;
+    expiresAt: Date;
+    message?: string;
+    now?: Date;
+  }): Promise<LocationRequestItem>;
+  listLocationRequestsForUser(
+    groupId: string,
+    userId: string,
+    now?: Date,
+  ): Promise<LocationRequestItem[]>;
+  respondToLocationRequest(input: {
+    groupId: string;
+    requestId: string;
+    responderUserId: string;
+    action: 'accept' | 'decline';
+    durationMinutes?: number;
+    now?: Date;
+  }): Promise<RespondLocationRequestDbResult>;
+  createGroupPlace(input: {
+    groupId: string;
+    name: string;
+    latitude: number;
+    longitude: number;
+    radiusMeters: number;
+    createdBy: string;
+  }): Promise<GroupPlace>;
+  listGroupPlaces(groupId: string): Promise<GroupPlace[]>;
+  deleteGroupPlace(groupId: string, placeId: string): Promise<boolean>;
+  listRecentPlaceTransitions(groupId: string, limit?: number): Promise<PlaceTransitionEvent[]>;
+  evaluatePlaceTransitions(input: {
+    groupId: string;
+    userId: string;
+    username: string;
+    latitude: number;
+    longitude: number;
+    recordedAt: string;
+  }): Promise<PlaceTransitionEvent[]>;
 }
 
 export interface RealtimeBroadcaster {
   broadcastLocation(groupId: string, update: LocationBroadcast): void;
   broadcastChatMessage(groupId: string, message: ChatMessage): void;
+  broadcastLocationRequest(
+    requesterId: string,
+    targetUserId: string,
+    request: LocationRequestItem,
+  ): void;
+  broadcastLocationRequestResponse(
+    requesterId: string,
+    targetUserId: string,
+    request: LocationRequestItem,
+  ): void;
+  broadcastPlaceTransition(groupId: string, event: PlaceTransitionEvent): void;
+  broadcastPlacesUpdated(groupId: string, places: GroupPlace[]): void;
 }
 
 const DEFAULT_MAX_ACCURACY_METERS = 1000;
@@ -206,17 +277,19 @@ function isInsideBoundingBox(lat: number, lon: number, bbox: BoundingBox): boole
 export interface RealtimeModuleOptions extends CoordinateFilterOptions {
   store: RealtimeStore;
   broadcaster: RealtimeBroadcaster;
+  now?: () => number;
 }
 
 /**
  * Deep domain module owning location batch ingestion, coordinate anomaly hygiene,
- * deterministic recordedAt-anchored privacy fuzzing, group location snapshots, and
- * group chat persistence/broadcasting.
+ * deterministic recordedAt-anchored privacy fuzzing, group location snapshots,
+ * expiring check-in requests, geofenced group places, and group chat.
  */
 export class RealtimeModule {
   private readonly store: RealtimeStore;
   private readonly broadcaster: RealtimeBroadcaster;
   private readonly filterOptions: CoordinateFilterOptions;
+  private readonly now: () => number;
 
   constructor(options: RealtimeModuleOptions) {
     this.store = options.store;
@@ -226,6 +299,22 @@ export class RealtimeModule {
       maxJumpSpeedMps: options.maxJumpSpeedMps,
       minJumpDistanceMeters: options.minJumpDistanceMeters,
     };
+    this.now = options.now ?? (() => Date.now());
+  }
+
+  private async requireMembership(
+    userId: string,
+    groupId: string,
+  ): Promise<GroupMembershipPrivacyInfo> {
+    const info = await this.store.getGroupMembershipPrivacyInfo(
+      userId,
+      groupId,
+      new Date(this.now()),
+    );
+    if (!info) {
+      throw new DomainError(403, 'Not a member of this group');
+    }
+    return info;
   }
 
   async ingestLocationBatch(user: JwtUserPayload, rawInput: unknown): Promise<number> {
@@ -242,10 +331,26 @@ export class RealtimeModule {
     if (!latest || inserted === 0) return inserted;
 
     const recordedAtMs = new Date(latest.recordedAt).getTime();
-    const memberships = await this.store.listMembershipsForUser(user.id);
+    const memberships = await this.store.listMembershipsForUser(user.id, new Date(this.now()));
 
     for (const m of memberships) {
       if (m.role === 'SPECTATOR') continue;
+
+      if (m.privacy === 'EXACT') {
+        for (const pt of points) {
+          const placeEvents = await this.store.evaluatePlaceTransitions({
+            groupId: m.groupId,
+            userId: user.id,
+            username: user.username,
+            latitude: pt.latitude,
+            longitude: pt.longitude,
+            recordedAt: pt.recordedAt,
+          });
+          for (const evt of placeEvents) {
+            this.broadcaster.broadcastPlaceTransition(m.groupId, evt);
+          }
+        }
+      }
 
       const fuzzed = applyPrivacyFuzzing(
         latest.latitude,
@@ -332,7 +437,7 @@ export class RealtimeModule {
       throw new DomainError(403, 'Not a member of this group');
     }
 
-    const rows = await this.store.getLatestGroupLocations(groupId);
+    const rows = await this.store.getLatestGroupLocations(groupId, new Date(this.now()));
     const visibleAll = rows
       .map((row) => toPrivacySafeBroadcast(groupId, row))
       .filter((loc): loc is LocationBroadcast => loc !== null)
@@ -397,6 +502,7 @@ export class RealtimeModule {
       bbox: requestedBbox ? padBoundingBox(requestedBbox) : undefined,
       userId: parsed.data.userId,
       limit: Math.min(parsed.data.limit * 2, 10000),
+      now: new Date(this.now()),
     });
 
     const filtered: LocationBroadcast[] = [];
@@ -441,5 +547,173 @@ export class RealtimeModule {
 
   canJoinGroupRoom(userId: string, groupId: string): Promise<boolean> {
     return this.store.isGroupMember(userId, groupId);
+  }
+
+  async createCheckInRequest(
+    user: JwtUserPayload,
+    groupId: string,
+    rawInput: unknown,
+  ): Promise<LocationRequestItem> {
+    const parsed = CreateLocationRequestSchema.safeParse(rawInput ?? {});
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid check-in request payload', parsed.error.flatten());
+    }
+    const requesterMembership = await this.requireMembership(user.id, groupId);
+    if (requesterMembership.role === 'SPECTATOR') {
+      throw new DomainError(403, 'Spectators cannot request location check-ins');
+    }
+    if (parsed.data.targetUserId === user.id) {
+      throw new DomainError(400, 'Cannot request a location check-in from yourself');
+    }
+    if (!(await this.store.isGroupMember(parsed.data.targetUserId, groupId))) {
+      throw new DomainError(404, 'Target member does not belong to this group');
+    }
+
+    const nowDate = new Date(this.now());
+    const expiresAt = new Date(nowDate.getTime() + parsed.data.expiresInMinutes * 60_000);
+    const created = await this.store.createLocationRequest({
+      groupId,
+      requesterId: user.id,
+      targetUserId: parsed.data.targetUserId,
+      suggestedDurationMinutes: parsed.data.suggestedDurationMinutes,
+      expiresAt,
+      message: parsed.data.message,
+      now: nowDate,
+    });
+    this.broadcaster.broadcastLocationRequest(user.id, parsed.data.targetUserId, created);
+    return created;
+  }
+
+  async listCheckInRequests(
+    user: JwtUserPayload,
+    groupId: string,
+  ): Promise<{ requests: LocationRequestItem[]; myPrivacyOverrideUntil: string | null }> {
+    const membership = await this.requireMembership(user.id, groupId);
+    const requests = await this.store.listLocationRequestsForUser(
+      groupId,
+      user.id,
+      new Date(this.now()),
+    );
+    return {
+      requests,
+      myPrivacyOverrideUntil: membership.privacyOverrideUntil,
+    };
+  }
+
+  async respondToCheckInRequest(
+    user: JwtUserPayload,
+    groupId: string,
+    requestId: string,
+    rawInput: unknown,
+  ): Promise<{ request: LocationRequestItem; privacyOverrideUntil: string | null }> {
+    const parsed = RespondLocationRequestSchema.safeParse(rawInput ?? {});
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid check-in response payload', parsed.error.flatten());
+    }
+    const membership = await this.requireMembership(user.id, groupId);
+
+    const nowDate = new Date(this.now());
+    const result = await this.store.respondToLocationRequest({
+      groupId,
+      requestId,
+      responderUserId: user.id,
+      action: parsed.data.action,
+      durationMinutes: parsed.data.durationMinutes,
+      now: nowDate,
+    });
+
+    if (result.kind === 'not_found') {
+      throw new DomainError(404, 'Check-in request not found');
+    }
+    if (result.kind === 'forbidden') {
+      throw new DomainError(403, 'Only the requested member can respond');
+    }
+    if (result.kind === 'expired') {
+      throw new DomainError(410, 'Check-in request has expired');
+    }
+    if (result.kind === 'already_responded') {
+      throw new DomainError(409, `Check-in request was already ${result.status}`);
+    }
+
+    this.broadcaster.broadcastLocationRequestResponse(
+      result.request.requesterId,
+      result.request.targetUserId,
+      result.request,
+    );
+
+    if (parsed.data.action === 'accept' && membership.role !== 'SPECTATOR') {
+      const latest = await this.store.getLatestUserLocation(user.id);
+      if (latest) {
+        this.broadcaster.broadcastLocation(groupId, {
+          userId: user.id,
+          username: user.username,
+          groupId,
+          latitude: latest.latitude,
+          longitude: latest.longitude,
+          altitude: latest.altitude ?? null,
+          speed: latest.speed ?? null,
+          batteryLevel: latest.batteryLevel ?? null,
+          recordedAt: latest.recordedAt,
+          privacyMode: 'EXACT',
+          isFuzzed: false,
+        });
+      }
+    }
+
+    return {
+      request: result.request,
+      privacyOverrideUntil: result.privacyOverrideUntil,
+    };
+  }
+
+  async listGroupPlaces(
+    user: JwtUserPayload,
+    groupId: string,
+  ): Promise<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }> {
+    await this.requireMembership(user.id, groupId);
+    const [places, recentTransitions] = await Promise.all([
+      this.store.listGroupPlaces(groupId),
+      this.store.listRecentPlaceTransitions(groupId, 30),
+    ]);
+    return { places, recentTransitions };
+  }
+
+  async createGroupPlace(
+    user: JwtUserPayload,
+    groupId: string,
+    rawInput: unknown,
+  ): Promise<GroupPlace> {
+    const parsed = CreateGroupPlaceSchema.safeParse(rawInput ?? {});
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid group place payload', parsed.error.flatten());
+    }
+    const membership = await this.requireMembership(user.id, groupId);
+    if (membership.role !== 'ADMIN') {
+      throw new DomainError(403, 'Group admin role required to manage places');
+    }
+    const place = await this.store.createGroupPlace({
+      groupId,
+      name: parsed.data.name,
+      latitude: parsed.data.latitude,
+      longitude: parsed.data.longitude,
+      radiusMeters: parsed.data.radiusMeters,
+      createdBy: user.id,
+    });
+    const allPlaces = await this.store.listGroupPlaces(groupId);
+    this.broadcaster.broadcastPlacesUpdated(groupId, allPlaces);
+    return place;
+  }
+
+  async deleteGroupPlace(user: JwtUserPayload, groupId: string, placeId: string): Promise<void> {
+    const membership = await this.requireMembership(user.id, groupId);
+    if (membership.role !== 'ADMIN') {
+      throw new DomainError(403, 'Group admin role required to manage places');
+    }
+    const deleted = await this.store.deleteGroupPlace(groupId, placeId);
+    if (!deleted) {
+      throw new DomainError(404, 'Group place not found');
+    }
+    const allPlaces = await this.store.listGroupPlaces(groupId);
+    this.broadcaster.broadcastPlacesUpdated(groupId, allPlaces);
   }
 }

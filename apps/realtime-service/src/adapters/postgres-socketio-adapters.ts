@@ -1,17 +1,29 @@
 import pg from 'pg';
 import { Server as SocketIOServer } from 'socket.io';
 import {
+  createGroupPlaceRecord,
+  createLocationRequestRecord,
+  deleteGroupPlaceRecord,
+  evaluateAndRecordPlaceTransitions,
+  getGroupMembershipPrivacyInfo,
   getGroupTrails,
   getLatestGroupLocations,
+  getLatestUserLocation,
   GroupTrailQueryOptions,
   insertLocationBatch,
+  listEffectiveMembershipsForUser,
+  listGroupPlaces,
+  listLocationRequestsForUser,
+  listRecentPlaceTransitions,
+  respondToLocationRequestRecord,
 } from '@loved-ones/db';
 import {
   ChatMessage,
-  GroupRole,
+  GroupPlace,
   LocationBroadcast,
   LocationPoint,
-  PrivacyMode,
+  LocationRequestItem,
+  PlaceTransitionEvent,
 } from '@loved-ones/shared';
 import { RealtimeBroadcaster, RealtimeStore } from '../domain/realtime-module.js';
 
@@ -38,28 +50,85 @@ export class PostgresRealtimeStore implements RealtimeStore {
     return insertLocationBatch(this.pool, userId, points);
   }
 
-  async listMembershipsForUser(
-    userId: string,
-  ): Promise<Array<{ groupId: string; role: GroupRole; privacy: PrivacyMode }>> {
-    const res = await this.pool.query<{
-      group_id: string;
-      role: GroupRole;
-      privacy: PrivacyMode;
-    }>('SELECT group_id, role, privacy FROM group_memberships WHERE user_id = $1', [userId]);
-
-    return res.rows.map((r) => ({
-      groupId: r.group_id,
-      role: r.role,
-      privacy: r.privacy,
-    }));
+  listMembershipsForUser(userId: string, now?: Date) {
+    return listEffectiveMembershipsForUser(this.pool, userId, now);
   }
 
-  getLatestGroupLocations(groupId: string) {
-    return getLatestGroupLocations(this.pool, groupId);
+  getGroupMembershipPrivacyInfo(userId: string, groupId: string, now?: Date) {
+    return getGroupMembershipPrivacyInfo(this.pool, userId, groupId, now);
+  }
+
+  getLatestUserLocation(userId: string) {
+    return getLatestUserLocation(this.pool, userId);
+  }
+
+  getLatestGroupLocations(groupId: string, now?: Date) {
+    return getLatestGroupLocations(this.pool, groupId, now);
   }
 
   getGroupTrails(options: GroupTrailQueryOptions) {
     return getGroupTrails(this.pool, options);
+  }
+
+  createLocationRequest(input: {
+    groupId: string;
+    requesterId: string;
+    targetUserId: string;
+    suggestedDurationMinutes: number;
+    expiresAt: Date;
+    message?: string;
+    now?: Date;
+  }) {
+    return createLocationRequestRecord(this.pool, input);
+  }
+
+  listLocationRequestsForUser(groupId: string, userId: string, now?: Date) {
+    return listLocationRequestsForUser(this.pool, groupId, userId, now);
+  }
+
+  respondToLocationRequest(input: {
+    groupId: string;
+    requestId: string;
+    responderUserId: string;
+    action: 'accept' | 'decline';
+    durationMinutes?: number;
+    now?: Date;
+  }) {
+    return respondToLocationRequestRecord(this.pool, input);
+  }
+
+  createGroupPlace(input: {
+    groupId: string;
+    name: string;
+    latitude: number;
+    longitude: number;
+    radiusMeters: number;
+    createdBy: string;
+  }) {
+    return createGroupPlaceRecord(this.pool, input);
+  }
+
+  listGroupPlaces(groupId: string) {
+    return listGroupPlaces(this.pool, groupId);
+  }
+
+  deleteGroupPlace(groupId: string, placeId: string) {
+    return deleteGroupPlaceRecord(this.pool, groupId, placeId);
+  }
+
+  listRecentPlaceTransitions(groupId: string, limit = 50) {
+    return listRecentPlaceTransitions(this.pool, groupId, limit);
+  }
+
+  evaluatePlaceTransitions(input: {
+    groupId: string;
+    userId: string;
+    username: string;
+    latitude: number;
+    longitude: number;
+    recordedAt: string;
+  }) {
+    return evaluateAndRecordPlaceTransitions(this.pool, input);
   }
 
   async getGroupMessages(groupId: string, limit = 100): Promise<ChatMessage[]> {
@@ -129,5 +198,29 @@ export class SocketIoBroadcaster implements RealtimeBroadcaster {
 
   broadcastChatMessage(groupId: string, message: ChatMessage): void {
     this.io.to(`group:${groupId}`).emit('chat:message', message);
+  }
+
+  broadcastLocationRequest(
+    requesterId: string,
+    targetUserId: string,
+    request: LocationRequestItem,
+  ): void {
+    this.io.to([`user:${requesterId}`, `user:${targetUserId}`]).emit('checkin:request', request);
+  }
+
+  broadcastLocationRequestResponse(
+    requesterId: string,
+    targetUserId: string,
+    request: LocationRequestItem,
+  ): void {
+    this.io.to([`user:${requesterId}`, `user:${targetUserId}`]).emit('checkin:response', request);
+  }
+
+  broadcastPlaceTransition(groupId: string, event: PlaceTransitionEvent): void {
+    this.io.to(`group:${groupId}`).emit('place:transition', event);
+  }
+
+  broadcastPlacesUpdated(groupId: string, places: GroupPlace[]): void {
+    this.io.to(`group:${groupId}`).emit('place:updated', { groupId, places });
   }
 }

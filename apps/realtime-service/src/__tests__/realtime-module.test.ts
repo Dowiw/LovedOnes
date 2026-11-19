@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { GroupMemberLocationRow } from '@loved-ones/db';
 import {
   ChatMessage,
+  GroupPlace,
   GroupRole,
   JwtUserPayload,
   LocationBroadcast,
   LocationPoint,
+  LocationRequestItem,
+  PlaceTransitionEvent,
   PrivacyMode,
 } from '@loved-ones/shared';
 import {
@@ -16,6 +19,7 @@ import {
 } from '@loved-ones/shared/auth';
 import {
   filterAnomalousLocationPoints,
+  haversineMeters,
   isNullIsland,
   matchesIfNoneMatch,
   RealtimeBroadcaster,
@@ -45,17 +49,39 @@ const outsider: JwtUserPayload = {
 };
 
 function createInMemoryRealtimeHarness() {
+  let currentNowMs = Date.parse('2026-11-19T12:00:00.000Z');
   const storedPoints: Array<{ userId: string; point: LocationPoint }> = [];
   const storedMessages: ChatMessage[] = [];
-  const memberships: Array<{ userId: string; groupId: string; role: GroupRole; privacy: PrivacyMode }> = [
-    { userId: alice.id, groupId: GROUP_EXACT, role: 'MEMBER', privacy: 'EXACT' },
-    { userId: alice.id, groupId: GROUP_FUZZED, role: 'MEMBER', privacy: 'FUZZED' },
-    { userId: alice.id, groupId: GROUP_GHOST, role: 'MEMBER', privacy: 'GHOST' },
-    { userId: alice.id, groupId: GROUP_SPECTATOR, role: 'SPECTATOR', privacy: 'EXACT' },
+  const storedRequests: LocationRequestItem[] = [];
+  const storedPlaces: GroupPlace[] = [];
+  const placeInsideState = new Map<string, boolean>();
+  const storedPlaceTransitions: PlaceTransitionEvent[] = [];
+
+  const memberships: Array<{
+    userId: string;
+    username: string;
+    groupId: string;
+    role: GroupRole;
+    privacy: PrivacyMode;
+    privacyOverrideUntil?: Date | null;
+  }> = [
+    { userId: alice.id, username: alice.username, groupId: GROUP_EXACT, role: 'MEMBER', privacy: 'EXACT' },
+    { userId: alice.id, username: alice.username, groupId: GROUP_FUZZED, role: 'MEMBER', privacy: 'FUZZED' },
+    { userId: alice.id, username: alice.username, groupId: GROUP_GHOST, role: 'MEMBER', privacy: 'GHOST' },
+    { userId: alice.id, username: alice.username, groupId: GROUP_SPECTATOR, role: 'SPECTATOR', privacy: 'EXACT' },
   ];
+
+  const effectivePrivacy = (
+    m: { privacy: PrivacyMode; privacyOverrideUntil?: Date | null },
+    now: Date,
+  ): PrivacyMode =>
+    m.privacyOverrideUntil && m.privacyOverrideUntil > now ? 'EXACT' : m.privacy;
 
   const locationBroadcasts: LocationBroadcast[] = [];
   const chatBroadcasts: ChatMessage[] = [];
+  const checkinRequestBroadcasts: LocationRequestItem[] = [];
+  const checkinResponseBroadcasts: LocationRequestItem[] = [];
+  const placeTransitionBroadcasts: PlaceTransitionEvent[] = [];
 
   const store: RealtimeStore = {
     async isGroupMember(userId, groupId) {
@@ -78,34 +104,56 @@ function createInMemoryRealtimeHarness() {
       }
       return inserted;
     },
-    async listMembershipsForUser(userId) {
+    async listMembershipsForUser(userId, now = new Date(currentNowMs)) {
       return memberships
         .filter((m) => m.userId === userId)
-        .map(({ groupId, role, privacy }) => ({ groupId, role, privacy }));
+        .map((m) => ({
+          groupId: m.groupId,
+          role: m.role,
+          privacy: effectivePrivacy(m, now),
+        }));
     },
-    async getLatestGroupLocations(groupId): Promise<GroupMemberLocationRow[]> {
-      const latest = storedPoints[storedPoints.length - 1];
-      if (!latest) return [];
-      const member = memberships.find(
-        (m) => m.groupId === groupId && m.userId === latest.userId && m.role !== 'SPECTATOR',
-      );
-      if (!member) return [];
-      return [
-        {
-          userId: alice.id,
-          username: alice.username,
+    async getGroupMembershipPrivacyInfo(userId, groupId, now = new Date(currentNowMs)) {
+      const m = memberships.find((x) => x.userId === userId && x.groupId === groupId);
+      if (!m) return null;
+      const activeUntil =
+        m.privacyOverrideUntil && m.privacyOverrideUntil > now
+          ? m.privacyOverrideUntil.toISOString()
+          : null;
+      return {
+        role: m.role,
+        privacy: m.privacy,
+        effectivePrivacy: effectivePrivacy(m, now),
+        privacyOverrideUntil: activeUntil,
+      };
+    },
+    async getLatestUserLocation(userId) {
+      const userPts = storedPoints.filter((p) => p.userId === userId);
+      return userPts[userPts.length - 1]?.point ?? null;
+    },
+    async getLatestGroupLocations(groupId, now = new Date(currentNowMs)): Promise<GroupMemberLocationRow[]> {
+      const rows: GroupMemberLocationRow[] = [];
+      for (const member of memberships.filter((m) => m.groupId === groupId && m.role !== 'SPECTATOR')) {
+        const memberPts = storedPoints.filter((p) => p.userId === member.userId);
+        const latest = memberPts[memberPts.length - 1];
+        if (!latest) continue;
+        rows.push({
+          userId: member.userId,
+          username: member.username,
           role: member.role,
-          privacy: member.privacy,
+          privacy: effectivePrivacy(member, now),
           latitude: latest.point.latitude,
           longitude: latest.point.longitude,
           altitude: latest.point.altitude ?? null,
           speed: latest.point.speed ?? null,
           batteryLevel: latest.point.batteryLevel ?? null,
           recordedAt: latest.point.recordedAt,
-        },
-      ];
+        });
+      }
+      return rows;
     },
     async getGroupTrails(options) {
+      const now = options.now ?? new Date(currentNowMs);
       const fromMs = options.from.getTime();
       const toMs = options.to.getTime();
       const rows: GroupMemberLocationRow[] = [];
@@ -115,7 +163,7 @@ function createInMemoryRealtimeHarness() {
             m.groupId === options.groupId &&
             m.userId === entry.userId &&
             m.role !== 'SPECTATOR' &&
-            m.privacy !== 'GHOST',
+            effectivePrivacy(m, now) !== 'GHOST',
         );
         if (!member) continue;
         if (options.userId && entry.userId !== options.userId) continue;
@@ -132,9 +180,9 @@ function createInMemoryRealtimeHarness() {
         }
         rows.push({
           userId: entry.userId,
-          username: entry.userId === alice.id ? alice.username : outsider.username,
+          username: member.username,
           role: member.role,
-          privacy: member.privacy,
+          privacy: effectivePrivacy(member, now),
           latitude: entry.point.latitude,
           longitude: entry.point.longitude,
           altitude: entry.point.altitude ?? null,
@@ -161,6 +209,124 @@ function createInMemoryRealtimeHarness() {
       storedMessages.push(msg);
       return msg;
     },
+    async createLocationRequest(input) {
+      const reqMember = memberships.find(
+        (m) => m.userId === input.requesterId && m.groupId === input.groupId,
+      );
+      const tgtMember = memberships.find(
+        (m) => m.userId === input.targetUserId && m.groupId === input.groupId,
+      );
+      const item: LocationRequestItem = {
+        id: `dddddddd-dddd-4ddd-8ddd-${String(storedRequests.length + 1).padStart(12, '0')}`,
+        groupId: input.groupId,
+        requesterId: input.requesterId,
+        requesterUsername: reqMember?.username ?? 'Requester',
+        targetUserId: input.targetUserId,
+        targetUsername: tgtMember?.username ?? 'Target',
+        status: 'pending',
+        suggestedDurationMinutes: input.suggestedDurationMinutes,
+        message: input.message ?? null,
+        expiresAt: input.expiresAt.toISOString(),
+        respondedAt: null,
+        createdAt: (input.now ?? new Date(currentNowMs)).toISOString(),
+      };
+      storedRequests.push(item);
+      return item;
+    },
+    async listLocationRequestsForUser(groupId, userId, now = new Date(currentNowMs)) {
+      for (const req of storedRequests) {
+        if (req.groupId === groupId && req.status === 'pending' && Date.parse(req.expiresAt) <= now.getTime()) {
+          req.status = 'expired';
+        }
+      }
+      return storedRequests.filter(
+        (r) => r.groupId === groupId && (r.requesterId === userId || r.targetUserId === userId),
+      );
+    },
+    async respondToLocationRequest(input) {
+      const now = input.now ?? new Date(currentNowMs);
+      const item = storedRequests.find((r) => r.id === input.requestId && r.groupId === input.groupId);
+      if (!item) return { kind: 'not_found' };
+      if (item.targetUserId !== input.responderUserId) return { kind: 'forbidden' };
+      if (item.status === 'expired' || (item.status === 'pending' && Date.parse(item.expiresAt) <= now.getTime())) {
+        item.status = 'expired';
+        return { kind: 'expired' };
+      }
+      if (item.status !== 'pending') return { kind: 'already_responded', status: item.status };
+
+      item.status = input.action === 'accept' ? 'accepted' : 'declined';
+      item.respondedAt = now.toISOString();
+      let privacyOverrideUntil: string | null = null;
+      if (input.action === 'accept') {
+        const dur = input.durationMinutes ?? item.suggestedDurationMinutes;
+        const until = new Date(now.getTime() + dur * 60_000);
+        const member = memberships.find(
+          (m) => m.userId === input.responderUserId && m.groupId === input.groupId,
+        );
+        if (member) {
+          member.privacyOverrideUntil =
+            member.privacyOverrideUntil && member.privacyOverrideUntil > until
+              ? member.privacyOverrideUntil
+              : until;
+          privacyOverrideUntil = member.privacyOverrideUntil.toISOString();
+        }
+      }
+      return { kind: 'ok', request: { ...item }, privacyOverrideUntil };
+    },
+    async createGroupPlace(input) {
+      const place: GroupPlace = {
+        id: `eeeeeeee-eeee-4eee-8eee-${String(storedPlaces.length + 1).padStart(12, '0')}`,
+        groupId: input.groupId,
+        name: input.name,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        radiusMeters: input.radiusMeters,
+        createdBy: input.createdBy,
+        createdAt: new Date(currentNowMs).toISOString(),
+      };
+      storedPlaces.push(place);
+      return place;
+    },
+    async listGroupPlaces(groupId) {
+      return storedPlaces.filter((p) => p.groupId === groupId);
+    },
+    async deleteGroupPlace(groupId, placeId) {
+      const idx = storedPlaces.findIndex((p) => p.groupId === groupId && p.id === placeId);
+      if (idx === -1) return false;
+      storedPlaces.splice(idx, 1);
+      return true;
+    },
+    async listRecentPlaceTransitions(groupId, limit = 50) {
+      return storedPlaceTransitions.filter((e) => e.groupId === groupId).slice(0, limit);
+    },
+    async evaluatePlaceTransitions(input) {
+      const events: PlaceTransitionEvent[] = [];
+      for (const place of storedPlaces.filter((p) => p.groupId === input.groupId)) {
+        const dist = haversineMeters(place.latitude, place.longitude, input.latitude, input.longitude);
+        const isInsideNow = dist <= place.radiusMeters;
+        const key = `${place.id}:${input.userId}`;
+        const prev = placeInsideState.get(key);
+        if (prev === undefined && !isInsideNow) {
+          placeInsideState.set(key, false);
+          continue;
+        }
+        const wasInside = prev ?? false;
+        if (wasInside === isInsideNow) continue;
+        placeInsideState.set(key, isInsideNow);
+        const evt: PlaceTransitionEvent = {
+          groupId: input.groupId,
+          placeId: place.id,
+          placeName: place.name,
+          userId: input.userId,
+          username: input.username,
+          transition: isInsideNow ? 'enter' : 'exit',
+          recordedAt: input.recordedAt,
+        };
+        storedPlaceTransitions.unshift(evt);
+        events.push(evt);
+      }
+      return events;
+    },
   };
 
   const broadcaster: RealtimeBroadcaster = {
@@ -170,10 +336,32 @@ function createInMemoryRealtimeHarness() {
     broadcastChatMessage(_groupId, message) {
       chatBroadcasts.push(message);
     },
+    broadcastLocationRequest(_requesterId, _targetUserId, request) {
+      checkinRequestBroadcasts.push(request);
+    },
+    broadcastLocationRequestResponse(_requesterId, _targetUserId, request) {
+      checkinResponseBroadcasts.push(request);
+    },
+    broadcastPlaceTransition(_groupId, event) {
+      placeTransitionBroadcasts.push(event);
+    },
+    broadcastPlacesUpdated() {},
   };
 
-  const mod = new RealtimeModule({ store, broadcaster });
-  return { mod, locationBroadcasts, chatBroadcasts, storedPoints, memberships };
+  const mod = new RealtimeModule({ store, broadcaster, now: () => currentNowMs });
+  return {
+    mod,
+    locationBroadcasts,
+    chatBroadcasts,
+    checkinRequestBroadcasts,
+    checkinResponseBroadcasts,
+    placeTransitionBroadcasts,
+    storedPoints,
+    memberships,
+    setNowMs: (ms: number) => {
+      currentNowMs = ms;
+    },
+  };
 }
 
 describe('RealtimeModule domain interface', () => {
@@ -571,5 +759,120 @@ describe('RealtimeModule domain interface', () => {
     await expect(mod.getGroupTrails(outsider, GROUP_EXACT, {})).rejects.toMatchObject({
       statusCode: 403,
     });
+  });
+
+  it('supports expiring check-in overrides and privacy-restricted geofenced place alerts', async () => {
+    const harness = createInMemoryRealtimeHarness();
+    const {
+      mod,
+      memberships,
+      locationBroadcasts,
+      checkinRequestBroadcasts,
+      checkinResponseBroadcasts,
+      placeTransitionBroadcasts,
+      setNowMs,
+    } = harness;
+
+    // Make outsider (Bob) an ADMIN of GROUP_EXACT and Alice a GHOST member of GROUP_EXACT
+    const aliceExact = memberships.find((m) => m.groupId === GROUP_EXACT)!;
+    aliceExact.privacy = 'GHOST';
+    memberships.push({
+      userId: outsider.id,
+      username: outsider.username,
+      groupId: GROUP_EXACT,
+      role: 'ADMIN',
+      privacy: 'EXACT',
+    });
+
+    // Alice records an offline GPS point while GHOST
+    await mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.52,
+          longitude: 13.405,
+          recordedAt: '2026-11-19T12:00:00.000Z',
+        },
+      ],
+    });
+    expect(locationBroadcasts).toHaveLength(1); // Only GROUP_FUZZED (GROUP_EXACT is GHOST)
+
+    // Non-admin Alice cannot create geofenced places
+    await expect(
+      mod.createGroupPlace(alice, GROUP_EXACT, {
+        name: 'Home',
+        latitude: 52.52,
+        longitude: 13.405,
+        radiusMeters: 200,
+      }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+
+    // Admin Bob creates 'Home' around (52.52, 13.405)
+    const home = await mod.createGroupPlace(outsider, GROUP_EXACT, {
+      name: 'Home',
+      latitude: 52.52,
+      longitude: 13.405,
+      radiusMeters: 200,
+    });
+
+    // FUZZED group also gets a place, to confirm FUZZED mode never emits place transitions
+    memberships.find((m) => m.groupId === GROUP_FUZZED)!.role = 'ADMIN';
+    await mod.createGroupPlace(alice, GROUP_FUZZED, {
+      name: 'Fuzzed Place',
+      latitude: 52.52,
+      longitude: 13.405,
+      radiusMeters: 200,
+    });
+
+    // Bob requests check-in from Alice for 15 minutes
+    const req = await mod.createCheckInRequest(outsider, GROUP_EXACT, {
+      targetUserId: alice.id,
+      suggestedDurationMinutes: 15,
+      expiresInMinutes: 10,
+      message: 'Home safely?',
+    });
+    expect(checkinRequestBroadcasts).toHaveLength(1);
+
+    // Non-target Bob cannot respond
+    await expect(
+      mod.respondToCheckInRequest(outsider, GROUP_EXACT, req.id, { action: 'accept' }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+
+    // Alice accepts -> broadcast response + immediate EXACT pin broadcast to GROUP_EXACT
+    locationBroadcasts.length = 0;
+    const accepted = await mod.respondToCheckInRequest(alice, GROUP_EXACT, req.id, {
+      action: 'accept',
+    });
+    expect(accepted.privacyOverrideUntil).toBeTruthy();
+    expect(checkinResponseBroadcasts).toHaveLength(1);
+    expect(locationBroadcasts).toHaveLength(1);
+    expect(locationBroadcasts[0]?.privacyMode).toBe('EXACT');
+    expect(locationBroadcasts[0]?.isFuzzed).toBe(false);
+
+    // While EXACT override active (+5m), Alice enters then exits Home -> transitions fire ONLY for GROUP_EXACT (never GROUP_FUZZED)
+    setNowMs(Date.parse('2026-11-19T12:05:00.000Z'));
+    await mod.ingestLocationBatch(alice, {
+      points: [
+        { latitude: 52.5202, longitude: 13.405, recordedAt: '2026-11-19T12:05:00.000Z' },
+        { latitude: 52.53, longitude: 13.405, recordedAt: '2026-11-19T12:06:00.000Z' },
+      ],
+    });
+    expect(placeTransitionBroadcasts.map((e) => `${e.groupId}:${e.transition}`)).toEqual([
+      `${GROUP_EXACT}:enter`,
+      `${GROUP_EXACT}:exit`,
+    ]);
+
+    // After override expires (+20m), Alice reverts automatically to GHOST and triggers no place alerts
+    setNowMs(Date.parse('2026-11-19T12:20:00.000Z'));
+    placeTransitionBroadcasts.length = 0;
+    locationBroadcasts.length = 0;
+    await mod.ingestLocationBatch(alice, {
+      points: [{ latitude: 52.5202, longitude: 13.405, recordedAt: '2026-11-19T12:20:00.000Z' }],
+    });
+    expect(locationBroadcasts.map((l) => l.groupId)).toEqual([GROUP_FUZZED]);
+    expect(placeTransitionBroadcasts).toHaveLength(0);
+
+    // Cleanup place
+    await mod.deleteGroupPlace(outsider, GROUP_EXACT, home.id);
+    expect((await mod.listGroupPlaces(outsider, GROUP_EXACT)).places).toHaveLength(0);
   });
 });
