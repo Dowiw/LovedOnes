@@ -129,6 +129,67 @@ export const LocationBroadcastSchema = z.object({
 });
 export type LocationBroadcast = z.infer<typeof LocationBroadcastSchema>;
 
+export interface BoundingBox {
+  minLon: number;
+  minLat: number;
+  maxLon: number;
+  maxLat: number;
+}
+
+/**
+ * Parses a "minLon,minLat,maxLon,maxLat" query parameter string into validated
+ * WGS84 bounds, returning null if malformed or inverted.
+ */
+export function parseBoundingBox(raw: string): BoundingBox | null {
+  const parts = raw.split(',').map((s) => s.trim());
+  if (parts.length !== 4 || parts.some((s) => s.length === 0)) return null;
+  const nums = parts.map(Number);
+  if (nums.some((n) => !Number.isFinite(n))) return null;
+  const [minLon, minLat, maxLon, maxLat] = nums as [number, number, number, number];
+  if (
+    minLon < -180 ||
+    maxLon > 180 ||
+    minLat < -90 ||
+    maxLat > 90 ||
+    minLon >= maxLon ||
+    minLat >= maxLat
+  ) {
+    return null;
+  }
+  return { minLon, minLat, maxLon, maxLat };
+}
+
+export const LocationSnapshotQuerySchema = z.object({
+  since: z.string().datetime().optional(),
+});
+export type LocationSnapshotQuery = z.infer<typeof LocationSnapshotQuerySchema>;
+
+export const TrailQuerySchema = z
+  .object({
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+    bbox: z.string().optional(),
+    userId: z.string().uuid().optional(),
+    limit: z.coerce.number().int().min(1).max(5000).default(1000),
+  })
+  .superRefine((val, ctx) => {
+    if (val.from && val.to && Date.parse(val.from) > Date.parse(val.to)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['from'],
+        message: 'from must be earlier than or equal to to',
+      });
+    }
+    if (val.bbox !== undefined && !parseBoundingBox(val.bbox)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['bbox'],
+        message: 'bbox must be minLon,minLat,maxLon,maxLat within valid WGS84 bounds',
+      });
+    }
+  });
+export type TrailQuery = z.infer<typeof TrailQuerySchema>;
+
 export const SendMessageSchema = z.object({
   groupId: z.string().uuid(),
   content: z.string().min(1).max(4000).trim(),

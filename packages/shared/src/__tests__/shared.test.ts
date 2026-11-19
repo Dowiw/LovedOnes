@@ -5,10 +5,13 @@ import { describe, expect, it } from 'vitest';
 import {
   applyPrivacyFuzzing,
   LocationBatchSchema,
+  LocationSnapshotQuerySchema,
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
   normalizePrivacyMode,
+  parseBoundingBox,
   QrInvitePayloadSchema,
+  TrailQuerySchema,
 } from '../index.js';
 import { createServiceLogger } from '../logger.js';
 import {
@@ -217,5 +220,38 @@ describe('@loved-ones/shared', () => {
         recordedAt: '2026-11-18T20:00:05.000Z',
       },
     ]);
+  });
+
+  it('validates snapshot since queries and PostGIS bounding-box trail queries', () => {
+    expect(LocationSnapshotQuerySchema.parse({ since: '2026-11-19T12:00:00.000Z' }).since).toBe(
+      '2026-11-19T12:00:00.000Z',
+    );
+    expect(LocationSnapshotQuerySchema.safeParse({ since: 'not-a-date' }).success).toBe(false);
+
+    expect(parseBoundingBox('13.08,52.33,13.76,52.67')).toEqual({
+      minLon: 13.08,
+      minLat: 52.33,
+      maxLon: 13.76,
+      maxLat: 52.67,
+    });
+    expect(parseBoundingBox('13.8,52.3,13.0,52.6')).toBeNull(); // minLon >= maxLon
+    expect(parseBoundingBox('13.0,52.3,190,52.6')).toBeNull(); // out of range
+    expect(parseBoundingBox('13.0,52.3,13.8')).toBeNull();
+
+    const parsedTrail = TrailQuerySchema.parse({
+      from: '2026-11-19T10:00:00Z',
+      to: '2026-11-19T12:00:00Z',
+      bbox: '13.08,52.33,13.76,52.67',
+      limit: '250',
+    });
+    expect(parsedTrail.limit).toBe(250);
+
+    expect(
+      TrailQuerySchema.safeParse({
+        from: '2026-11-19T14:00:00Z',
+        to: '2026-11-19T12:00:00Z',
+      }).success,
+    ).toBe(false);
+    expect(TrailQuerySchema.safeParse({ bbox: 'invalid' }).success).toBe(false);
   });
 });

@@ -3,7 +3,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
-import type { GroupRole, LocationPoint, PrivacyMode, SystemRole } from '@loved-ones/shared';
+import type {
+  BoundingBox,
+  GroupRole,
+  LocationPoint,
+  PrivacyMode,
+  SystemRole,
+} from '@loved-ones/shared';
 import * as schema from './schema.js';
 
 export * from './schema.js';
@@ -119,22 +125,39 @@ export interface GroupMemberLocationRow {
   recordedAt: string;
 }
 
+interface RawGroupLocationRow {
+  user_id: string;
+  username: string;
+  role: GroupRole;
+  privacy: PrivacyMode;
+  latitude: number;
+  longitude: number;
+  altitude: number | null;
+  speed: number | null;
+  battery_level: number | null;
+  recorded_at: Date;
+}
+
+function mapGroupLocationRow(row: RawGroupLocationRow): GroupMemberLocationRow {
+  return {
+    userId: row.user_id,
+    username: row.username,
+    role: row.role,
+    privacy: row.privacy,
+    latitude: Number(row.latitude),
+    longitude: Number(row.longitude),
+    altitude: row.altitude,
+    speed: row.speed,
+    batteryLevel: row.battery_level,
+    recordedAt: row.recorded_at.toISOString(),
+  };
+}
+
 export async function getLatestGroupLocations(
   pool: pg.Pool,
   groupId: string,
 ): Promise<GroupMemberLocationRow[]> {
-  const result = await pool.query<{
-    user_id: string;
-    username: string;
-    role: GroupRole;
-    privacy: PrivacyMode;
-    latitude: number;
-    longitude: number;
-    altitude: number | null;
-    speed: number | null;
-    battery_level: number | null;
-    recorded_at: Date;
-  }>(
+  const result = await pool.query<RawGroupLocationRow>(
     `SELECT DISTINCT ON (gm.user_id)
        gm.user_id,
        u.username,
@@ -155,18 +178,84 @@ export async function getLatestGroupLocations(
     [groupId],
   );
 
-  return result.rows.map((row) => ({
-    userId: row.user_id,
-    username: row.username,
-    role: row.role,
-    privacy: row.privacy,
-    latitude: Number(row.latitude),
-    longitude: Number(row.longitude),
-    altitude: row.altitude,
-    speed: row.speed,
-    batteryLevel: row.battery_level,
-    recordedAt: row.recorded_at.toISOString(),
-  }));
+  return result.rows.map(mapGroupLocationRow);
+}
+
+export interface GroupTrailQueryOptions {
+  groupId: string;
+  from: Date;
+  to: Date;
+  bbox?: BoundingBox;
+  userId?: string;
+  limit?: number;
+}
+
+/**
+ * Fetches ordered historical location points for non-GHOST, non-SPECTATOR members
+ * of a Group, optionally filtered by time window, member Account, and a PostGIS
+ * ST_MakeEnvelope spatial bounding box using idx_location_gist.
+ */
+export async function getGroupTrails(
+  pool: pg.Pool,
+  options: GroupTrailQueryOptions,
+): Promise<GroupMemberLocationRow[]> {
+  const params: unknown[] = [options.groupId, options.from, options.to];
+  const conditions = [
+    `gm.group_id = $1`,
+    `gm.role <> 'SPECTATOR'`,
+    `gm.privacy <> 'GHOST'`,
+    `lh.recorded_at >= $2`,
+    `lh.recorded_at <= $3`,
+  ];
+
+  if (options.userId) {
+    params.push(options.userId);
+    conditions.push(`gm.user_id = $${params.length}`);
+  }
+
+  if (options.bbox) {
+    const idx = params.length + 1;
+    params.push(options.bbox.minLon, options.bbox.minLat, options.bbox.maxLon, options.bbox.maxLat);
+    const isRegionalSpan =
+      options.bbox.maxLon - options.bbox.minLon < 180 &&
+      options.bbox.maxLat - options.bbox.minLat < 180;
+    if (isRegionalSpan) {
+      conditions.push(
+        `lh.coords && ST_MakeEnvelope($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, 4326)::geography`,
+        `ST_Intersects(lh.coords, ST_MakeEnvelope($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, 4326)::geography)`,
+      );
+    } else {
+      conditions.push(
+        `ST_Intersects(lh.coords::geometry, ST_MakeEnvelope($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, 4326))`,
+      );
+    }
+  }
+
+  const limit = Math.min(Math.max(1, Math.trunc(options.limit ?? 1000)), 10000);
+  params.push(limit);
+
+  const result = await pool.query<RawGroupLocationRow>(
+    `SELECT
+       gm.user_id,
+       u.username,
+       gm.role,
+       gm.privacy,
+       ST_Y(lh.coords::geometry) AS latitude,
+       ST_X(lh.coords::geometry) AS longitude,
+       lh.altitude,
+       lh.speed,
+       lh.battery_level,
+       lh.recorded_at
+     FROM group_memberships gm
+     JOIN users u ON u.id = gm.user_id
+     JOIN location_history lh ON lh.user_id = gm.user_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY lh.recorded_at ASC
+     LIMIT $${params.length}`,
+    params,
+  );
+
+  return result.rows.map(mapGroupLocationRow);
 }
 
 export interface UserDbFootprintRow {

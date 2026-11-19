@@ -17,6 +17,7 @@ import {
 import {
   filterAnomalousLocationPoints,
   isNullIsland,
+  matchesIfNoneMatch,
   RealtimeBroadcaster,
   RealtimeModule,
   RealtimeStore,
@@ -104,6 +105,47 @@ function createInMemoryRealtimeHarness() {
         },
       ];
     },
+    async getGroupTrails(options) {
+      const fromMs = options.from.getTime();
+      const toMs = options.to.getTime();
+      const rows: GroupMemberLocationRow[] = [];
+      for (const entry of storedPoints) {
+        const member = memberships.find(
+          (m) =>
+            m.groupId === options.groupId &&
+            m.userId === entry.userId &&
+            m.role !== 'SPECTATOR' &&
+            m.privacy !== 'GHOST',
+        );
+        if (!member) continue;
+        if (options.userId && entry.userId !== options.userId) continue;
+        const ts = Date.parse(entry.point.recordedAt);
+        if (ts < fromMs || ts > toMs) continue;
+        if (
+          options.bbox &&
+          (entry.point.longitude < options.bbox.minLon ||
+            entry.point.longitude > options.bbox.maxLon ||
+            entry.point.latitude < options.bbox.minLat ||
+            entry.point.latitude > options.bbox.maxLat)
+        ) {
+          continue;
+        }
+        rows.push({
+          userId: entry.userId,
+          username: entry.userId === alice.id ? alice.username : outsider.username,
+          role: member.role,
+          privacy: member.privacy,
+          latitude: entry.point.latitude,
+          longitude: entry.point.longitude,
+          altitude: entry.point.altitude ?? null,
+          speed: entry.point.speed ?? null,
+          batteryLevel: entry.point.batteryLevel ?? null,
+          recordedAt: entry.point.recordedAt,
+        });
+      }
+      rows.sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt));
+      return rows.slice(0, options.limit ?? 1000);
+    },
     async getGroupMessages(groupId) {
       return storedMessages.filter((m) => m.groupId === groupId);
     },
@@ -131,7 +173,7 @@ function createInMemoryRealtimeHarness() {
   };
 
   const mod = new RealtimeModule({ store, broadcaster });
-  return { mod, locationBroadcasts, chatBroadcasts, storedPoints };
+  return { mod, locationBroadcasts, chatBroadcasts, storedPoints, memberships };
 }
 
 describe('RealtimeModule domain interface', () => {
@@ -446,5 +488,88 @@ describe('RealtimeModule domain interface', () => {
     });
     expect(overlandBad).toEqual({ inserted: 0, result: 'ok' });
     expect(locationBroadcasts).toHaveLength(0);
+  });
+
+  it('computes deterministic ETag/since snapshots and privacy-safe bounding-box trails', async () => {
+    const { mod, memberships } = createInMemoryRealtimeHarness();
+    const t1 = '2026-11-19T10:00:00.000Z';
+    const t2 = '2026-11-19T11:00:00.000Z';
+    const t3 = '2026-11-19T12:00:00.000Z';
+
+    await mod.ingestLocationBatch(alice, {
+      points: [
+        { latitude: 52.52, longitude: 13.405, recordedAt: t1 },
+        { latitude: 52.525, longitude: 13.41, recordedAt: t2 },
+      ],
+    });
+    // Later spaced Munich fix outside Berlin bbox
+    await mod.ingestLocationBatch(alice, {
+      points: [{ latitude: 48.1351, longitude: 11.582, recordedAt: t3 }],
+    });
+
+    // 1. ETag matching & changes across since / privacy mutations
+    const snap1 = await mod.getGroupLocationsSnapshot(alice, GROUP_EXACT);
+    const snap2 = await mod.getGroupLocationsSnapshot(alice, GROUP_EXACT);
+    expect(snap1.etag).toBe(snap2.etag);
+    expect(snap1.lastModified).toBe(new Date(t3).toUTCString());
+    expect(matchesIfNoneMatch(snap1.etag, snap1.etag)).toBe(true);
+    expect(matchesIfNoneMatch(`W/${snap1.etag}`, snap1.etag)).toBe(true);
+    expect(matchesIfNoneMatch('"other", *', snap1.etag)).toBe(true);
+    expect(matchesIfNoneMatch('"other"', snap1.etag)).toBe(false);
+
+    // ?since=t3 excludes t3 (requires strictly newer recordedAt)
+    const emptySince = await mod.getGroupLocationsSnapshot(alice, GROUP_EXACT, { since: t3 });
+    expect(emptySince.locations).toHaveLength(0);
+    expect(emptySince.etag).not.toBe(snap1.etag);
+
+    // Switching privacy on GROUP_EXACT changes ETag immediately
+    const exactMembership = memberships.find((m) => m.groupId === GROUP_EXACT)!;
+    exactMembership.privacy = 'FUZZED';
+    const fuzzedSnap = await mod.getGroupLocationsSnapshot(alice, GROUP_EXACT);
+    expect(fuzzedSnap.etag).not.toBe(snap1.etag);
+    expect(fuzzedSnap.locations[0]?.isFuzzed).toBe(true);
+    exactMembership.privacy = 'EXACT';
+
+    // 2. Bounding-box + time-window trail filtering & privacy rules
+    const berlinTrail = await mod.getGroupTrails(alice, GROUP_EXACT, {
+      from: '2026-11-19T09:00:00.000Z',
+      to: '2026-11-19T13:00:00.000Z',
+      bbox: '13.0,52.3,13.8,52.7',
+    });
+    expect(berlinTrail.map((p) => p.recordedAt)).toEqual([t1, t2]);
+    expect(berlinTrail.every((p) => p.privacyMode === 'EXACT' && !p.isFuzzed)).toBe(true);
+
+    const fuzzedTrail = await mod.getGroupTrails(alice, GROUP_FUZZED, {
+      from: '2026-11-19T09:00:00.000Z',
+      to: '2026-11-19T13:00:00.000Z',
+      bbox: '13.0,52.3,13.8,52.7',
+    });
+    expect(fuzzedTrail).toHaveLength(2);
+    expect(fuzzedTrail.every((p) => p.isFuzzed && p.privacyMode === 'FUZZED')).toBe(true);
+
+    // GHOST and SPECTATOR groups never return trail coordinates
+    expect(
+      await mod.getGroupTrails(alice, GROUP_GHOST, {
+        from: '2026-11-19T09:00:00.000Z',
+        to: '2026-11-19T13:00:00.000Z',
+      }),
+    ).toHaveLength(0);
+    expect(
+      await mod.getGroupTrails(alice, GROUP_SPECTATOR, {
+        from: '2026-11-19T09:00:00.000Z',
+        to: '2026-11-19T13:00:00.000Z',
+      }),
+    ).toHaveLength(0);
+
+    // Validation & access control checks
+    await expect(mod.getGroupLocationsSnapshot(alice, GROUP_EXACT, { since: 'bad' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    await expect(mod.getGroupTrails(alice, GROUP_EXACT, { bbox: '10,20' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    await expect(mod.getGroupTrails(outsider, GROUP_EXACT, {})).rejects.toMatchObject({
+      statusCode: 403,
+    });
   });
 });

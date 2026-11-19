@@ -264,7 +264,111 @@ describe('@loved-ones/realtime-service integration', () => {
       expect(msgRes.json().messages).toHaveLength(1);
       expect(msgRes.json().messages[0].content).toBe('Arrived in Paris!');
 
-      // 5. Verify telemetry reflects active sockets and GPS/chat events
+      // 5. ETag/304 conditional snapshot polling, ?since= filtering, and PostGIS bounding-box /trails
+      await authApp.inject({
+        method: 'PATCH',
+        url: `/api/auth/groups/${group.id}/privacy`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+        payload: { privacy: 'EXACT' },
+      });
+      await authApp.inject({
+        method: 'PATCH',
+        url: `/api/auth/groups/${group.id}/privacy`,
+        headers: { Authorization: `Bearer ${bob.accessToken}` },
+        payload: { privacy: 'FUZZED' },
+      });
+
+      const trailT1 = '2026-11-19T08:00:00.000Z';
+      const trailT2 = '2026-11-19T09:00:00.000Z';
+      await realtimeApp.inject({
+        method: 'POST',
+        url: '/api/realtime/locations',
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+        payload: {
+          points: [
+            { latitude: 52.52, longitude: 13.405, recordedAt: trailT1 }, // Berlin
+            { latitude: 48.1351, longitude: 11.582, recordedAt: trailT2 }, // Munich
+          ],
+        },
+      });
+      await realtimeApp.inject({
+        method: 'POST',
+        url: '/api/realtime/locations',
+        headers: { Authorization: `Bearer ${bob.accessToken}` },
+        payload: {
+          points: [{ latitude: 52.515, longitude: 13.415, recordedAt: '2026-11-19T08:30:00.000Z' }],
+        },
+      });
+
+      const snapInitial = await realtimeApp.inject({
+        method: 'GET',
+        url: `/api/realtime/groups/${group.id}/locations`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+      });
+      expect(snapInitial.statusCode).toBe(200);
+      const etag = snapInitial.headers.etag as string;
+      expect(etag).toBeTruthy();
+
+      // Re-poll with matching ETag returns 304 Not Modified
+      const snapCached = await realtimeApp.inject({
+        method: 'GET',
+        url: `/api/realtime/groups/${group.id}/locations`,
+        headers: {
+          Authorization: `Bearer ${alice.accessToken}`,
+          'If-None-Match': etag,
+        },
+      });
+      expect(snapCached.statusCode).toBe(304);
+
+      // Polling after Alice toggles privacy to GHOST returns 200 with rotated ETag
+      await authApp.inject({
+        method: 'PATCH',
+        url: `/api/auth/groups/${group.id}/privacy`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+        payload: { privacy: 'GHOST' },
+      });
+      const snapAfterPrivacy = await realtimeApp.inject({
+        method: 'GET',
+        url: `/api/realtime/groups/${group.id}/locations`,
+        headers: {
+          Authorization: `Bearer ${alice.accessToken}`,
+          'If-None-Match': etag,
+        },
+      });
+      expect(snapAfterPrivacy.statusCode).toBe(200);
+      expect(snapAfterPrivacy.headers.etag).not.toBe(etag);
+      expect(snapAfterPrivacy.json().locations.every((l: { userId: string }) => l.userId !== alice.user.id)).toBe(true);
+
+      // Restore Alice to EXACT and query PostGIS bounding-box trail over Berlin
+      await authApp.inject({
+        method: 'PATCH',
+        url: `/api/auth/groups/${group.id}/privacy`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+        payload: { privacy: 'EXACT' },
+      });
+      const trailsRes = await realtimeApp.inject({
+        method: 'GET',
+        url: `/api/realtime/groups/${group.id}/trails?from=2026-11-19T07:00:00.000Z&to=2026-11-19T10:00:00.000Z&bbox=13.0,52.3,13.8,52.7`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+      });
+      expect(trailsRes.statusCode).toBe(200);
+      const trails = trailsRes.json().trails as Array<{
+        userId: string;
+        latitude: number;
+        longitude: number;
+        isFuzzed: boolean;
+        privacyMode: string;
+      }>;
+      // Munich point is filtered by PostGIS ST_MakeEnvelope; Alice (EXACT) & Bob (FUZZED) Berlin fixes remain
+      expect(trails).toHaveLength(2);
+      const aliceTrail = trails.find((t) => t.userId === alice.user.id)!;
+      const bobTrail = trails.find((t) => t.userId === bob.user.id)!;
+      expect(aliceTrail.isFuzzed).toBe(false);
+      expect(aliceTrail.latitude).toBeCloseTo(52.52, 4);
+      expect(bobTrail.isFuzzed).toBe(true);
+      expect(bobTrail.privacyMode).toBe('FUZZED');
+
+      // Verify telemetry reflects active sockets and GPS/chat events (6 instead of 5 section)
       await new Promise((r) => setTimeout(r, 50));
       const telemetryRes = await authApp.inject({
         method: 'GET',
@@ -275,8 +379,8 @@ describe('@loved-ones/realtime-service integration', () => {
       const telemetry = telemetryRes.json();
       expect(telemetry.totalActiveSockets).toBeGreaterThanOrEqual(2);
       const bobStats = telemetry.users.find((u: { userId: string }) => u.userId === bob.user.id);
-      expect(bobStats.locationPoints).toBe(3);
-      expect(bobStats.eventsCount).toBeGreaterThanOrEqual(3);
+      expect(bobStats.locationPoints).toBe(4);
+      expect(bobStats.eventsCount).toBeGreaterThanOrEqual(4);
     } finally {
       aliceSocket.disconnect();
       bobSocket.disconnect();

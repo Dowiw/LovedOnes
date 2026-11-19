@@ -1,6 +1,11 @@
 import pg from 'pg';
 import { Server as SocketIOServer } from 'socket.io';
-import { getLatestGroupLocations, insertLocationBatch } from '@loved-ones/db';
+import {
+  getGroupTrails,
+  getLatestGroupLocations,
+  GroupTrailQueryOptions,
+  insertLocationBatch,
+} from '@loved-ones/db';
 import {
   ChatMessage,
   GroupRole,
@@ -51,6 +56,10 @@ export class PostgresRealtimeStore implements RealtimeStore {
 
   getLatestGroupLocations(groupId: string) {
     return getLatestGroupLocations(this.pool, groupId);
+  }
+
+  getGroupTrails(options: GroupTrailQueryOptions) {
+    return getGroupTrails(this.pool, options);
   }
 
   async getGroupMessages(groupId: string, limit = 100): Promise<ChatMessage[]> {

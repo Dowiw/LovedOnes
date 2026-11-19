@@ -1,16 +1,21 @@
-import { GroupMemberLocationRow } from '@loved-ones/db';
+import { createHash } from 'node:crypto';
+import { GroupMemberLocationRow, GroupTrailQueryOptions } from '@loved-ones/db';
 import {
   applyPrivacyFuzzing,
+  BoundingBox,
   ChatMessage,
   GroupRole,
   JwtUserPayload,
   LocationBatchSchema,
   LocationBroadcast,
   LocationPoint,
+  LocationSnapshotQuerySchema,
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
+  parseBoundingBox,
   PrivacyMode,
   SendMessageSchema,
+  TrailQuerySchema,
 } from '@loved-ones/shared';
 import { DomainError } from '@loved-ones/shared/auth';
 
@@ -22,6 +27,7 @@ export interface RealtimeStore {
     userId: string,
   ): Promise<Array<{ groupId: string; role: GroupRole; privacy: PrivacyMode }>>;
   getLatestGroupLocations(groupId: string): Promise<GroupMemberLocationRow[]>;
+  getGroupTrails(options: GroupTrailQueryOptions): Promise<GroupMemberLocationRow[]>;
   getGroupMessages(groupId: string, limit?: number): Promise<ChatMessage[]>;
   insertChatMessage(
     groupId: string,
@@ -127,6 +133,74 @@ export function filterAnomalousLocationPoints<
   }
 
   return accepted;
+}
+
+const FUZZED_BBOX_PAD_DEG = 0.015;
+
+export interface GroupLocationSnapshot {
+  locations: LocationBroadcast[];
+  etag: string;
+  lastModified: string | null;
+}
+
+/**
+ * Checks whether an HTTP If-None-Match header value matches the current entity tag.
+ */
+export function matchesIfNoneMatch(
+  headerValue: string | string[] | undefined,
+  etag: string,
+): boolean {
+  if (!headerValue) return false;
+  const raw = Array.isArray(headerValue) ? headerValue.join(',') : headerValue;
+  const normalizeTag = (tag: string) => tag.trim().replace(/^W\//i, '');
+  const target = normalizeTag(etag);
+  return raw
+    .split(',')
+    .map(normalizeTag)
+    .some((candidate) => candidate === '*' || candidate === target);
+}
+
+function toPrivacySafeBroadcast(
+  groupId: string,
+  row: GroupMemberLocationRow,
+): LocationBroadcast | null {
+  if (row.role === 'SPECTATOR') return null;
+  const recordedAtMs = new Date(row.recordedAt).getTime();
+  const fuzzed = applyPrivacyFuzzing(
+    row.latitude,
+    row.longitude,
+    row.privacy,
+    row.userId,
+    recordedAtMs,
+  );
+  if (!fuzzed.visible) return null;
+
+  return {
+    userId: row.userId,
+    username: row.username,
+    groupId,
+    latitude: fuzzed.latitude,
+    longitude: fuzzed.longitude,
+    altitude: row.altitude,
+    speed: row.speed,
+    batteryLevel: row.batteryLevel,
+    recordedAt: row.recordedAt,
+    privacyMode: row.privacy,
+    isFuzzed: fuzzed.isFuzzed,
+  };
+}
+
+function padBoundingBox(bbox: BoundingBox): BoundingBox {
+  return {
+    minLon: Math.max(-180, bbox.minLon - FUZZED_BBOX_PAD_DEG),
+    minLat: Math.max(-90, bbox.minLat - FUZZED_BBOX_PAD_DEG),
+    maxLon: Math.min(180, bbox.maxLon + FUZZED_BBOX_PAD_DEG),
+    maxLat: Math.min(90, bbox.maxLat + FUZZED_BBOX_PAD_DEG),
+  };
+}
+
+function isInsideBoundingBox(lat: number, lon: number, bbox: BoundingBox): boolean {
+  return lon >= bbox.minLon && lon <= bbox.maxLon && lat >= bbox.minLat && lat <= bbox.maxLat;
 }
 
 export interface RealtimeModuleOptions extends CoordinateFilterOptions {
@@ -245,39 +319,97 @@ export class RealtimeModule {
     return { inserted, result: 'ok' };
   }
 
-  async getGroupLocations(user: JwtUserPayload, groupId: string): Promise<LocationBroadcast[]> {
+  async getGroupLocationsSnapshot(
+    user: JwtUserPayload,
+    groupId: string,
+    rawQuery: unknown = {},
+  ): Promise<GroupLocationSnapshot> {
+    const parsed = LocationSnapshotQuerySchema.safeParse(rawQuery ?? {});
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid location snapshot query', parsed.error.flatten());
+    }
     if (!(await this.store.isGroupMember(user.id, groupId))) {
       throw new DomainError(403, 'Not a member of this group');
     }
 
     const rows = await this.store.getLatestGroupLocations(groupId);
-    const locations: LocationBroadcast[] = [];
-    for (const row of rows) {
-      const recordedAtMs = new Date(row.recordedAt).getTime();
-      const fuzzed = applyPrivacyFuzzing(
-        row.latitude,
-        row.longitude,
-        row.privacy,
-        row.userId,
-        recordedAtMs,
-      );
-      if (!fuzzed.visible) continue;
+    const visibleAll = rows
+      .map((row) => toPrivacySafeBroadcast(groupId, row))
+      .filter((loc): loc is LocationBroadcast => loc !== null)
+      .sort((a, b) => a.userId.localeCompare(b.userId));
 
-      locations.push({
-        userId: row.userId,
-        username: row.username,
-        groupId,
-        latitude: fuzzed.latitude,
-        longitude: fuzzed.longitude,
-        altitude: row.altitude,
-        speed: row.speed,
-        batteryLevel: row.batteryLevel,
-        recordedAt: row.recordedAt,
-        privacyMode: row.privacy,
-        isFuzzed: fuzzed.isFuzzed,
-      });
+    const sinceMs = parsed.data.since ? Date.parse(parsed.data.since) : null;
+    const locations =
+      sinceMs !== null
+        ? visibleAll.filter((loc) => Date.parse(loc.recordedAt) > sinceMs)
+        : visibleAll;
+
+    const hash = createHash('sha256')
+      .update(JSON.stringify({ since: parsed.data.since ?? null, locations }))
+      .digest('hex')
+      .slice(0, 24);
+
+    let maxMs = 0;
+    for (const loc of locations) {
+      const ts = Date.parse(loc.recordedAt);
+      if (Number.isFinite(ts) && ts > maxMs) maxMs = ts;
     }
-    return locations;
+
+    return {
+      locations,
+      etag: `"${hash}"`,
+      lastModified: maxMs > 0 ? new Date(maxMs).toUTCString() : null,
+    };
+  }
+
+  async getGroupLocations(user: JwtUserPayload, groupId: string): Promise<LocationBroadcast[]> {
+    const snapshot = await this.getGroupLocationsSnapshot(user, groupId);
+    return snapshot.locations;
+  }
+
+  async getGroupTrails(
+    user: JwtUserPayload,
+    groupId: string,
+    rawQuery: unknown = {},
+  ): Promise<LocationBroadcast[]> {
+    const parsed = TrailQuerySchema.safeParse(rawQuery ?? {});
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid trail query', parsed.error.flatten());
+    }
+    if (!(await this.store.isGroupMember(user.id, groupId))) {
+      throw new DomainError(403, 'Not a member of this group');
+    }
+
+    const toDate = parsed.data.to ? new Date(parsed.data.to) : new Date();
+    const fromDate = parsed.data.from
+      ? new Date(parsed.data.from)
+      : new Date(toDate.getTime() - 24 * 60 * 60 * 1000);
+    if (fromDate > toDate) {
+      return [];
+    }
+
+    const requestedBbox = parsed.data.bbox ? (parseBoundingBox(parsed.data.bbox) ?? undefined) : undefined;
+    const rows = await this.store.getGroupTrails({
+      groupId,
+      from: fromDate,
+      to: toDate,
+      // Pad the spatial query margin so FUZZED grid centers remain evaluated post-fuzz
+      bbox: requestedBbox ? padBoundingBox(requestedBbox) : undefined,
+      userId: parsed.data.userId,
+      limit: Math.min(parsed.data.limit * 2, 10000),
+    });
+
+    const filtered: LocationBroadcast[] = [];
+    for (const row of rows) {
+      const safe = toPrivacySafeBroadcast(groupId, row);
+      if (!safe) continue;
+      if (requestedBbox && !isInsideBoundingBox(safe.latitude, safe.longitude, requestedBbox)) {
+        continue;
+      }
+      filtered.push(safe);
+      if (filtered.length >= parsed.data.limit) break;
+    }
+    return filtered;
   }
 
   async getGroupMessages(user: JwtUserPayload, groupId: string): Promise<ChatMessage[]> {

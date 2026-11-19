@@ -4,6 +4,7 @@ import {
   createPool,
   deduplicateLocationPoints,
   getDatabaseTelemetry,
+  getGroupTrails,
   getLatestGroupLocations,
   insertLocationBatch,
   runMigrations,
@@ -126,6 +127,61 @@ describe('@loved-ones/db PostGIS integration', () => {
       expect(countRes.rows[0].cnt).toBe(3);
     } finally {
       await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+    }
+  });
+
+  it('filters historical group trails by PostGIS bounding box, time window, and privacy/role rules', async () => {
+    const suffix = Date.now();
+    const visibleRes = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, username, password_hash, role)
+       VALUES ($1, 'trail-visible', 'hash', 'USER') RETURNING id`,
+      [`trail-v-${suffix}@example.com`],
+    );
+    const ghostRes = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, username, password_hash, role)
+       VALUES ($1, 'trail-ghost', 'hash', 'USER') RETURNING id`,
+      [`trail-g-${suffix}@example.com`],
+    );
+    const visibleId = visibleRes.rows[0].id;
+    const ghostId = ghostRes.rows[0].id;
+
+    const groupRes = await pool.query<{ id: string }>(
+      `INSERT INTO groups (name, created_by) VALUES ('Trail Test Group', $1) RETURNING id`,
+      [visibleId],
+    );
+    const groupId = groupRes.rows[0].id;
+
+    try {
+      await pool.query(
+        `INSERT INTO group_memberships (user_id, group_id, role, privacy)
+         VALUES ($1, $2, 'ADMIN', 'EXACT'), ($3, $2, 'MEMBER', 'GHOST')`,
+        [visibleId, groupId, ghostId],
+      );
+
+      // Two Berlin points (one inside window, one outside window) + one Munich point (outside Berlin bbox)
+      await insertLocationBatch(pool, visibleId, [
+        { latitude: 52.52, longitude: 13.405, recordedAt: '2026-11-19T08:00:00.000Z' },
+        { latitude: 52.522, longitude: 13.41, recordedAt: '2026-11-19T10:30:00.000Z' },
+        { latitude: 48.1351, longitude: 11.582, recordedAt: '2026-11-19T11:00:00.000Z' },
+      ]);
+      // Ghost point inside Berlin bbox & time window must be excluded in SQL
+      await insertLocationBatch(pool, ghostId, [
+        { latitude: 52.521, longitude: 13.406, recordedAt: '2026-11-19T10:45:00.000Z' },
+      ]);
+
+      const trails = await getGroupTrails(pool, {
+        groupId,
+        from: new Date('2026-11-19T10:00:00.000Z'),
+        to: new Date('2026-11-19T12:00:00.000Z'),
+        bbox: { minLon: 13.0, minLat: 52.3, maxLon: 13.8, maxLat: 52.7 },
+      });
+
+      expect(trails).toHaveLength(1);
+      expect(trails[0].userId).toBe(visibleId);
+      expect(trails[0].recordedAt).toBe('2026-11-19T10:30:00.000Z');
+    } finally {
+      await pool.query('DELETE FROM groups WHERE id = $1', [groupId]);
+      await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[visibleId, ghostId]]);
     }
   });
 });

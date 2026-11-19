@@ -30,7 +30,7 @@ import {
   PostgresRealtimeStore,
   SocketIoBroadcaster,
 } from './adapters/postgres-socketio-adapters.js';
-import { RealtimeModule } from './domain/realtime-module.js';
+import { matchesIfNoneMatch, RealtimeModule } from './domain/realtime-module.js';
 
 export interface RealtimeServiceOptions {
   databaseUrl?: string;
@@ -91,6 +91,8 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'If-None-Match', 'If-Modified-Since'],
+    exposedHeaders: ['ETag', 'Last-Modified'],
   });
 
   app.setErrorHandler((err, _request, reply) => {
@@ -179,10 +181,36 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   app.get(
     '/api/realtime/groups/:groupId/locations',
     { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest, reply) => {
+      const { groupId } = request.params as { groupId: string };
+      const snapshot = await realtime.getGroupLocationsSnapshot(
+        request.authUser!,
+        groupId,
+        request.query,
+      );
+      reply.header('ETag', snapshot.etag);
+      reply.header('Cache-Control', 'private, no-cache');
+      if (snapshot.lastModified) {
+        reply.header('Last-Modified', snapshot.lastModified);
+      }
+      if (matchesIfNoneMatch(request.headers['if-none-match'], snapshot.etag)) {
+        return reply.code(304).send();
+      }
+      return { locations: snapshot.locations };
+    },
+  );
+
+  app.get(
+    '/api/realtime/groups/:groupId/trails',
+    { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest) => {
       const { groupId } = request.params as { groupId: string };
-      const locations = await realtime.getGroupLocations(request.authUser!, groupId);
-      return { locations };
+      const trails = await realtime.getGroupTrails(
+        request.authUser!,
+        groupId,
+        request.query,
+      );
+      return { trails };
     },
   );
 
