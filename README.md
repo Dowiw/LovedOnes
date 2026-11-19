@@ -86,7 +86,7 @@ To drop in a real regional `.pmtiles` extract (for example **Berlin/Brandenburg*
    ```
    *(For Berlin only, use `--bbox=13.0883,52.3382,13.7612,52.6755`; for other regions, look up `MIN_LON,MIN_LAT,MAX_LON,MAX_LAT` via [bboxfinder.com](http://bboxfinder.com/).)*
 
-2. **Match your tile schema in [`infra/tiles/style.json`](infra/tiles/style.json):** The bundled `style.json` targets OpenMapTiles layer names (`transportation`, `building`, `boundary`). If your `.pmtiles` uses Protomaps v4 basemap layers, update those `source-layer` names in `infra/tiles/style.json` (e.g., `roads`, `buildings`, `boundaries`).
+2. **Match your tile schema in [`infra/tiles/style.json`](infra/tiles/style.json):** The bundled `style.json` targets **Protomaps v4** layer names (`earth`, `water`, `landuse`, `roads`, `buildings`, `boundaries`). If your `.pmtiles` uses OpenMapTiles layer names instead, update `source-layer` in `infra/tiles/style.json` (e.g., `transportation`, `building`, `boundary`).
 
 3. **Reload without rebuilding:** `infra/tiles/` is bind-mounted into `gateway` (Caddy), so no Docker rebuild is needed — hard-refresh your browser (`Ctrl+Shift+R`).
 

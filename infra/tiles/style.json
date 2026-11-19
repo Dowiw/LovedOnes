@@ -12,7 +12,16 @@
       "id": "background",
       "type": "background",
       "paint": {
-        "background-color": "#0f172a"
+        "background-color": "#0b1120"
+      }
+    },
+    {
+      "id": "earth",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "earth",
+      "paint": {
+        "fill-color": "#0f172a"
       }
     },
     {
@@ -30,34 +39,51 @@
       "source": "openmaptiles",
       "source-layer": "landuse",
       "paint": {
-        "fill-color": "#162032"
-      }
-    },
-    {
-      "id": "roads",
-      "type": "line",
-      "source": "openmaptiles",
-      "source-layer": "transportation",
-      "paint": {
-        "line-color": "#334155",
-        "line-width": 1.2
+        "fill-color": "#132238",
+        "fill-opacity": 0.7
       }
     },
     {
       "id": "buildings",
       "type": "fill",
       "source": "openmaptiles",
-      "source-layer": "building",
+      "source-layer": "buildings",
       "paint": {
         "fill-color": "#1e293b",
         "fill-outline-color": "#334155"
       }
     },
     {
+      "id": "roads",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "roads",
+      "paint": {
+        "line-color": [
+          "match",
+          ["get", "kind"],
+          "highway",
+          "#64748b",
+          "major_road",
+          "#475569",
+          "#334155"
+        ],
+        "line-width": [
+          "match",
+          ["get", "kind"],
+          "highway",
+          2.2,
+          "major_road",
+          1.5,
+          1.0
+        ]
+      }
+    },
+    {
       "id": "boundaries",
       "type": "line",
       "source": "openmaptiles",
-      "source-layer": "boundary",
+      "source-layer": "boundaries",
       "paint": {
         "line-color": "#475569",
         "line-dasharray": [2, 2],

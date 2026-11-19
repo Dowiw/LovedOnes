@@ -30,7 +30,16 @@ export function buildMobileMapStyle(
         id: 'background',
         type: 'background',
         paint: {
-          'background-color': '#0f172a',
+          'background-color': '#0b1120',
+        },
+      },
+      {
+        id: 'earth',
+        type: 'fill',
+        source: 'openmaptiles',
+        'source-layer': 'earth',
+        paint: {
+          'fill-color': '#0f172a',
         },
       },
       {
@@ -48,16 +57,16 @@ export function buildMobileMapStyle(
         source: 'openmaptiles',
         'source-layer': 'landuse',
         paint: {
-          'fill-color': '#162032',
+          'fill-color': '#132238',
         },
       },
       {
         id: 'roads',
         type: 'line',
         source: 'openmaptiles',
-        'source-layer': 'transportation',
+        'source-layer': 'roads',
         paint: {
-          'line-color': '#334155',
+          'line-color': '#475569',
           'line-width': 1.2,
         },
       },
@@ -65,7 +74,7 @@ export function buildMobileMapStyle(
         id: 'buildings',
         type: 'fill',
         source: 'openmaptiles',
-        'source-layer': 'building',
+        'source-layer': 'buildings',
         paint: {
           'fill-color': '#1e293b',
         },
