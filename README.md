@@ -88,7 +88,7 @@ To drop in a real regional `.pmtiles` extract (for example **Berlin/Brandenburg*
 
 2. **Match your tile schema in [`infra/tiles/style.json`](infra/tiles/style.json):** The bundled `style.json` targets OpenMapTiles layer names (`transportation`, `building`, `boundary`). If your `.pmtiles` uses Protomaps v4 basemap layers, update those `source-layer` names in `infra/tiles/style.json` (e.g., `roads`, `buildings`, `boundaries`).
 
-3. **Reload without rebuilding:** `infra/tiles/` is bind-mounted into `map-service`, so no Docker rebuild is needed — hard-refresh your browser (`Ctrl+Shift+R`).
+3. **Reload without rebuilding:** `infra/tiles/` is bind-mounted into `gateway` (Caddy), so no Docker rebuild is needed — hard-refresh your browser (`Ctrl+Shift+R`).
 
 4. **Avoid committing large map files:** Keep git from staging your local extract with:
    ```bash
@@ -156,7 +156,7 @@ Everything sits behind a single **Caddy** reverse proxy (`gateway`), so only one
 - **Web App (`apps/web-dashboard`):** Next.js user map, `/join` invite page, and `/admin` console.
 - **Auth & Admin (`apps/auth-admin-service`):** Accounts, Argon2id passwords, JWT sessions, group permissions, QR invites, and system telemetry.
 - **Live Tracking & Chat (`apps/realtime-service`):** Socket.io + Redis real-time location updates, privacy filtering, and chat.
-- **Map Tiles (`apps/map-service`):** Byte-range server for `.pmtiles` and map styles.
+- **Map Tiles (`gateway` Caddy / optional `apps/map-service`):** Served directly from Caddy's static byte-range server (`apps/map-service` stays available via the `standalone-maps` Compose profile or standalone Node).
 - **Database (`packages/db` & PostGIS):** PostgreSQL + PostGIS spatial storage and Redis pub/sub.
 
 For deeper technical details, see [SPEC.md](SPEC.md), [GLOSSARY.md](GLOSSARY.md), and [AGENTS.md](AGENTS.md). Licensed under the [MIT License](LICENSE).

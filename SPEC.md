@@ -12,7 +12,7 @@ The system is a decoupled microservices platform orchestrated via Docker Compose
 * **`gateway` (Caddy 2 Alpine):** Single HTTP/WebSocket entry point (or replaceable by an external reverse proxy / cloud load balancer). Routes traffic by path or subdomain:
   * `/api/auth/*` and `/api/admin/*` -> `auth-admin-service:4001`
   * `/api/realtime/*` and `/socket.io/*` -> `realtime-service:4002`
-  * `/tiles/*` -> `map-service:8080`
+  * `/tiles/*` -> served directly from Caddy (`file_server` over `/srv/tiles` with `Accept-Ranges: bytes` + CORS; `map-service` available via optional `standalone-maps` profile)
   * `/*` -> `web-dashboard:3000`
 * **`cloudflared` (Optional Profile):** Official `cloudflare/cloudflared` container for zero-port-forward hosting on any NATted or firewalled network. Connects directly to `http://gateway:80`.
 * **`postgres` (`${POSTGIS_IMAGE:-postgis/postgis:16-3.4-alpine}`):** Primary relational and spatial datastore (use `imresamu/postgis:16-3.4-alpine` for native `linux/arm64`, or point `DATABASE_URL` at an external managed PostgreSQL/PostGIS cluster).
@@ -29,8 +29,8 @@ The system is a decoupled microservices platform orchestrated via Docker Compose
    * Stateless, horizontally scalable WebSocket + REST ingestion service using `@socket.io/redis-adapter`.
    * Ingests live GPS batches and chat messages, persists to PostGIS, and broadcasts to authorized group rooms.
    * Enforces privacy modes per group (`ACTIVE`, `GHOST`, `FUZZED_1KM`).
-4. **`apps/map-service` (Caddy / Go Static Range Server):**
-   * Serves static `.pmtiles` OpenStreetMap archives and MapLibre `style.json` / glyphs via HTTP Range Requests (`Accept-Ranges: bytes`) with CORS enabled.
+4. **`apps/map-service` (Optional Standalone Range Server / `standalone-maps` Profile):**
+   * Serves static `.pmtiles` OpenStreetMap archives and MapLibre `style.json` / glyphs via HTTP Range Requests (`Accept-Ranges: bytes`) with CORS enabled for custom/standalone deployments (`gateway` serves `/tiles/*` directly in the default Compose stack).
 5. **`apps/web-dashboard` (Next.js + Tailwind CSS + TypeScript + MapLibre GL JS):**
    * **User Portal:** Browser-accessible live map (using the `pmtiles` JS protocol plugin), group chat, and optional foreground Web Geolocation sharing (designed for iOS Safari / desktop users).
    * **Admin Portal (`/admin`):** QR invite generator, live scrolling `STDOUT` log terminal via WebSockets, storage alerts, and per-user compute/memory breakdown.

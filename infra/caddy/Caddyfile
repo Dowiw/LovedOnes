@@ -1,26 +1,45 @@
 :80 {
-	encode zstd gzip
+	@tilesOptions {
+		path /tiles/*
+		method OPTIONS
+	}
+	handle @tilesOptions {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+		header Access-Control-Allow-Headers "Range, If-Modified-Since, Cache-Control, Content-Type"
+		header Access-Control-Expose-Headers "Accept-Ranges, Content-Range, Content-Length, ETag"
+		respond 204
+	}
+
+	@tiles path /tiles/*
+	handle @tiles {
+		uri strip_prefix /tiles
+		root * /srv/tiles
+		@pmtiles path *.pmtiles /tiles/*.pmtiles
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+		header Access-Control-Allow-Headers "Range, If-Modified-Since, Cache-Control, Content-Type"
+		header Access-Control-Expose-Headers "Accept-Ranges, Content-Range, Content-Length, ETag"
+		header Accept-Ranges "bytes"
+		header @pmtiles Content-Type "application/vnd.pmtiles"
+		header Cache-Control "public, max-age=3600"
+		file_server
+	}
 
 	@authAdmin path /api/auth/* /api/admin/*
 	handle @authAdmin {
+		encode zstd gzip
 		reverse_proxy auth-admin-service:4001
 	}
 
 	@realtime path /api/realtime/* /socket.io/*
 	handle @realtime {
+		encode zstd gzip
 		reverse_proxy realtime-service:4002
 	}
 
-	@tiles path /tiles/*
-	handle @tiles {
-		header Access-Control-Allow-Origin "*"
-		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
-		header Access-Control-Allow-Headers "Range, If-Modified-Since, Cache-Control, Content-Type"
-		header Access-Control-Expose-Headers "Accept-Ranges, Content-Range, Content-Length, ETag"
-		reverse_proxy map-service:8080
-	}
-
 	handle {
+		encode zstd gzip
 		reverse_proxy web-dashboard:3000
 	}
 }

@@ -11,6 +11,7 @@ services:
       - "${GATEWAY_PORT:-80}:80"
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/tiles:/srv/tiles:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:
@@ -18,7 +19,6 @@ services:
     depends_on:
       - auth-admin-service
       - realtime-service
-      - map-service
       - web-dashboard
 
   cloudflared:
@@ -122,6 +122,7 @@ services:
       context: .
       dockerfile: apps/map-service/Dockerfile
     container_name: lovedones-map-service
+    profiles: ["standalone-maps"]
     restart: unless-stopped
     environment:
       NODE_ENV: production

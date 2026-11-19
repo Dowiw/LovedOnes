@@ -14,7 +14,7 @@ Ensure `.env` exists (copied from `.env.example` with `GATEWAY_PORT=8080` if not
 # Validate both Compose files
 docker compose config -q && docker compose -f docker-compose.dev.yml config -q
 
-# Ensure dev stack is down, then build and launch all 7 containers
+# Ensure dev stack is down, then build and launch all 6 default containers
 docker compose -f docker-compose.dev.yml down
 docker compose up -d --build
 ```
@@ -25,25 +25,25 @@ docker compose up -d --build
 docker compose ps
 ```
 
-All 7 containers must be `Up` (with `lovedones-postgres` and `lovedones-redis` showing `(healthy)`):
-- `lovedones-gateway` (`0.0.0.0:8080->80/tcp`)
+All 6 default containers must be `Up` (with `lovedones-postgres` and `lovedones-redis` showing `(healthy)`):
+- `lovedones-gateway` (`0.0.0.0:8080->80/tcp`, also serves `/tiles/*` directly)
 - `lovedones-web-dashboard` (`3000/tcp` internal)
 - `lovedones-auth-admin` (`4001/tcp` internal)
 - `lovedones-realtime` (`4002/tcp` internal)
-- `lovedones-map-service` (`8080/tcp` internal)
 - `lovedones-postgres` (`5432/tcp` internal)
 - `lovedones-redis` (`6379/tcp` internal)
+
+*(Optional standalone range server: `docker compose --profile standalone-maps up -d map-service`)*
 
 Check startup logs for clean listeners and zero Redis/Postgres errors:
 
 ```bash
-docker compose logs --tail=30 auth-admin-service realtime-service map-service web-dashboard gateway
+docker compose logs --tail=30 auth-admin-service realtime-service web-dashboard gateway
 ```
 
 Expected lines:
 - `auth-admin-service listening` (`port: 4001`)
 - `realtime-service listening` (`port: 4002`)
-- `map-service listening` (`port: 8080`)
 - `web-dashboard` → `✓ Ready`
 
 ### Step 3 — Verify Every Caddy Gateway Route (`http://localhost:8080`)
