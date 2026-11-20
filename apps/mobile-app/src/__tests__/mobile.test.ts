@@ -89,6 +89,10 @@ describe('@loved-ones/mobile-app', () => {
     );
 
     const style = buildMobileMapStyle('https://track.example.com');
+    expect(style.glyphs).toBe(
+      'https://track.example.com/tiles/fonts/{fontstack}/{range}.pbf',
+    );
+    expect(style.layers.some((l) => l.id === 'road-labels' && l.type === 'symbol')).toBe(true);
     expect(style.sources.openmaptiles).toEqual({
       type: 'vector',
       url: 'pmtiles://https://track.example.com/tiles/region.pmtiles',

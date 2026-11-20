@@ -90,6 +90,12 @@ export function MapCanvas({
       center: [13.4448, 52.5069],
       zoom: 11,
       attributionControl: false,
+      transformRequest: (url) => {
+        if (tilesBase && url.startsWith('/tiles/')) {
+          return { url: `${tilesBase}${url}` };
+        }
+        return { url };
+      },
     });
 
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
