@@ -193,6 +193,26 @@ export default function HomePage() {
     [groups, activeGroupId],
   );
 
+  const isPickingPlace =
+    rightOpen && inspectorTab === 'places' && activeGroup?.myRole === 'ADMIN';
+
+  const draftPlace = useMemo(() => {
+    if (!isPickingPlace || !placeLat.trim() || !placeLon.trim()) return null;
+    const lat = Number(placeLat);
+    const lon = Number(placeLon);
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      lat < -90 ||
+      lat > 90 ||
+      lon < -180 ||
+      lon > 180
+    ) {
+      return null;
+    }
+    return { latitude: lat, longitude: lon, name: placeName };
+  }, [isPickingPlace, placeLat, placeLon, placeName]);
+
   const pendingIncomingCount = useMemo(
     () =>
       session
@@ -724,6 +744,8 @@ export default function HomePage() {
         radiusMeters: placeRadius,
       });
       setPlaceName('');
+      setPlaceLat('');
+      setPlaceLon('');
       setPlaces((prev) => (prev.some((p) => p.id === created.id) ? prev : [...prev, created]));
     } catch (err) {
       setPlaceError(err instanceof Error ? err.message : 'Failed to create place');
@@ -905,8 +927,11 @@ export default function HomePage() {
         currentUserAvatarUrl={session.user.avatarUrl ?? null}
         selfLocation={selfLocation}
         focusCoords={focusCoords}
+        draftPlace={draftPlace}
+        pickingPlace={isPickingPlace}
         labelLanguage={labelLanguage}
         onMapSelectCoords={(lat, lon) => {
+          if (!isPickingPlace) return;
           setPlaceLat(String(lat));
           setPlaceLon(String(lon));
         }}
@@ -1417,6 +1442,26 @@ export default function HomePage() {
                     onSubmit={handleCreatePlace}
                     className="space-y-2 rounded-2xl border border-slate-100 bg-slate-50/80 p-2.5"
                   >
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-600">
+                      <span className="flex items-center gap-1 font-medium">
+                        <MapPin className="h-3 w-3 text-zinc-900" />
+                        {draftPlace
+                          ? `Pin at ${draftPlace.latitude.toFixed(4)}, ${draftPlace.longitude.toFixed(4)}`
+                          : 'Click or tap map to place pin'}
+                      </span>
+                      {(placeLat || placeLon) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPlaceLat('');
+                            setPlaceLon('');
+                          }}
+                          className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-900"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
                     <div className="flex gap-1.5">
                       <input
                         type="text"

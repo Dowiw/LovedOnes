@@ -67,6 +67,12 @@ interface FocusCoordsRequest {
   nonce: number;
 }
 
+interface DraftPlaceCoords {
+  latitude: number;
+  longitude: number;
+  name?: string;
+}
+
 interface MapCanvasProps {
   locations: LocationBroadcast[];
   places?: GroupPlace[];
@@ -78,6 +84,8 @@ interface MapCanvasProps {
   currentUserAvatarUrl?: string | null;
   selfLocation?: SelfLocationFix | null;
   focusCoords?: FocusCoordsRequest | null;
+  draftPlace?: DraftPlaceCoords | null;
+  pickingPlace?: boolean;
   labelLanguage?: MapLabelLanguage;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
   className?: string;
@@ -94,6 +102,8 @@ export function MapCanvas({
   currentUserAvatarUrl = null,
   selfLocation = null,
   focusCoords = null,
+  draftPlace = null,
+  pickingPlace = false,
   labelLanguage = 'en',
   onMapSelectCoords,
   className = 'relative h-full w-full overflow-hidden bg-[#cfe3ee]',
@@ -103,6 +113,7 @@ export function MapCanvas({
   const styleReadyRef = useRef(false);
   const markersRef = useRef<Map<string, { marker: maplibregl.Marker; signature: string }>>(new Map());
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const draftPlaceMarkerRef = useRef<maplibregl.Marker | null>(null);
   const selfMarkerRef = useRef<maplibregl.Marker | null>(null);
   const hasAutoFramedRef = useRef(false);
   const labelLanguageRef = useRef<MapLabelLanguage>(labelLanguage);
@@ -179,6 +190,8 @@ export function MapCanvas({
         marker.remove();
       }
       placeMarkersRef.current.clear();
+      draftPlaceMarkerRef.current?.remove();
+      draftPlaceMarkerRef.current = null;
       selfMarkerRef.current?.remove();
       selfMarkerRef.current = null;
       map.remove();
@@ -448,6 +461,82 @@ export function MapCanvas({
       }
     }
   }, [places, selectedPlaceId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.getCanvas().style.cursor = pickingPlace ? 'crosshair' : '';
+  }, [pickingPlace]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const validDraft =
+      draftPlace &&
+      Number.isFinite(draftPlace.latitude) &&
+      Number.isFinite(draftPlace.longitude) &&
+      draftPlace.latitude >= -90 &&
+      draftPlace.latitude <= 90 &&
+      draftPlace.longitude >= -180 &&
+      draftPlace.longitude <= 180;
+
+    if (!validDraft || !draftPlace) {
+      draftPlaceMarkerRef.current?.remove();
+      draftPlaceMarkerRef.current = null;
+      return;
+    }
+
+    const labelText = draftPlace.name?.trim() || 'Selected place';
+    const existing = draftPlaceMarkerRef.current;
+    if (existing) {
+      existing.setLngLat([draftPlace.longitude, draftPlace.latitude]);
+      const pillEl = existing.getElement().querySelector('[data-draft-pill]');
+      if (pillEl) {
+        pillEl.textContent = labelText;
+      }
+      return;
+    }
+
+    const el = document.createElement('div');
+    el.className = 'flex flex-col items-center cursor-grab active:cursor-grabbing select-none z-20';
+
+    const pill = document.createElement('div');
+    pill.setAttribute('data-draft-pill', 'true');
+    pill.className =
+      'mb-1 rounded-full border border-zinc-900 bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-md';
+    pill.textContent = labelText;
+
+    const pinWrap = document.createElement('div');
+    pinWrap.className = 'relative flex flex-col items-center';
+    pinWrap.innerHTML = `
+      <svg width="32" height="38" viewBox="0 0 32 38" fill="none" xmlns="http://www.w3.org/2000/svg" class="drop-shadow-[0_6px_10px_rgba(9,9,11,0.35)]">
+        <path d="M16 2C8.82 2 3 7.82 3 15C3 24.4 16 36 16 36C16 36 29 24.4 29 15C29 7.82 23.18 2 16 2Z" fill="#09090b" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round"/>
+        <circle cx="16" cy="14.5" r="4.5" fill="#ffffff"/>
+      </svg>
+      <span class="mt-0.5 h-2 w-2 rounded-full bg-zinc-950/35"></span>
+    `;
+
+    el.append(pill, pinWrap);
+
+    const marker = new maplibregl.Marker({
+      element: el,
+      anchor: 'bottom',
+      draggable: true,
+    })
+      .setLngLat([draftPlace.longitude, draftPlace.latitude])
+      .addTo(map);
+
+    marker.on('dragend', () => {
+      const lngLat = marker.getLngLat();
+      onSelectCoordsRef.current?.(
+        Number(lngLat.lat.toFixed(6)),
+        Number(lngLat.lng.toFixed(6)),
+      );
+    });
+
+    draftPlaceMarkerRef.current = marker;
+  }, [draftPlace]);
 
   useEffect(() => {
     const map = mapRef.current;
