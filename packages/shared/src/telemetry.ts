@@ -4,6 +4,7 @@ export const TELEMETRY_USER_PREFIX = 'telemetry:user:';
 export const SESSION_USER_PREFIX = 'session:user:';
 export const SOCKETS_USER_PREFIX = 'sockets:user:';
 export const TRACKER_JTI_USER_PREFIX = 'tracker:jti:user:';
+export const USER_PROFILE_UPDATED_CHANNEL = 'user:profile:updated';
 
 export function getCurrentMinuteBucket(nowMs = Date.now()): number {
   return Math.floor(nowMs / 60_000);

@@ -120,6 +120,7 @@ export async function insertLocationBatch(
 export interface GroupMemberLocationRow {
   userId: string;
   username: string;
+  avatarUrl?: string | null;
   role: GroupRole;
   privacy: PrivacyMode;
   latitude: number;
@@ -133,6 +134,7 @@ export interface GroupMemberLocationRow {
 interface RawGroupLocationRow {
   user_id: string;
   username: string;
+  avatar_url?: string | null;
   role: GroupRole;
   privacy: PrivacyMode;
   latitude: number;
@@ -147,6 +149,7 @@ function mapGroupLocationRow(row: RawGroupLocationRow): GroupMemberLocationRow {
   return {
     userId: row.user_id,
     username: row.username,
+    avatarUrl: row.avatar_url ?? null,
     role: row.role,
     privacy: row.privacy,
     latitude: Number(row.latitude),
@@ -162,6 +165,18 @@ function effectivePrivacySql(nowParamIdx: number): string {
   return `CASE WHEN gm.privacy_override_until IS NOT NULL AND gm.privacy_override_until > $${nowParamIdx}::timestamptz THEN 'EXACT'::privacy_mode ELSE gm.privacy END`;
 }
 
+export async function getUserPublicProfile(
+  pool: pg.Pool,
+  userId: string,
+): Promise<{ username: string; avatarUrl: string | null } | null> {
+  const res = await pool.query<{ username: string; avatar_url: string | null }>(
+    'SELECT username, avatar_url FROM users WHERE id = $1',
+    [userId],
+  );
+  const row = res.rows[0];
+  return row ? { username: row.username, avatarUrl: row.avatar_url ?? null } : null;
+}
+
 export async function getLatestGroupLocations(
   pool: pg.Pool,
   groupId: string,
@@ -171,6 +186,7 @@ export async function getLatestGroupLocations(
     `SELECT DISTINCT ON (gm.user_id)
        gm.user_id,
        u.username,
+       u.avatar_url,
        gm.role,
        ${effectivePrivacySql(2)} AS privacy,
        ST_Y(lh.coords::geometry) AS latitude,
@@ -251,6 +267,7 @@ export async function getGroupTrails(
     `SELECT
        gm.user_id,
        u.username,
+       u.avatar_url,
        gm.role,
        ${privacyExpr} AS privacy,
        ST_Y(lh.coords::geometry) AS latitude,

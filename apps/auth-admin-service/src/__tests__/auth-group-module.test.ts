@@ -48,6 +48,7 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
         username: input.username,
         passwordHash: input.passwordHash,
         role: input.role,
+        avatarUrl: null,
         createdAt: new Date('2026-11-17T12:00:00Z'),
       };
       accounts.set(acc.id, acc);
@@ -118,6 +119,32 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
       const { passwordHash: _ignored, ...pub } = acc;
       return pub;
     },
+    async findAccountWithPasswordById(id): Promise<AccountRecord | null> {
+      return accounts.get(id) ?? null;
+    },
+    async updateAccountProfile(userId, patch) {
+      const acc = accounts.get(userId);
+      if (!acc) return { status: 'not_found' as const };
+      if (patch.email !== undefined) {
+        const lower = patch.email.toLowerCase();
+        for (const other of accounts.values()) {
+          if (other.id !== userId && other.email.toLowerCase() === lower) {
+            return { status: 'email_conflict' as const };
+          }
+        }
+        acc.email = lower;
+      }
+      if (patch.username !== undefined) acc.username = patch.username;
+      if (patch.avatarUrl !== undefined) acc.avatarUrl = patch.avatarUrl;
+      const { passwordHash: _ignored, ...pub } = acc;
+      return { status: 'ok' as const, account: pub };
+    },
+    async updateAccountPassword(userId, passwordHash) {
+      const acc = accounts.get(userId);
+      if (!acc) return false;
+      acc.passwordHash = passwordHash;
+      return true;
+    },
     async listAccountMemberships(userId): Promise<MembershipSummaryRecord[]> {
       const result: MembershipSummaryRecord[] = [];
       for (const m of memberships.values()) {
@@ -145,6 +172,7 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
           .map((entry) => ({
             userId: entry.userId,
             username: accounts.get(entry.userId)?.username ?? 'Unknown',
+            avatarUrl: accounts.get(entry.userId)?.avatarUrl ?? null,
             role: entry.role,
             privacy: entry.privacy,
             joinedAt: entry.joinedAt.toISOString(),
@@ -252,6 +280,7 @@ function createTestHarness(publicServerUrl = 'https://track.example.com', nowMs 
   return {
     mod,
     store,
+    sessionStore,
     savedSessions,
     tokenService,
     advanceMs(delta: number) {
@@ -475,6 +504,65 @@ describe('AuthGroupModule domain interface', () => {
       active: false,
       ttlSeconds: 0,
     });
+  });
+
+  it('updates username, email, avatarUrl, and password while enforcing email uniqueness and current password check', async () => {
+    const { mod, sessionStore } = createTestHarness();
+    const published: Array<{ userId: string; username: string; avatarUrl: string | null }> = [];
+    sessionStore.publishProfileUpdated = async (evt) => {
+      published.push({ userId: evt.userId, username: evt.username, avatarUrl: evt.avatarUrl });
+    };
+
+    const a = await mod.register({
+      email: 'alice@example.com',
+      username: 'Alice',
+      password: 'Password123',
+    });
+    await mod.register({
+      email: 'bob@example.com',
+      username: 'Bob',
+      password: 'Password123',
+    });
+
+    await expect(
+      mod.updateProfile(a.user.id, { email: 'BOB@example.com' }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    const dataPng = 'data:image/png;base64,iVBORw0KGgo=';
+    const updated = await mod.updateProfile(a.user.id, {
+      username: 'Alice Updated',
+      email: 'alice2@example.com',
+      avatarUrl: dataPng,
+    });
+    expect(updated.user.username).toBe('Alice Updated');
+    expect(updated.user.email).toBe('alice2@example.com');
+    expect(updated.user.avatarUrl).toBe(dataPng);
+    expect(published).toEqual([
+      { userId: a.user.id, username: 'Alice Updated', avatarUrl: dataPng },
+    ]);
+
+    const cleared = await mod.updateProfile(a.user.id, { avatarUrl: null });
+    expect(cleared.user.avatarUrl).toBeNull();
+
+    await expect(
+      mod.changePassword(a.user.id, {
+        currentPassword: 'WrongPassword',
+        newPassword: 'NewPassword456',
+      }),
+    ).rejects.toMatchObject({ statusCode: 401 });
+
+    await expect(
+      mod.changePassword(a.user.id, {
+        currentPassword: 'Password123',
+        newPassword: 'NewPassword456',
+      }),
+    ).resolves.toEqual({ updated: true });
+
+    const relogin = await mod.login({
+      email: 'alice2@example.com',
+      password: 'NewPassword456',
+    });
+    expect(relogin.user.username).toBe('Alice Updated');
   });
 });
 

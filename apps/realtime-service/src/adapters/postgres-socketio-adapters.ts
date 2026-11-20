@@ -9,6 +9,7 @@ import {
   getGroupTrails,
   getLatestGroupLocations,
   getLatestUserLocation,
+  getUserPublicProfile,
   GroupTrailQueryOptions,
   insertLocationBatch,
   listEffectiveMembershipsForUser,
@@ -36,6 +37,10 @@ export class PostgresRealtimeStore implements RealtimeStore {
       [userId, groupId],
     );
     return Boolean(res.rows[0]?.exists);
+  }
+
+  getUserProfile(userId: string): Promise<{ username: string; avatarUrl: string | null } | null> {
+    return getUserPublicProfile(this.pool, userId);
   }
 
   async listUserGroupIds(userId: string): Promise<string[]> {
@@ -137,10 +142,12 @@ export class PostgresRealtimeStore implements RealtimeStore {
       group_id: string;
       sender_id: string;
       sender_username: string;
+      sender_avatar_url: string | null;
       content: string;
       created_at: Date;
     }>(
-      `SELECT m.id, m.group_id, m.sender_id, u.username AS sender_username, m.content, m.created_at
+      `SELECT m.id, m.group_id, m.sender_id, u.username AS sender_username,
+              u.avatar_url AS sender_avatar_url, m.content, m.created_at
        FROM messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.group_id = $1
@@ -154,6 +161,7 @@ export class PostgresRealtimeStore implements RealtimeStore {
       groupId: r.group_id,
       senderId: r.sender_id,
       senderUsername: r.sender_username,
+      senderAvatarUrl: r.sender_avatar_url ?? null,
       content: r.content,
       createdAt: r.created_at.toISOString(),
     }));
@@ -165,24 +173,28 @@ export class PostgresRealtimeStore implements RealtimeStore {
     senderUsername: string,
     content: string,
   ): Promise<ChatMessage> {
-    const res = await this.pool.query<{
-      id: string;
-      group_id: string;
-      sender_id: string;
-      content: string;
-      created_at: Date;
-    }>(
-      `INSERT INTO messages (group_id, sender_id, content)
-       VALUES ($1, $2, $3)
-       RETURNING id, group_id, sender_id, content, created_at`,
-      [groupId, senderId, content],
-    );
+    const [res, profile] = await Promise.all([
+      this.pool.query<{
+        id: string;
+        group_id: string;
+        sender_id: string;
+        content: string;
+        created_at: Date;
+      }>(
+        `INSERT INTO messages (group_id, sender_id, content)
+         VALUES ($1, $2, $3)
+         RETURNING id, group_id, sender_id, content, created_at`,
+        [groupId, senderId, content],
+      ),
+      getUserPublicProfile(this.pool, senderId),
+    ]);
     const row = res.rows[0];
     return {
       id: row.id,
       groupId: row.group_id,
       senderId: row.sender_id,
-      senderUsername,
+      senderUsername: profile?.username ?? senderUsername,
+      senderAvatarUrl: profile?.avatarUrl ?? null,
       content: row.content,
       createdAt: row.created_at.toISOString(),
     };

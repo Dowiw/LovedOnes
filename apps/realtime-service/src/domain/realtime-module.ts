@@ -32,6 +32,7 @@ import { DomainError } from '@loved-ones/shared/auth';
 
 export interface RealtimeStore {
   isGroupMember(userId: string, groupId: string): Promise<boolean>;
+  getUserProfile?(userId: string): Promise<{ username: string; avatarUrl: string | null } | null>;
   listUserGroupIds(userId: string): Promise<string[]>;
   insertLocationBatch(userId: string, points: LocationPoint[]): Promise<number>;
   listMembershipsForUser(
@@ -249,6 +250,7 @@ function toPrivacySafeBroadcast(
   return {
     userId: row.userId,
     username: row.username,
+    avatarUrl: row.avatarUrl ?? null,
     groupId,
     latitude: fuzzed.latitude,
     longitude: fuzzed.longitude,
@@ -331,7 +333,12 @@ export class RealtimeModule {
     if (!latest || inserted === 0) return inserted;
 
     const recordedAtMs = new Date(latest.recordedAt).getTime();
-    const memberships = await this.store.listMembershipsForUser(user.id, new Date(this.now()));
+    const [memberships, profile] = await Promise.all([
+      this.store.listMembershipsForUser(user.id, new Date(this.now())),
+      this.store.getUserProfile?.(user.id).catch(() => null) ?? Promise.resolve(null),
+    ]);
+    const displayName = profile?.username ?? user.username;
+    const avatarUrl = profile?.avatarUrl ?? null;
 
     for (const m of memberships) {
       if (m.role === 'SPECTATOR') continue;
@@ -341,7 +348,7 @@ export class RealtimeModule {
           const placeEvents = await this.store.evaluatePlaceTransitions({
             groupId: m.groupId,
             userId: user.id,
-            username: user.username,
+            username: displayName,
             latitude: pt.latitude,
             longitude: pt.longitude,
             recordedAt: pt.recordedAt,
@@ -363,7 +370,8 @@ export class RealtimeModule {
 
       const broadcast: LocationBroadcast = {
         userId: user.id,
-        username: user.username,
+        username: displayName,
+        avatarUrl,
         groupId: m.groupId,
         latitude: fuzzed.latitude,
         longitude: fuzzed.longitude,
@@ -536,7 +544,13 @@ export class RealtimeModule {
       throw new DomainError(403, 'Not a member of this group');
     }
 
-    const message = await this.store.insertChatMessage(groupId, user.id, user.username, content);
+    const profile = (await this.store.getUserProfile?.(user.id).catch(() => null)) ?? null;
+    const message = await this.store.insertChatMessage(
+      groupId,
+      user.id,
+      profile?.username ?? user.username,
+      content,
+    );
     this.broadcaster.broadcastChatMessage(groupId, message);
     return message;
   }
@@ -642,11 +656,15 @@ export class RealtimeModule {
     );
 
     if (parsed.data.action === 'accept' && membership.role !== 'SPECTATOR') {
-      const latest = await this.store.getLatestUserLocation(user.id);
+      const [latest, profile] = await Promise.all([
+        this.store.getLatestUserLocation(user.id),
+        this.store.getUserProfile?.(user.id).catch(() => null) ?? Promise.resolve(null),
+      ]);
       if (latest) {
         this.broadcaster.broadcastLocation(groupId, {
           userId: user.id,
-          username: user.username,
+          username: profile?.username ?? user.username,
+          avatarUrl: profile?.avatarUrl ?? null,
           groupId,
           latitude: latest.latitude,
           longitude: latest.longitude,

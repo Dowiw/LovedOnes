@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Image,
   Modal,
   ScrollView,
   StyleSheet,
@@ -11,7 +12,12 @@ import {
 import { Camera, type CameraRef, Map, Marker } from '@maplibre/maplibre-react-native';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
-import type { ChatMessage, LocationBroadcast, PrivacyMode } from '@loved-ones/shared';
+import {
+  isSafeAvatarUrl,
+  type ChatMessage,
+  type LocationBroadcast,
+  type PrivacyMode,
+} from '@loved-ones/shared';
 import {
   isBackgroundTrackingActive,
   startBackgroundTracking,
@@ -56,6 +62,22 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatText, setChatText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
+
+  const [userProfile, setUserProfile] = useState(config.user);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [editUsername, setEditUsername] = useState(config.user?.username ?? '');
+  const [editEmail, setEditEmail] = useState(config.user?.email ?? '');
+  const [editAvatarUrl, setEditAvatarUrl] = useState(config.user?.avatarUrl ?? '');
+  const [accountMessage, setAccountMessage] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [accountBusy, setAccountBusy] = useState(false);
+
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordBusy, setPasswordBusy] = useState(false);
 
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
@@ -106,6 +128,20 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
   useEffect(() => {
     if (!serverUrl || !accessToken) return;
+    void fetch(`${serverUrl}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { user?: MobileStoredConfig['user'] } | null) => {
+        if (!data?.user) return;
+        setUserProfile(data.user);
+        setEditUsername(data.user.username);
+        setEditEmail(data.user.email);
+        setEditAvatarUrl(data.user.avatarUrl ?? '');
+        void saveStoredConfig({ user: data.user });
+      })
+      .catch(() => {});
+
     void fetch(`${serverUrl}/api/auth/groups`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
@@ -147,6 +183,31 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         return [...prev, msg];
       });
     });
+
+    socket.on(
+      'member:profile:updated',
+      (evt: { userId: string; username: string; avatarUrl: string | null }) => {
+        setLocations((prev) =>
+          prev.map((loc) =>
+            loc.userId === evt.userId
+              ? { ...loc, username: evt.username, avatarUrl: evt.avatarUrl }
+              : loc,
+          ),
+        );
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.senderId === evt.userId
+              ? { ...m, senderUsername: evt.username, senderAvatarUrl: evt.avatarUrl }
+              : m,
+          ),
+        );
+        if (userProfile?.id === evt.userId) {
+          const updated = { ...userProfile, username: evt.username, avatarUrl: evt.avatarUrl };
+          setUserProfile(updated);
+          void saveStoredConfig({ user: updated });
+        }
+      },
+    );
 
     return () => {
       socket.disconnect();
@@ -283,15 +344,121 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     setChatText('');
   }
 
+  function openAccountModal() {
+    setEditUsername(userProfile?.username ?? '');
+    setEditEmail(userProfile?.email ?? '');
+    setEditAvatarUrl(userProfile?.avatarUrl ?? '');
+    setAccountError(null);
+    setAccountMessage(null);
+    setPasswordError(null);
+    setPasswordMessage(null);
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setAccountOpen(true);
+  }
+
+  async function handleSaveProfile() {
+    if (!serverUrl || !accessToken) return;
+    setAccountError(null);
+    setAccountMessage(null);
+    const trimmedAvatar = editAvatarUrl.trim();
+    if (trimmedAvatar && !isSafeAvatarUrl(trimmedAvatar)) {
+      setAccountError('Avatar must be a valid http(s) URL or raster image data URI.');
+      return;
+    }
+    setAccountBusy(true);
+    try {
+      const res = await fetch(`${serverUrl}/api/auth/me`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          username: editUsername.trim(),
+          email: editEmail.trim(),
+          avatarUrl: trimmedAvatar || null,
+        }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        accessToken?: string;
+        refreshToken?: string;
+        user?: MobileStoredConfig['user'];
+      };
+      if (!res.ok || !data.user) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setUserProfile(data.user);
+      await saveStoredConfig({
+        accessToken: data.accessToken ?? accessToken,
+        refreshToken: data.refreshToken ?? config.refreshToken,
+        user: data.user,
+      });
+      setLocations((prev) =>
+        prev.map((loc) =>
+          loc.userId === data.user!.id
+            ? { ...loc, username: data.user!.username, avatarUrl: data.user!.avatarUrl ?? null }
+            : loc,
+        ),
+      );
+      setAccountMessage('Profile saved');
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : 'Unable to save profile');
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function handleChangePassword() {
+    if (!serverUrl || !accessToken) return;
+    setPasswordError(null);
+    setPasswordMessage(null);
+    if (newPassword.length < 8) {
+      setPasswordError('New password must be at least 8 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New passwords do not match.');
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      const res = await fetch(`${serverUrl}/api/auth/password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = (await res.json()) as { error?: string; updated?: boolean };
+      if (!res.ok) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordMessage('Password updated');
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : 'Unable to change password');
+    } finally {
+      setPasswordBusy(false);
+    }
+  }
+
   const centerCoord: [number, number] = selfCoord
     ? selfCoord
     : locations[0]
       ? [locations[0].longitude, locations[0].latitude]
       : [13.4448, 52.5069];
 
+  const myUserId = userProfile?.id ?? config.user?.id;
   const showSelfMarker = Boolean(
-    selfCoord && !locations.some((loc) => loc.userId === config.user?.id && !loc.isFuzzed),
+    selfCoord && !locations.some((loc) => loc.userId === myUserId && !loc.isFuzzed),
   );
+  const selfAvatarUrl = isSafeAvatarUrl(userProfile?.avatarUrl) ? userProfile!.avatarUrl : null;
 
   return (
     <View style={styles.root}>
@@ -307,50 +474,68 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           <Marker id="self-live" lngLat={selfCoord}>
             <View style={styles.marker}>
               <Text style={styles.selfMarkerLabel}>You</Text>
-              <View style={styles.selfMarkerHalo}>
-                <View style={styles.selfMarkerDot} />
-              </View>
+              {selfAvatarUrl ? (
+                <View style={styles.avatarRingSelf}>
+                  <Image source={{ uri: selfAvatarUrl }} style={styles.markerAvatarImg} />
+                </View>
+              ) : (
+                <View style={styles.selfMarkerHalo}>
+                  <View style={styles.selfMarkerDot} />
+                </View>
+              )}
             </View>
           </Marker>
         )}
-        {locations.map((loc) => (
-          <Marker key={loc.userId} id={loc.userId} lngLat={[loc.longitude, loc.latitude]}>
-            <View style={styles.marker}>
-              <Text style={styles.markerLabel}>
-                {loc.username}
-                {loc.isFuzzed ? ' (~1km)' : ''}
-              </Text>
-              <View style={styles.markerHalo}>
-                <View
-                  style={[styles.markerDot, loc.isFuzzed ? styles.dotFuzzed : styles.dotExact]}
-                />
+        {locations.map((loc) => {
+          const pinAvatar =
+            loc.avatarUrl ?? (loc.userId === myUserId ? userProfile?.avatarUrl : null) ?? null;
+          const safePinAvatar = isSafeAvatarUrl(pinAvatar) ? pinAvatar : null;
+          return (
+            <Marker key={loc.userId} id={loc.userId} lngLat={[loc.longitude, loc.latitude]}>
+              <View style={styles.marker}>
+                <Text style={styles.markerLabel}>
+                  {loc.username}
+                  {loc.isFuzzed ? ' (~1km)' : ''}
+                </Text>
+                {safePinAvatar ? (
+                  <View style={[styles.avatarRing, loc.isFuzzed && styles.avatarRingFuzzed]}>
+                    <Image source={{ uri: safePinAvatar }} style={styles.markerAvatarImg} />
+                  </View>
+                ) : (
+                  <View style={styles.markerHalo}>
+                    <View
+                      style={[styles.markerDot, loc.isFuzzed ? styles.dotFuzzed : styles.dotExact]}
+                    />
+                  </View>
+                )}
               </View>
-            </View>
-          </Marker>
-        ))}
+            </Marker>
+          );
+        })}
       </Map>
 
       {/* Top Floating Search / Group Capsule & Filter Chips */}
       <View style={styles.topOverlay} pointerEvents="box-none">
         <View style={styles.topCapsule}>
-          <View style={styles.topBrandDot} />
+          <TouchableOpacity style={styles.topAvatarBtn} onPress={openAccountModal}>
+            {selfAvatarUrl ? (
+              <Image source={{ uri: selfAvatarUrl }} style={styles.topAvatarImg} />
+            ) : (
+              <Text style={styles.topAvatarInitial}>
+                {(userProfile?.username ?? 'U').slice(0, 1).toUpperCase()}
+              </Text>
+            )}
+          </TouchableOpacity>
           <View style={styles.topTitleWrap}>
             <Text style={styles.topTitle} numberOfLines={1}>
               {activeGroup?.name ?? 'LovedOnes'}
             </Text>
             <Text style={styles.topSubtitle} numberOfLines={1}>
-              {activeGroup ? `${activeGroup.myPrivacy} mode` : 'Live group map'}
+              {userProfile?.username ?? 'Account'} · {activeGroup ? `${activeGroup.myPrivacy}` : 'Live map'}
             </Text>
           </View>
-          <TouchableOpacity
-            style={styles.signOutPill}
-            onPress={async () => {
-              await stopBackgroundTracking().catch(() => {});
-              await clearStoredConfig();
-              onSignedOut();
-            }}
-          >
-            <Text style={styles.signOutText}>Sign Out</Text>
+          <TouchableOpacity style={styles.signOutPill} onPress={openAccountModal}>
+            <Text style={styles.signOutText}>Account</Text>
           </TouchableOpacity>
         </View>
 
@@ -452,20 +637,27 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.memberStrip}
             >
-              {locations.map((loc) => (
-                <View key={loc.userId} style={styles.memberChip}>
-                  <View
-                    style={[
-                      styles.memberChipDot,
-                      loc.isFuzzed ? styles.dotFuzzed : styles.dotExact,
-                    ]}
-                  />
-                  <Text style={styles.memberChipText}>
-                    {loc.username}
-                    {loc.isFuzzed ? ' ~1km' : ''}
-                  </Text>
-                </View>
-              ))}
+              {locations.map((loc) => {
+                const chipAvatar = isSafeAvatarUrl(loc.avatarUrl) ? loc.avatarUrl : null;
+                return (
+                  <View key={loc.userId} style={styles.memberChip}>
+                    {chipAvatar ? (
+                      <Image source={{ uri: chipAvatar }} style={styles.memberChipAvatar} />
+                    ) : (
+                      <View
+                        style={[
+                          styles.memberChipDot,
+                          loc.isFuzzed ? styles.dotFuzzed : styles.dotExact,
+                        ]}
+                      />
+                    )}
+                    <Text style={styles.memberChipText}>
+                      {loc.username}
+                      {loc.isFuzzed ? ' ~1km' : ''}
+                    </Text>
+                  </View>
+                );
+              })}
             </ScrollView>
           )}
 
@@ -520,6 +712,160 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               <Text style={styles.sendBtnText}>Send</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      {/* Account Settings Modal */}
+      <Modal
+        visible={accountOpen}
+        animationType="slide"
+        onRequestClose={() => setAccountOpen(false)}
+      >
+        <View style={styles.modalWrap}>
+          <View style={styles.modalHeader}>
+            <View>
+              <Text style={styles.modalTitle}>Account Settings</Text>
+              <Text style={styles.modalSubtitle}>Profile photo, name, email & password</Text>
+            </View>
+            <TouchableOpacity style={styles.closePill} onPress={() => setAccountOpen(false)}>
+              <Text style={styles.closeText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView contentContainerStyle={styles.settingsScroll}>
+            <View style={styles.settingsCard}>
+              <View style={styles.avatarPreviewRow}>
+                <View style={styles.settingsAvatarCircle}>
+                  {isSafeAvatarUrl(editAvatarUrl.trim()) ? (
+                    <Image
+                      source={{ uri: editAvatarUrl.trim() }}
+                      style={styles.settingsAvatarImg}
+                    />
+                  ) : (
+                    <Text style={styles.settingsAvatarInitial}>
+                      {(editUsername || userProfile?.username || 'U').slice(0, 1).toUpperCase()}
+                    </Text>
+                  )}
+                </View>
+                <View style={styles.avatarMeta}>
+                  <Text style={styles.settingsSectionTitle}>Profile Photo URL</Text>
+                  <Text style={styles.settingsHint}>
+                    Shown as a circle marker on your group maps.
+                  </Text>
+                  {Boolean(editAvatarUrl.trim()) && (
+                    <TouchableOpacity
+                      style={styles.removePhotoBtn}
+                      onPress={() => setEditAvatarUrl('')}
+                    >
+                      <Text style={styles.removePhotoText}>Remove Photo</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+
+              <Text style={styles.fieldLabel}>Photo URL</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={editAvatarUrl}
+                onChangeText={setEditAvatarUrl}
+                autoCapitalize="none"
+                placeholder="https://example.com/photo.jpg"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.fieldLabel}>Display Name</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={editUsername}
+                onChangeText={setEditUsername}
+                placeholder="Your name"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.fieldLabel}>Email Address</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={editEmail}
+                onChangeText={setEditEmail}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                placeholder="you@example.com"
+                placeholderTextColor="#94a3b8"
+              />
+
+              {accountError && <Text style={styles.errorText}>{accountError}</Text>}
+              {accountMessage && <Text style={styles.successText}>{accountMessage}</Text>}
+
+              <TouchableOpacity
+                style={styles.primaryBlackBtn}
+                disabled={accountBusy}
+                onPress={() => void handleSaveProfile()}
+              >
+                <Text style={styles.primaryBlackText}>
+                  {accountBusy ? 'Saving...' : 'Save Profile'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.settingsCard}>
+              <Text style={styles.settingsSectionTitle}>Change Password</Text>
+
+              <Text style={styles.fieldLabel}>Current Password</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={currentPassword}
+                onChangeText={setCurrentPassword}
+                secureTextEntry
+                placeholder="Current password"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.fieldLabel}>New Password</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={newPassword}
+                onChangeText={setNewPassword}
+                secureTextEntry
+                placeholder="Minimum 8 characters"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.fieldLabel}>Confirm New Password</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+                placeholder="Repeat new password"
+                placeholderTextColor="#94a3b8"
+              />
+
+              {passwordError && <Text style={styles.errorText}>{passwordError}</Text>}
+              {passwordMessage && <Text style={styles.successText}>{passwordMessage}</Text>}
+
+              <TouchableOpacity
+                style={styles.outlineBlackBtn}
+                disabled={passwordBusy}
+                onPress={() => void handleChangePassword()}
+              >
+                <Text style={styles.outlineBlackText}>
+                  {passwordBusy ? 'Updating...' : 'Update Password'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.signOutFullBtn}
+              onPress={async () => {
+                setAccountOpen(false);
+                await stopBackgroundTracking().catch(() => {});
+                await clearStoredConfig();
+                onSignedOut();
+              }}
+            >
+              <Text style={styles.signOutFullText}>Sign Out</Text>
+            </TouchableOpacity>
+          </ScrollView>
         </View>
       </Modal>
     </View>
@@ -611,6 +957,62 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 4 },
     elevation: 5,
+  },
+  topAvatarBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: '#18181b',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topAvatarImg: {
+    width: '100%',
+    height: '100%',
+  },
+  topAvatarInitial: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  avatarRing: {
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    borderWidth: 2.5,
+    borderColor: '#ffffff',
+    backgroundColor: '#18181b',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  avatarRingFuzzed: {
+    borderColor: '#d97706',
+  },
+  avatarRingSelf: {
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    borderWidth: 2.5,
+    borderColor: '#ffffff',
+    backgroundColor: '#18181b',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  markerAvatarImg: {
+    width: '100%',
+    height: '100%',
+  },
+  memberChipAvatar: {
+    width: 18,
+    height: 18,
+    borderRadius: 999,
   },
   topBrandDot: {
     width: 10,
@@ -924,4 +1326,82 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sendBtnText: { color: '#ffffff', fontWeight: '700', fontSize: 13 },
+  settingsScroll: { padding: 16, gap: 14, paddingBottom: 40 },
+  settingsCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    padding: 16,
+    gap: 10,
+  },
+  avatarPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 4,
+  },
+  settingsAvatarCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 999,
+    backgroundColor: '#18181b',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  settingsAvatarImg: { width: '100%', height: '100%' },
+  settingsAvatarInitial: { color: '#ffffff', fontSize: 22, fontWeight: '700' },
+  avatarMeta: { flex: 1, gap: 4 },
+  settingsSectionTitle: { color: '#18181b', fontSize: 14, fontWeight: '700' },
+  settingsHint: { color: '#71717a', fontSize: 12 },
+  removePhotoBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#f4f4f5',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginTop: 2,
+  },
+  removePhotoText: { color: '#18181b', fontSize: 11, fontWeight: '600' },
+  fieldLabel: { color: '#71717a', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+  fieldInput: {
+    backgroundColor: '#fafafa',
+    borderColor: '#e4e4e7',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: '#18181b',
+    fontSize: 14,
+  },
+  errorText: { color: '#be123c', fontSize: 12, fontWeight: '600' },
+  successText: { color: '#18181b', fontSize: 12, fontWeight: '600' },
+  primaryBlackBtn: {
+    backgroundColor: '#18181b',
+    borderRadius: 999,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  primaryBlackText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
+  outlineBlackBtn: {
+    backgroundColor: '#ffffff',
+    borderColor: '#18181b',
+    borderWidth: 1.5,
+    borderRadius: 999,
+    paddingVertical: 11,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  outlineBlackText: { color: '#18181b', fontSize: 13, fontWeight: '700' },
+  signOutFullBtn: {
+    backgroundColor: '#ffffff',
+    borderColor: '#fecdd3',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  signOutFullText: { color: '#be123c', fontSize: 13, fontWeight: '700' },
 });

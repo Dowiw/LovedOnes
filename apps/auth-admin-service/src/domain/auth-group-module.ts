@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import argon2 from 'argon2';
 import {
+  ChangePasswordSchema,
   CreateGroupSchema,
   CreateInviteSchema,
   CreateTrackerTokenSchema,
@@ -17,6 +18,7 @@ import {
   SystemRole,
   UpdateMemberRoleSchema,
   UpdatePrivacySchema,
+  UpdateProfileSchema,
 } from '@loved-ones/shared';
 import { DomainError, TokenPair, TokenService } from '@loved-ones/shared/auth';
 
@@ -26,6 +28,7 @@ export interface AccountRecord {
   username: string;
   passwordHash: string;
   role: SystemRole;
+  avatarUrl: string | null;
   createdAt: Date;
 }
 
@@ -48,6 +51,7 @@ export interface MembershipSummaryRecord {
 export interface GroupMemberEntry {
   userId: string;
   username: string;
+  avatarUrl: string | null;
   role: GroupRole;
   privacy: PrivacyMode;
   joinedAt: string;
@@ -103,6 +107,12 @@ export interface AuthGroupStore {
   ): Promise<T>;
   findAccountByEmail(email: string): Promise<AccountRecord | null>;
   findAccountById(id: string): Promise<PublicAccountRecord | null>;
+  findAccountWithPasswordById?(id: string): Promise<AccountRecord | null>;
+  updateAccountProfile?(
+    userId: string,
+    patch: { email?: string; username?: string; avatarUrl?: string | null },
+  ): Promise<{ status: 'ok'; account: PublicAccountRecord } | { status: 'email_conflict' } | { status: 'not_found' }>;
+  updateAccountPassword?(userId: string, passwordHash: string): Promise<boolean>;
   listAccountMemberships(userId: string): Promise<MembershipSummaryRecord[]>;
   listGroupsWithMembers(userId: string): Promise<GroupWithMembers[]>;
   findInviteByToken(token: string): Promise<InviteRecord | null>;
@@ -143,6 +153,12 @@ export interface SessionStore {
   saveTrackerTokenJti?(userId: string, jti: string, expiresInDays: number): Promise<void>;
   revokeTrackerTokenJti?(userId: string): Promise<void>;
   getTrackerTokenStatus?(userId: string): Promise<{ active: boolean; ttlSeconds: number }>;
+  publishProfileUpdated?(event: {
+    userId: string;
+    username: string;
+    avatarUrl: string | null;
+    groupIds: string[];
+  }): Promise<void>;
 }
 
 export interface PasswordHasher {
@@ -187,6 +203,7 @@ export interface AuthSuccessResult extends TokenPair {
     email: string;
     username: string;
     role: SystemRole;
+    avatarUrl: string | null;
     createdAt: string;
   };
 }
@@ -307,6 +324,7 @@ export class AuthGroupModule {
         email: createdUser.email,
         username: createdUser.username,
         role: createdUser.role,
+        avatarUrl: createdUser.avatarUrl,
         createdAt: createdUser.createdAt.toISOString(),
       },
       joinedGroup,
@@ -336,6 +354,7 @@ export class AuthGroupModule {
         email: account.email,
         username: account.username,
         role: account.role,
+        avatarUrl: account.avatarUrl,
         createdAt: account.createdAt.toISOString(),
       },
     };
@@ -377,6 +396,7 @@ export class AuthGroupModule {
         email: account.email,
         username: account.username,
         role: account.role,
+        avatarUrl: account.avatarUrl,
         createdAt: account.createdAt.toISOString(),
       },
       groups: memberships.map((g) => ({
@@ -387,6 +407,81 @@ export class AuthGroupModule {
         joinedAt: g.joinedAt.toISOString(),
       })),
     };
+  }
+
+  async updateProfile(userId: string, rawInput: unknown): Promise<AuthSuccessResult> {
+    const parsed = UpdateProfileSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid profile update payload', parsed.error.flatten());
+    }
+    if (!this.store.updateAccountProfile) {
+      throw new DomainError(501, 'Profile updates not supported by store');
+    }
+
+    const patch: { email?: string; username?: string; avatarUrl?: string | null } = {};
+    if (parsed.data.username !== undefined) patch.username = parsed.data.username;
+    if (parsed.data.email !== undefined) patch.email = parsed.data.email.toLowerCase();
+    if (parsed.data.avatarUrl !== undefined) patch.avatarUrl = parsed.data.avatarUrl;
+
+    const res = await this.store.updateAccountProfile(userId, patch);
+    if (res.status === 'not_found') {
+      throw new DomainError(404, 'User not found');
+    }
+    if (res.status === 'email_conflict') {
+      throw new DomainError(409, 'Email already registered');
+    }
+
+    const updated = res.account;
+    const [tokens, memberships] = await Promise.all([
+      this.issueAndPersistSession(updated),
+      this.store.listAccountMemberships(userId),
+    ]);
+
+    if (this.sessionStore.publishProfileUpdated) {
+      await this.sessionStore
+        .publishProfileUpdated({
+          userId: updated.id,
+          username: updated.username,
+          avatarUrl: updated.avatarUrl,
+          groupIds: memberships.map((m) => m.groupId),
+        })
+        .catch(() => {});
+    }
+
+    return {
+      ...tokens,
+      user: {
+        id: updated.id,
+        email: updated.email,
+        username: updated.username,
+        role: updated.role,
+        avatarUrl: updated.avatarUrl,
+        createdAt: updated.createdAt.toISOString(),
+      },
+    };
+  }
+
+  async changePassword(userId: string, rawInput: unknown): Promise<{ updated: true }> {
+    const parsed = ChangePasswordSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid password change payload', parsed.error.flatten());
+    }
+    if (!this.store.findAccountWithPasswordById || !this.store.updateAccountPassword) {
+      throw new DomainError(501, 'Password updates not supported by store');
+    }
+
+    const account = await this.store.findAccountWithPasswordById(userId);
+    if (!account) {
+      throw new DomainError(404, 'User not found');
+    }
+    const valid = await this.passwordHasher.verify(account.passwordHash, parsed.data.currentPassword);
+    if (!valid) {
+      throw new DomainError(401, 'Current password is incorrect');
+    }
+
+    const nextHash = await this.passwordHasher.hash(parsed.data.newPassword);
+    await this.store.updateAccountPassword(userId, nextHash);
+    return { updated: true };
   }
 
   async previewInvite(token: string) {

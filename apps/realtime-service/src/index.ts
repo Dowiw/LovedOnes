@@ -7,7 +7,7 @@ import { Redis } from 'ioredis';
 import pg from 'pg';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { createPool, runMigrations } from '@loved-ones/db';
-import { JwtUserPayload } from '@loved-ones/shared';
+import { JwtUserPayload, MemberProfileUpdatedSchema } from '@loved-ones/shared';
 import {
   attachAuthAndTelemetry,
   AuthenticatedRequest,
@@ -25,6 +25,7 @@ import {
   recordUserTelemetry,
   TRACKER_JTI_USER_PREFIX,
   trackUserSocket,
+  USER_PROFILE_UPDATED_CHANNEL,
 } from '@loved-ones/shared/telemetry';
 import {
   PostgresRealtimeStore,
@@ -130,10 +131,27 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     broadcaster: new SocketIoBroadcaster(io),
   });
 
-  logSubClient.on('message', (_channel, message) => {
-    io.to('admin:logs').emit('logs:line', message);
+  logSubClient.on('message', (channel, message) => {
+    if (channel === LOGS_STREAM_CHANNEL) {
+      io.to('admin:logs').emit('logs:line', message);
+      return;
+    }
+    if (channel === USER_PROFILE_UPDATED_CHANNEL) {
+      try {
+        const parsed = MemberProfileUpdatedSchema.parse(JSON.parse(message));
+        for (const gid of parsed.groupIds) {
+          io.to(`group:${gid}`).emit('member:profile:updated', {
+            userId: parsed.userId,
+            username: parsed.username,
+            avatarUrl: parsed.avatarUrl,
+          });
+        }
+      } catch {
+        // Ignore malformed profile update pub/sub payloads
+      }
+    }
   });
-  await logSubClient.subscribe(LOGS_STREAM_CHANNEL);
+  await logSubClient.subscribe(LOGS_STREAM_CHANNEL, USER_PROFILE_UPDATED_CHANNEL);
 
   // ---- REST Routes ----
 

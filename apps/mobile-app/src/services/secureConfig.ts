@@ -5,6 +5,7 @@ export interface MobileUser {
   email: string;
   username: string;
   role: SystemRole;
+  avatarUrl?: string | null;
 }
 
 export interface MobileStoredConfig {

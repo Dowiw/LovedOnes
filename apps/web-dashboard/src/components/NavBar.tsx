@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Activity, LogOut, MapPin, QrCode } from 'lucide-react';
+import { isSafeAvatarUrl } from '@loved-ones/shared';
 import { AuthUser } from '@/lib/api';
 
 interface NavBarProps {
@@ -67,8 +68,16 @@ export function NavBar({ user, onSignOut }: NavBarProps) {
         {user && (
           <div className="flex items-center gap-2">
             <div className="hidden items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs sm:flex">
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-bold text-white">
-                {user.username.slice(0, 1).toUpperCase()}
+              <span className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full bg-zinc-900 text-[10px] font-bold text-white">
+                {isSafeAvatarUrl(user.avatarUrl) ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.username}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  user.username.slice(0, 1).toUpperCase()
+                )}
               </span>
               <span className="font-medium text-zinc-900">{user.username}</span>
               <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-500">

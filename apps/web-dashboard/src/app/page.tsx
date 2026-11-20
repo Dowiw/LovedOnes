@@ -24,18 +24,21 @@ import {
   Radio,
   Route,
   Send,
+  Settings,
   Trash2,
   Users,
   X,
 } from 'lucide-react';
-import type {
-  ChatMessage,
-  GroupPlace,
-  LocationBroadcast,
-  LocationRequestItem,
-  PlaceTransitionEvent,
-  PrivacyMode,
+import {
+  isSafeAvatarUrl,
+  type ChatMessage,
+  type GroupPlace,
+  type LocationBroadcast,
+  type LocationRequestItem,
+  type PlaceTransitionEvent,
+  type PrivacyMode,
 } from '@loved-ones/shared';
+import { AccountSettingsModal } from '@/components/AccountSettingsModal';
 import { MapCanvas, type MapLabelLanguage } from '@/components/MapCanvas';
 import {
   apiCreateGroup,
@@ -49,6 +52,7 @@ import {
   apiFetchGroups,
   apiFetchGroupTrails,
   apiFetchLocationRequests,
+  apiGetMe,
   apiGetTrackerTokenStatus,
   apiLogin,
   apiRegister,
@@ -137,6 +141,7 @@ export default function HomePage() {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('people');
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
   const [creditsOpen, setCreditsOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
   useEffect(() => {
     setSession(loadSession());
@@ -182,14 +187,25 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!session) return;
-    void refreshGroups(session.accessToken).catch(() => {});
-    void apiGetTrackerTokenStatus(session.accessToken)
+    const token = session.accessToken;
+    void refreshGroups(token).catch(() => {});
+    void apiGetMe(token)
+      .then((res) => {
+        setSession((prev) => {
+          if (!prev || prev.accessToken !== token) return prev;
+          const next: StoredSession = { ...prev, user: res.user };
+          saveSession(next);
+          return next;
+        });
+      })
+      .catch(() => {});
+    void apiGetTrackerTokenStatus(token)
       .then((st) => {
         setTrackerActive(st.active);
         setTrackerTtlSeconds(st.ttlSeconds);
       })
       .catch(() => {});
-  }, [session, refreshGroups]);
+  }, [session?.accessToken, refreshGroups]);
 
   function handleCopyText(key: string, value: string) {
     void navigator.clipboard.writeText(value);
@@ -292,11 +308,50 @@ export default function HomePage() {
       setPlaces(payload.places);
     });
 
+    socket.on(
+      'member:profile:updated',
+      (evt: { userId: string; username: string; avatarUrl: string | null }) => {
+        setLocations((prev) =>
+          prev.map((loc) =>
+            loc.userId === evt.userId
+              ? { ...loc, username: evt.username, avatarUrl: evt.avatarUrl }
+              : loc,
+          ),
+        );
+        setGroups((prev) =>
+          prev.map((grp) => ({
+            ...grp,
+            members: grp.members.map((m) =>
+              m.userId === evt.userId
+                ? { ...m, username: evt.username, avatarUrl: evt.avatarUrl }
+                : m,
+            ),
+          })),
+        );
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.senderId === evt.userId
+              ? { ...m, senderUsername: evt.username, senderAvatarUrl: evt.avatarUrl }
+              : m,
+          ),
+        );
+        setSession((prev) => {
+          if (!prev || prev.user.id !== evt.userId) return prev;
+          const next: StoredSession = {
+            ...prev,
+            user: { ...prev.user, username: evt.username, avatarUrl: evt.avatarUrl },
+          };
+          saveSession(next);
+          return next;
+        });
+      },
+    );
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [session, activeGroup]);
+  }, [session?.accessToken, activeGroup]);
 
   // Fetch snapshots when active group changes
   useEffect(() => {
@@ -749,6 +804,7 @@ export default function HomePage() {
         selectedUserId={selectedUserId}
         selectedPlaceId={selectedPlaceId}
         currentUserId={session.user.id}
+        currentUserAvatarUrl={session.user.avatarUrl ?? null}
         selfLocation={selfLocation}
         focusCoords={focusCoords}
         labelLanguage={labelLanguage}
@@ -792,6 +848,16 @@ export default function HomePage() {
               }`}
             >
               <KeyRound className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setAccountSettingsOpen(true)}
+              title="Account Settings"
+              className={`rounded-full p-2 transition ${
+                accountSettingsOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+              }`}
+            >
+              <Settings className="h-3.5 w-3.5" />
             </button>
             {session.user.role === 'HOST_ADMIN' && (
               <>
@@ -1132,8 +1198,16 @@ export default function HomePage() {
                       onClick={() => setSelectedUserId(loc.userId)}
                       className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white">
-                        {loc.username.slice(0, 1).toUpperCase()}
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-900 text-xs font-bold text-white">
+                        {isSafeAvatarUrl(loc.avatarUrl) ? (
+                          <img
+                            src={loc.avatarUrl}
+                            alt={loc.username}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          loc.username.slice(0, 1).toUpperCase()
+                        )}
                       </span>
                       <div className="min-w-0">
                         <div className="truncate text-xs font-semibold text-zinc-900">
@@ -1433,21 +1507,44 @@ export default function HomePage() {
 
       {/* Bottom-Left Floating Profile Pill & Map Credits */}
       <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-end gap-2 sm:bottom-4 sm:left-4 sm:flex">
-        <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-white/75 bg-white/90 py-1.5 pl-2 pr-3 shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white">
-            {session.user.username.slice(0, 1).toUpperCase()}
-          </span>
-          <div className="leading-tight">
-            <div className="text-xs font-semibold text-zinc-900">{session.user.username}</div>
-            <div className="text-[10px] text-zinc-500">
-              {session.user.role === 'HOST_ADMIN' ? 'Host Admin' : 'Member'}
+        <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/75 bg-white/90 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+          <button
+            type="button"
+            onClick={() => setAccountSettingsOpen(true)}
+            title="Account settings & profile photo"
+            className="flex items-center gap-2.5 rounded-full pr-1 text-left transition hover:opacity-85"
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-900 text-xs font-bold text-white">
+              {isSafeAvatarUrl(session.user.avatarUrl) ? (
+                <img
+                  src={session.user.avatarUrl}
+                  alt={session.user.username}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                session.user.username.slice(0, 1).toUpperCase()
+              )}
+            </span>
+            <div className="leading-tight">
+              <div className="text-xs font-semibold text-zinc-900">{session.user.username}</div>
+              <div className="text-[10px] text-zinc-500">
+                {session.user.role === 'HOST_ADMIN' ? 'Host Admin · Settings' : 'Account Settings'}
+              </div>
             </div>
-          </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setAccountSettingsOpen(true)}
+            title="Account settings"
+            className="rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={handleSignOut}
             title="Sign out"
-            className="ml-1 rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
+            className="rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
           >
             <LogOut className="h-3.5 w-3.5" />
           </button>
@@ -1547,6 +1644,31 @@ export default function HomePage() {
           </button>
         ))}
       </div>
+      <AccountSettingsModal
+        open={accountSettingsOpen}
+        session={session}
+        onClose={() => setAccountSettingsOpen(false)}
+        onSessionUpdated={(next) => {
+          setSession(next);
+          setLocations((prev) =>
+            prev.map((loc) =>
+              loc.userId === next.user.id
+                ? { ...loc, username: next.user.username, avatarUrl: next.user.avatarUrl ?? null }
+                : loc,
+            ),
+          );
+          setGroups((prev) =>
+            prev.map((grp) => ({
+              ...grp,
+              members: grp.members.map((m) =>
+                m.userId === next.user.id
+                  ? { ...m, username: next.user.username, avatarUrl: next.user.avatarUrl ?? null }
+                  : m,
+              ),
+            })),
+          );
+        }}
+      />
     </div>
   );
 }

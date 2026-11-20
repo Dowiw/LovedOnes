@@ -9,6 +9,7 @@ import {
   getUserTelemetryFromRedis,
   SESSION_USER_PREFIX,
   TRACKER_JTI_USER_PREFIX,
+  USER_PROFILE_UPDATED_CHANNEL,
 } from '@loved-ones/shared/telemetry';
 import {
   AccountRecord,
@@ -30,6 +31,7 @@ interface PgUserRow {
   username: string;
   password_hash: string;
   role: SystemRole;
+  avatar_url: string | null;
   created_at: Date;
 }
 
@@ -51,6 +53,7 @@ function mapPublicAccount(row: Omit<PgUserRow, 'password_hash'>): PublicAccountR
     email: row.email,
     username: row.username,
     role: row.role,
+    avatarUrl: row.avatar_url ?? null,
     createdAt: row.created_at,
   };
 }
@@ -78,7 +81,7 @@ function createTxStore(client: pg.PoolClient): AuthGroupTxStore {
   return {
     async findAccountByEmail(email: string): Promise<AccountRecord | null> {
       const res = await client.query<PgUserRow>(
-        'SELECT id, email, username, password_hash, role, created_at FROM users WHERE LOWER(email) = LOWER($1)',
+        'SELECT id, email, username, password_hash, role, avatar_url, created_at FROM users WHERE LOWER(email) = LOWER($1)',
         [email],
       );
       return res.rows[0] ? mapAccount(res.rows[0]) : null;
@@ -93,7 +96,7 @@ function createTxStore(client: pg.PoolClient): AuthGroupTxStore {
       const res = await client.query<Omit<PgUserRow, 'password_hash'>>(
         `INSERT INTO users (email, username, password_hash, role)
          VALUES ($1, $2, $3, $4)
-         RETURNING id, email, username, role, created_at`,
+         RETURNING id, email, username, role, avatar_url, created_at`,
         [input.email, input.username, input.passwordHash, input.role],
       );
       return mapPublicAccount(res.rows[0]);
@@ -172,7 +175,7 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
 
   async findAccountByEmail(email: string): Promise<AccountRecord | null> {
     const res = await this.pool.query<PgUserRow>(
-      `SELECT id, email, username, password_hash, role, created_at
+      `SELECT id, email, username, password_hash, role, avatar_url, created_at
        FROM users WHERE LOWER(email) = LOWER($1)`,
       [email],
     );
@@ -181,10 +184,81 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
 
   async findAccountById(id: string): Promise<PublicAccountRecord | null> {
     const res = await this.pool.query<Omit<PgUserRow, 'password_hash'>>(
-      'SELECT id, email, username, role, created_at FROM users WHERE id = $1',
+      'SELECT id, email, username, role, avatar_url, created_at FROM users WHERE id = $1',
       [id],
     );
     return res.rows[0] ? mapPublicAccount(res.rows[0]) : null;
+  }
+
+  async findAccountWithPasswordById(id: string): Promise<AccountRecord | null> {
+    const res = await this.pool.query<PgUserRow>(
+      'SELECT id, email, username, password_hash, role, avatar_url, created_at FROM users WHERE id = $1',
+      [id],
+    );
+    return res.rows[0] ? mapAccount(res.rows[0]) : null;
+  }
+
+  async updateAccountProfile(
+    userId: string,
+    patch: { email?: string; username?: string; avatarUrl?: string | null },
+  ): Promise<
+    { status: 'ok'; account: PublicAccountRecord } | { status: 'email_conflict' } | { status: 'not_found' }
+  > {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+
+    if (patch.username !== undefined) {
+      params.push(patch.username);
+      sets.push(`username = $${params.length}`);
+    }
+    if (patch.email !== undefined) {
+      params.push(patch.email);
+      sets.push(`email = $${params.length}`);
+    }
+    if (patch.avatarUrl !== undefined) {
+      params.push(patch.avatarUrl);
+      sets.push(`avatar_url = $${params.length}`);
+    }
+
+    if (sets.length === 0) {
+      const current = await this.findAccountById(userId);
+      return current ? { status: 'ok', account: current } : { status: 'not_found' };
+    }
+
+    if (patch.email !== undefined) {
+      const dup = await this.pool.query<{ id: string }>(
+        'SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND id <> $2 LIMIT 1',
+        [patch.email, userId],
+      );
+      if (dup.rows.length > 0) {
+        return { status: 'email_conflict' };
+      }
+    }
+
+    params.push(userId);
+    try {
+      const res = await this.pool.query<Omit<PgUserRow, 'password_hash'>>(
+        `UPDATE users SET ${sets.join(', ')}
+         WHERE id = $${params.length}
+         RETURNING id, email, username, role, avatar_url, created_at`,
+        params,
+      );
+      const row = res.rows[0];
+      return row ? { status: 'ok', account: mapPublicAccount(row) } : { status: 'not_found' };
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        return { status: 'email_conflict' };
+      }
+      throw err;
+    }
+  }
+
+  async updateAccountPassword(userId: string, passwordHash: string): Promise<boolean> {
+    const res = await this.pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [
+      passwordHash,
+      userId,
+    ]);
+    return (res.rowCount ?? 0) > 0;
   }
 
   async listAccountMemberships(userId: string): Promise<MembershipSummaryRecord[]> {
@@ -235,11 +309,12 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
         group_id: string;
         user_id: string;
         username: string;
+        avatar_url: string | null;
         role: GroupRole;
         privacy: PrivacyMode;
         joined_at: Date;
       }>(
-        `SELECT gm.group_id, gm.user_id, u.username, gm.role, gm.privacy, gm.joined_at
+        `SELECT gm.group_id, gm.user_id, u.username, u.avatar_url, gm.role, gm.privacy, gm.joined_at
          FROM group_memberships gm
          JOIN users u ON u.id = gm.user_id
          WHERE gm.group_id = ANY($1::uuid[])
@@ -252,6 +327,7 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
         list.push({
           userId: row.user_id,
           username: row.username,
+          avatarUrl: row.avatar_url ?? null,
           role: row.role,
           privacy: row.privacy,
           joinedAt: row.joined_at.toISOString(),
@@ -425,6 +501,15 @@ export class RedisSessionStore implements SessionStore {
       active: Boolean(val) && ttl > 0,
       ttlSeconds: ttl > 0 ? ttl : 0,
     };
+  }
+
+  async publishProfileUpdated(event: {
+    userId: string;
+    username: string;
+    avatarUrl: string | null;
+    groupIds: string[];
+  }): Promise<void> {
+    await this.redis.publish(USER_PROFILE_UPDATED_CHANNEL, JSON.stringify(event));
   }
 }
 

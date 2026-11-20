@@ -351,6 +351,7 @@ function createInMemoryRealtimeHarness() {
   const mod = new RealtimeModule({ store, broadcaster, now: () => currentNowMs });
   return {
     mod,
+    store,
     locationBroadcasts,
     chatBroadcasts,
     checkinRequestBroadcasts,
@@ -874,5 +875,21 @@ describe('RealtimeModule domain interface', () => {
     // Cleanup place
     await mod.deleteGroupPlace(outsider, GROUP_EXACT, home.id);
     expect((await mod.listGroupPlaces(outsider, GROUP_EXACT)).places).toHaveLength(0);
+  });
+
+  it('includes latest profile avatarUrl and updated username on live location broadcasts', async () => {
+    const harness = createInMemoryRealtimeHarness();
+    harness.store.getUserProfile = async () => ({
+      username: 'Alice New',
+      avatarUrl: 'https://cdn.example.com/alice.png',
+    });
+
+    await harness.mod.ingestLocationBatch(alice, {
+      points: [{ latitude: 52.52, longitude: 13.405, recordedAt: '2026-11-19T12:00:00.000Z' }],
+    });
+
+    expect(harness.locationBroadcasts.length).toBeGreaterThan(0);
+    expect(harness.locationBroadcasts[0]?.username).toBe('Alice New');
+    expect(harness.locationBroadcasts[0]?.avatarUrl).toBe('https://cdn.example.com/alice.png');
   });
 });

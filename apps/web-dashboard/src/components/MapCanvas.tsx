@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
-import type { GroupPlace, LocationBroadcast } from '@loved-ones/shared';
+import { isSafeAvatarUrl, type GroupPlace, type LocationBroadcast } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
 
 let pmtilesProtocolRegistered = false;
@@ -75,6 +75,7 @@ interface MapCanvasProps {
   selectedUserId?: string | null;
   selectedPlaceId?: string | null;
   currentUserId?: string | null;
+  currentUserAvatarUrl?: string | null;
   selfLocation?: SelfLocationFix | null;
   focusCoords?: FocusCoordsRequest | null;
   labelLanguage?: MapLabelLanguage;
@@ -90,6 +91,7 @@ export function MapCanvas({
   selectedUserId,
   selectedPlaceId,
   currentUserId = null,
+  currentUserAvatarUrl = null,
   selfLocation = null,
   focusCoords = null,
   labelLanguage = 'en',
@@ -99,7 +101,7 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const styleReadyRef = useRef(false);
-  const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const markersRef = useRef<Map<string, { marker: maplibregl.Marker; signature: string }>>(new Map());
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const selfMarkerRef = useRef<maplibregl.Marker | null>(null);
   const hasAutoFramedRef = useRef(false);
@@ -169,8 +171,8 @@ export function MapCanvas({
 
     return () => {
       styleReadyRef.current = false;
-      for (const marker of markersRef.current.values()) {
-        marker.remove();
+      for (const entry of markersRef.current.values()) {
+        entry.marker.remove();
       }
       markersRef.current.clear();
       for (const marker of placeMarkersRef.current.values()) {
@@ -195,11 +197,21 @@ export function MapCanvas({
       activeIds.add(loc.userId);
       bounds.extend([loc.longitude, loc.latitude]);
 
+      const resolvedAvatar =
+        loc.avatarUrl ?? (loc.userId === currentUserId ? currentUserAvatarUrl : null) ?? null;
+      const safeAvatar = isSafeAvatarUrl(resolvedAvatar) ? resolvedAvatar : null;
       const safeUser = escapeHtml(loc.username);
+      const signature = `${loc.username}|${safeAvatar ?? ''}|${loc.isFuzzed ? '1' : '0'}`;
       const existing = markersRef.current.get(loc.userId);
+      const popupAvatarHtml = safeAvatar
+        ? `<img src="${escapeHtml(safeAvatar)}" alt="${safeUser}" class="h-7 w-7 rounded-full object-cover border border-zinc-200 shrink-0" />`
+        : '';
       const popupHtml = `
         <div class="text-xs space-y-1">
-          <div class="font-semibold text-zinc-900">${safeUser}</div>
+          <div class="flex items-center gap-2">
+            ${popupAvatarHtml}
+            <div class="font-semibold text-zinc-900">${safeUser}</div>
+          </div>
           <div class="text-zinc-600">${loc.privacyMode}${loc.isFuzzed ? ' · ~1 km area' : ' · Exact'}</div>
           ${loc.batteryLevel !== null && loc.batteryLevel !== undefined ? `<div class="text-zinc-500">Battery ${loc.batteryLevel}%</div>` : ''}
           <div class="font-mono text-[11px] text-zinc-500">${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}</div>
@@ -207,10 +219,12 @@ export function MapCanvas({
         </div>
       `;
 
-      if (existing) {
-        existing.setLngLat([loc.longitude, loc.latitude]);
-        existing.getPopup()?.setHTML(popupHtml);
+      if (existing && existing.signature === signature) {
+        existing.marker.setLngLat([loc.longitude, loc.latitude]);
+        existing.marker.getPopup()?.setHTML(popupHtml);
       } else {
+        existing?.marker.remove();
+
         const el = document.createElement('div');
         el.className = 'flex flex-col items-center cursor-pointer select-none';
 
@@ -219,29 +233,58 @@ export function MapCanvas({
           'mb-1.5 rounded-full border border-slate-200/90 bg-white/95 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-900 shadow-md backdrop-blur';
         pill.textContent = loc.username;
 
-        const ring = document.createElement('div');
-        ring.className = `flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg ring-4 ${
-          loc.isFuzzed ? 'ring-amber-400/35' : 'ring-zinc-900/20'
-        }`;
+        if (safeAvatar) {
+          const avatarWrap = document.createElement('div');
+          avatarWrap.className = `relative h-10 w-10 rounded-full border-2 border-white bg-white shadow-lg ring-4 ${
+            loc.isFuzzed ? 'ring-amber-400/50' : 'ring-zinc-900/25'
+          }`;
 
-        const core = document.createElement('div');
-        core.className = `h-3 w-3 rounded-full ${
-          loc.isFuzzed ? 'bg-amber-500' : 'bg-zinc-900'
-        }`;
-        ring.appendChild(core);
-        el.append(pill, ring);
+          const clip = document.createElement('div');
+          clip.className =
+            'flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-zinc-900 text-xs font-bold text-white';
+
+          const img = document.createElement('img');
+          img.src = safeAvatar;
+          img.alt = loc.username;
+          img.className = 'h-full w-full object-cover';
+          img.onerror = () => {
+            img.remove();
+            clip.textContent = loc.username.slice(0, 1).toUpperCase();
+          };
+          clip.appendChild(img);
+
+          const statusDot = document.createElement('span');
+          statusDot.className = `absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white ${
+            loc.isFuzzed ? 'bg-amber-500' : 'bg-zinc-950'
+          }`;
+
+          avatarWrap.append(clip, statusDot);
+          el.append(pill, avatarWrap);
+        } else {
+          const ring = document.createElement('div');
+          ring.className = `flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg ring-4 ${
+            loc.isFuzzed ? 'ring-amber-400/35' : 'ring-zinc-900/20'
+          }`;
+
+          const core = document.createElement('div');
+          core.className = `h-3 w-3 rounded-full ${
+            loc.isFuzzed ? 'bg-amber-500' : 'bg-zinc-900'
+          }`;
+          ring.appendChild(core);
+          el.append(pill, ring);
+        }
 
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([loc.longitude, loc.latitude])
           .setPopup(new maplibregl.Popup({ offset: 18 }).setHTML(popupHtml))
           .addTo(map);
-        markersRef.current.set(loc.userId, marker);
+        markersRef.current.set(loc.userId, { marker, signature });
       }
     }
 
-    for (const [uid, marker] of markersRef.current.entries()) {
+    for (const [uid, entry] of markersRef.current.entries()) {
       if (!activeIds.has(uid)) {
-        marker.remove();
+        entry.marker.remove();
         markersRef.current.delete(uid);
       }
     }
@@ -262,7 +305,7 @@ export function MapCanvas({
         map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 600 });
       }
     }
-  }, [locations, selectedUserId]);
+  }, [locations, selectedUserId, currentUserId, currentUserAvatarUrl]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -303,24 +346,41 @@ export function MapCanvas({
       el.appendChild(pill);
     }
 
+    const safeSelfAvatar =
+      !hasExactServerMarker && isSafeAvatarUrl(currentUserAvatarUrl) ? currentUserAvatarUrl : null;
     const pulseWrap = document.createElement('div');
-    pulseWrap.className = 'relative flex h-7 w-7 items-center justify-center';
+    pulseWrap.className = safeSelfAvatar
+      ? 'relative flex h-10 w-10 items-center justify-center'
+      : 'relative flex h-7 w-7 items-center justify-center';
     const halo = document.createElement('div');
     halo.className = 'absolute inset-0 animate-ping rounded-full bg-zinc-900/35';
-    const puck = document.createElement('div');
-    puck.className =
-      'relative flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-zinc-950 shadow-lg ring-4 ring-zinc-900/20';
-    const dot = document.createElement('div');
-    dot.className = 'h-2 w-2 rounded-full bg-white';
-    puck.appendChild(dot);
-    pulseWrap.append(halo, puck);
+
+    if (safeSelfAvatar) {
+      const puck = document.createElement('div');
+      puck.className =
+        'relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border-2 border-white bg-zinc-950 shadow-lg ring-4 ring-zinc-900/25';
+      const img = document.createElement('img');
+      img.src = safeSelfAvatar;
+      img.alt = 'You';
+      img.className = 'h-full w-full object-cover';
+      puck.appendChild(img);
+      pulseWrap.append(halo, puck);
+    } else {
+      const puck = document.createElement('div');
+      puck.className =
+        'relative flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-zinc-950 shadow-lg ring-4 ring-zinc-900/20';
+      const dot = document.createElement('div');
+      dot.className = 'h-2 w-2 rounded-full bg-white';
+      puck.appendChild(dot);
+      pulseWrap.append(halo, puck);
+    }
     el.appendChild(pulseWrap);
 
     selfMarkerRef.current = new maplibregl.Marker({ element: el })
       .setLngLat([selfLocation.longitude, selfLocation.latitude])
       .setPopup(new maplibregl.Popup({ offset: 18 }).setHTML(popupHtml))
       .addTo(map);
-  }, [selfLocation, currentUserId, locations]);
+  }, [selfLocation, currentUserId, currentUserAvatarUrl, locations]);
 
   useEffect(() => {
     const map = mapRef.current;

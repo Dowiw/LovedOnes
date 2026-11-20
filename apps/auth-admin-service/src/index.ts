@@ -92,7 +92,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     maxLogStorageMb,
   });
 
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
   await app.register(cors, {
     origin: true,
     credentials: true,
@@ -153,6 +153,18 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
 
   app.get('/api/auth/me', { preHandler: [requireAuth] }, async (request: AuthenticatedRequest) => {
     return authGroup.getMe(request.authUser!.id);
+  });
+
+  app.patch('/api/auth/me', { preHandler: [requireAuth] }, async (request: AuthenticatedRequest) => {
+    const result = await authGroup.updateProfile(request.authUser!.id, request.body);
+    loggerHandle.logger.info({ userId: request.authUser!.id }, 'user profile updated');
+    return result;
+  });
+
+  app.post('/api/auth/password', { preHandler: [requireAuth] }, async (request: AuthenticatedRequest) => {
+    const result = await authGroup.changePassword(request.authUser!.id, request.body);
+    loggerHandle.logger.info({ userId: request.authUser!.id }, 'user password changed');
+    return result;
   });
 
   app.get(

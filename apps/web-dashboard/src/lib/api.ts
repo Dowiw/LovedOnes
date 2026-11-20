@@ -17,6 +17,7 @@ export interface AuthUser {
   email: string;
   username: string;
   role: SystemRole;
+  avatarUrl?: string | null;
   createdAt?: string;
 }
 
@@ -29,6 +30,7 @@ export interface StoredSession {
 export interface GroupMember {
   userId: string;
   username: string;
+  avatarUrl?: string | null;
   role: GroupRole;
   privacy: PrivacyMode;
   joinedAt: string;
@@ -177,6 +179,37 @@ export async function apiRegister(input: {
   const { authBase } = getServiceBaseUrls();
   return requestJson<StoredSession>(`${authBase}/api/auth/register`, {
     method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function apiGetMe(accessToken: string): Promise<{ user: AuthUser }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson<{ user: AuthUser }>(`${authBase}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export async function apiUpdateProfile(
+  accessToken: string,
+  input: { username?: string; email?: string; avatarUrl?: string | null },
+): Promise<StoredSession> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson<StoredSession>(`${authBase}/api/auth/me`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function apiChangePassword(
+  accessToken: string,
+  input: { currentPassword: string; newPassword: string },
+): Promise<{ updated: boolean }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson<{ updated: boolean }>(`${authBase}/api/auth/password`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify(input),
   });
 }

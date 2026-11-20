@@ -203,5 +203,57 @@ describe('@loved-ones/auth-admin-service integration', () => {
       });
     });
     expect(JSON.parse(receivedLine).service).toBe('auth-admin-service');
+
+    // 11. Account Settings: update username, email, avatarUrl & password
+    const avatarPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/auth/me',
+      headers: { Authorization: `Bearer ${memberData.accessToken}` },
+      payload: {
+        username: 'FamilyRenamed',
+        email: 'member.new@lovedones.test',
+        avatarUrl: avatarPng,
+      },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    const patched = patchRes.json();
+    expect(patched.user.username).toBe('FamilyRenamed');
+    expect(patched.user.email).toBe('member.new@lovedones.test');
+    expect(patched.user.avatarUrl).toBe(avatarPng);
+    expect(patched.accessToken).toBeTypeOf('string');
+
+    const badPwRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+      payload: {
+        currentPassword: 'WrongPassword',
+        newPassword: 'MemberNewPassword456',
+      },
+    });
+    expect(badPwRes.statusCode).toBe(401);
+
+    const okPwRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+      payload: {
+        currentPassword: 'MemberPassword123',
+        newPassword: 'MemberNewPassword456',
+      },
+    });
+    expect(okPwRes.statusCode).toBe(200);
+
+    const loginNewRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: {
+        email: 'member.new@lovedones.test',
+        password: 'MemberNewPassword456',
+      },
+    });
+    expect(loginNewRes.statusCode).toBe(200);
+    expect(loginNewRes.json().user.avatarUrl).toBe(avatarPng);
   });
 });

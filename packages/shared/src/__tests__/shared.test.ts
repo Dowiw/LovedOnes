@@ -4,8 +4,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   applyPrivacyFuzzing,
+  ChangePasswordSchema,
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
+  isSafeAvatarUrl,
   LocationBatchSchema,
   LocationSnapshotQuerySchema,
   normalizeOverlandToPoints,
@@ -15,6 +17,7 @@ import {
   QrInvitePayloadSchema,
   RespondLocationRequestSchema,
   TrailQuerySchema,
+  UpdateProfileSchema,
 } from '../index.js';
 import { createServiceLogger } from '../logger.js';
 import {
@@ -284,6 +287,35 @@ describe('@loved-ones/shared', () => {
         longitude: 13.405,
         radiusMeters: 5,
       }).success,
+    ).toBe(false);
+  });
+
+  it('validates account profile updates, password changes, and safe avatar URL allowlists', () => {
+    expect(isSafeAvatarUrl('https://cdn.example.com/avatar.png')).toBe(true);
+    expect(isSafeAvatarUrl('data:image/webp;base64,UklGRh4AAABXRUJQ')).toBe(true);
+    expect(isSafeAvatarUrl('data:image/svg+xml;base64,PHN2Zz4=')).toBe(false);
+    expect(isSafeAvatarUrl('javascript:alert(1)')).toBe(false);
+
+    expect(
+      UpdateProfileSchema.parse({
+        username: 'Alex',
+        email: 'alex@example.com',
+        avatarUrl: 'https://cdn.example.com/alex.jpg',
+      }).username,
+    ).toBe('Alex');
+    expect(UpdateProfileSchema.parse({ avatarUrl: null }).avatarUrl).toBeNull();
+    expect(UpdateProfileSchema.safeParse({}).success).toBe(false);
+    expect(
+      UpdateProfileSchema.safeParse({ avatarUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }).success,
+    ).toBe(false);
+
+    expect(
+      ChangePasswordSchema.safeParse({ currentPassword: 'old', newPassword: 'newpassword123' })
+        .success,
+    ).toBe(true);
+    expect(
+      ChangePasswordSchema.safeParse({ currentPassword: 'samepassword', newPassword: 'samepassword' })
+        .success,
     ).toBe(false);
   });
 });

@@ -160,3 +160,6 @@ CREATE TABLE IF NOT EXISTS group_place_events (
 
 CREATE INDEX IF NOT EXISTS idx_group_place_events_group_time
     ON group_place_events (group_id, created_at DESC);
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS avatar_url TEXT NULL;

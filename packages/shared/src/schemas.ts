@@ -24,6 +24,37 @@ export function normalizePrivacyMode(mode: RawPrivacyMode): PrivacyMode {
   return mode;
 }
 
+const SAFE_DATA_IMAGE_REGEX =
+  /^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+export const MAX_AVATAR_URL_LENGTH = 262_144;
+
+/**
+ * Validates that an avatar URL is either an explicit raster image base64 data URI
+ * (PNG/JPEG/WebP/GIF, bounded to 256 KB) or an HTTP(S) image URL, rejecting SVGs
+ * and non-HTTP schemes to prevent stored XSS.
+ */
+export function isSafeAvatarUrl(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_AVATAR_URL_LENGTH) return false;
+  if (SAFE_DATA_IMAGE_REGEX.test(trimmed)) return true;
+  if (trimmed.length > 2048) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export const AvatarUrlSchema = z
+  .string()
+  .trim()
+  .max(MAX_AVATAR_URL_LENGTH)
+  .refine((value) => isSafeAvatarUrl(value), {
+    message: 'Avatar must be a PNG, JPEG, WebP, or GIF image under 256 KB or an HTTP(S) URL',
+  });
+
 export const RegisterSchema = z.object({
   email: z.string().email().max(255),
   username: z.string().min(2).max(64).trim(),
@@ -31,6 +62,37 @@ export const RegisterSchema = z.object({
   inviteToken: z.string().min(4).max(128).optional(),
 });
 export type RegisterInput = z.infer<typeof RegisterSchema>;
+
+export const UpdateProfileSchema = z
+  .object({
+    username: z.string().min(2).max(64).trim().optional(),
+    email: z.string().email().max(255).trim().optional(),
+    avatarUrl: AvatarUrlSchema.nullable().optional(),
+  })
+  .refine(
+    (data) =>
+      data.username !== undefined || data.email !== undefined || data.avatarUrl !== undefined,
+    { message: 'Provide username, email, or avatarUrl to update' },
+  );
+export type UpdateProfileInput = z.infer<typeof UpdateProfileSchema>;
+
+export const ChangePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(128),
+    newPassword: z.string().min(8).max(128),
+  })
+  .refine((data) => data.currentPassword !== data.newPassword, {
+    message: 'New password must differ from current password',
+  });
+export type ChangePasswordInput = z.infer<typeof ChangePasswordSchema>;
+
+export const MemberProfileUpdatedSchema = z.object({
+  userId: z.string().uuid(),
+  username: z.string(),
+  avatarUrl: z.string().nullable(),
+  groupIds: z.array(z.string().uuid()),
+});
+export type MemberProfileUpdatedEvent = z.infer<typeof MemberProfileUpdatedSchema>;
 
 export const LoginSchema = z.object({
   email: z.string().email(),
@@ -117,6 +179,7 @@ export type LocationBatch = z.infer<typeof LocationBatchSchema>;
 export const LocationBroadcastSchema = z.object({
   userId: z.string().uuid(),
   username: z.string(),
+  avatarUrl: z.string().nullable().optional(),
   groupId: z.string().uuid(),
   latitude: z.number(),
   longitude: z.number(),
@@ -201,6 +264,7 @@ export const ChatMessageSchema = z.object({
   groupId: z.string().uuid(),
   senderId: z.string().uuid(),
   senderUsername: z.string(),
+  senderAvatarUrl: z.string().nullable().optional(),
   content: z.string(),
   createdAt: z.string(),
 });
