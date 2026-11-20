@@ -9,12 +9,14 @@ import {
   BellOff,
   Check,
   ChevronDown,
+  CloudDownload,
   Compass,
   Copy,
   EyeOff,
   Globe,
   KeyRound,
   Layers,
+  Loader2,
   LocateFixed,
   LogOut,
   MapPin,
@@ -32,11 +34,14 @@ import {
   X,
 } from 'lucide-react';
 import {
+  isPointCoveredByRegions,
   isSafeAvatarUrl,
   type ChatMessage,
   type GroupPlace,
   type LocationBroadcast,
   type LocationRequestItem,
+  type MapDownloadJob,
+  type MapRegion,
   type PlaceTransitionEvent,
   type PrivacyMode,
 } from '@loved-ones/shared';
@@ -55,17 +60,21 @@ import {
   apiFetchGroups,
   apiFetchGroupTrails,
   apiFetchLocationRequests,
+  apiFetchMapJobs,
+  apiFetchMapRegions,
   apiGetMe,
   apiGetTrackerTokenStatus,
   apiJoinInvite,
   apiLogin,
   apiRegister,
+  apiRequestMapDownload,
   apiRequestPasswordReset,
   apiResetPasswordWithCode,
   apiRespondLocationRequest,
   apiRevokeTrackerToken,
   apiSendLocationBatch,
   apiUpdatePrivacy,
+  formatBytes,
   getServiceBaseUrls,
   GroupItem,
   InvitePreview,
@@ -199,6 +208,20 @@ export default function HomePage() {
     NotificationPermission | 'unsupported'
   >('unsupported');
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
+  const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
+  const [mapRegionsLoaded, setMapRegionsLoaded] = useState(false);
+  const [regionsRevision, setRegionsRevision] = useState(0);
+  const [allowMemberMapDownloads, setAllowMemberMapDownloads] = useState(true);
+  const [mapJobs, setMapJobs] = useState<MapDownloadJob[]>([]);
+  const [mapDownloadBusy, setMapDownloadBusy] = useState(false);
+  const [mapDownloadError, setMapDownloadError] = useState<string | null>(null);
+  const [dismissedUncoveredKey, setDismissedUncoveredKey] = useState<string | null>(null);
+  const [offlineMapsOpen, setOfflineMapsOpen] = useState(false);
+  const [mapViewport, setMapViewport] = useState<{
+    latitude: number;
+    longitude: number;
+    zoom: number;
+  } | null>(null);
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
@@ -318,6 +341,124 @@ export default function HomePage() {
     setInspectorTab('chat');
     setUnreadChatCount(0);
     setChatToast(null);
+  }
+
+  const refreshMapRegions = useCallback(async (bumpRevision = false) => {
+    try {
+      const data = await apiFetchMapRegions();
+      setMapRegions(data.regions);
+      setAllowMemberMapDownloads(data.allowMemberDownloads);
+      if (data.jobs) {
+        setMapJobs(data.jobs);
+      }
+      setMapRegionsLoaded(true);
+      if (bumpRevision) {
+        setRegionsRevision((prev) => prev + 1);
+      }
+    } catch {
+      // ignore transient region lookup errors
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    void refreshMapRegions(false);
+  }, [session, refreshMapRegions]);
+
+  const activeMapJob = useMemo(
+    () =>
+      mapJobs.find(
+        (j) => j.status === 'queued' || j.status === 'resolving' || j.status === 'downloading',
+      ) ?? null,
+    [mapJobs],
+  );
+
+  useEffect(() => {
+    if (!session?.accessToken || !activeMapJob) return;
+    const accessToken = session.accessToken;
+    const timer = window.setInterval(() => {
+      void apiFetchMapJobs(accessToken)
+        .then((jobs) => {
+          setMapJobs(jobs);
+          const finishedNow = jobs.find((j) => j.id === activeMapJob.id && j.status === 'completed');
+          const failedNow = jobs.find((j) => j.id === activeMapJob.id && j.status === 'failed');
+          if (finishedNow) {
+            setMapDownloadError(null);
+            setDismissedUncoveredKey(null);
+            void refreshMapRegions(true);
+          } else if (failedNow) {
+            setMapDownloadError(failedNow.error ?? 'Failed to download map tiles');
+          }
+        })
+        .catch(() => {});
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [session?.accessToken, activeMapJob, refreshMapRegions]);
+
+  const uncoveredTarget = useMemo(() => {
+    if (!mapRegionsLoaded) return null;
+
+    let candidate: { latitude: number; longitude: number; contextLabel: string } | null = null;
+    if (selectedUserId) {
+      const targetUser = locations.find((l) => l.userId === selectedUserId);
+      if (targetUser && !isPointCoveredByRegions(targetUser.latitude, targetUser.longitude, mapRegions)) {
+        candidate = {
+          latitude: targetUser.latitude,
+          longitude: targetUser.longitude,
+          contextLabel: `${targetUser.username}'s area`,
+        };
+      }
+    }
+    if (!candidate && selfLocation) {
+      if (!isPointCoveredByRegions(selfLocation.latitude, selfLocation.longitude, mapRegions)) {
+        candidate = {
+          latitude: selfLocation.latitude,
+          longitude: selfLocation.longitude,
+          contextLabel: 'your location',
+        };
+      }
+    }
+    if (!candidate && mapViewport && mapViewport.zoom >= 9) {
+      if (!isPointCoveredByRegions(mapViewport.latitude, mapViewport.longitude, mapRegions)) {
+        candidate = {
+          latitude: mapViewport.latitude,
+          longitude: mapViewport.longitude,
+          contextLabel: 'this area',
+        };
+      }
+    }
+    if (!candidate) return null;
+
+    const coordKey = `${candidate.latitude.toFixed(1)},${candidate.longitude.toFixed(1)}`;
+    return { ...candidate, coordKey };
+  }, [mapRegionsLoaded, mapRegions, selectedUserId, locations, selfLocation, mapViewport]);
+
+  async function handleRequestMapDownload(lat: number, lon: number, cityName?: string) {
+    if (!session) return;
+    setMapDownloadBusy(true);
+    setMapDownloadError(null);
+    try {
+      const res = await apiRequestMapDownload(session.accessToken, {
+        latitude: lat,
+        longitude: lon,
+        cityName,
+      });
+      if (res.alreadyCovered) {
+        if (res.regions) {
+          setMapRegions(res.regions);
+          setRegionsRevision((prev) => prev + 1);
+        } else {
+          await refreshMapRegions(true);
+        }
+        setDismissedUncoveredKey(null);
+      } else if (res.job) {
+        setMapJobs((prev) => [res.job!, ...prev.filter((j) => j.id !== res.job!.id)]);
+      }
+    } catch (err) {
+      setMapDownloadError(err instanceof Error ? err.message : 'Unable to request map download');
+    } finally {
+      setMapDownloadBusy(false);
+    }
   }
 
   const activeGroup = useMemo(
@@ -1356,6 +1497,8 @@ export default function HomePage() {
         locations={mapViewMode === 'places' ? [] : locations}
         places={places}
         trails={trails}
+        regions={mapRegionsLoaded ? mapRegions : undefined}
+        regionsRevision={regionsRevision}
         showTrails={mapViewMode === 'trails'}
         selectedUserId={selectedUserId}
         selectedPlaceId={selectedPlaceId}
@@ -1366,12 +1509,109 @@ export default function HomePage() {
         draftPlace={draftPlace}
         pickingPlace={isPickingPlace}
         labelLanguage={labelLanguage}
+        onViewportChange={setMapViewport}
         onMapSelectCoords={(lat, lon) => {
           if (!isPickingPlace) return;
           setPlaceLat(String(lat));
           setPlaceLon(String(lon));
         }}
       />
+
+      {/* Calm Missing-Map-Coverage / Download Progress Pill */}
+      {(activeMapJob ||
+        mapDownloadError ||
+        (uncoveredTarget &&
+          dismissedUncoveredKey !== uncoveredTarget.coordKey &&
+          (allowMemberMapDownloads || session.user.role === 'HOST_ADMIN'))) && (
+        <div className="pointer-events-none fixed left-1/2 top-16 z-20 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 md:top-4">
+          <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.1)] backdrop-blur-xl">
+            {activeMapJob ? (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2 text-xs font-medium text-zinc-900">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-zinc-700" />
+                    <span className="truncate">
+                      {activeMapJob.message ?? `Downloading ${activeMapJob.cityName}…`}
+                    </span>
+                  </span>
+                  <span className="shrink-0 font-mono text-[11px] text-zinc-500">
+                    {activeMapJob.progressPct}%
+                  </span>
+                </div>
+                <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-100">
+                  <div
+                    className="h-full rounded-full bg-zinc-950 transition-all duration-300"
+                    style={{ width: `${Math.max(8, activeMapJob.progressPct)}%` }}
+                  />
+                </div>
+              </div>
+            ) : mapDownloadError ? (
+              <div className="flex items-center justify-between gap-2.5 text-xs">
+                <span className="min-w-0 flex-1 text-rose-700">{mapDownloadError}</span>
+                {uncoveredTarget && (
+                  <button
+                    type="button"
+                    disabled={mapDownloadBusy}
+                    onClick={() =>
+                      void handleRequestMapDownload(
+                        uncoveredTarget.latitude,
+                        uncoveredTarget.longitude,
+                      )
+                    }
+                    className="lo-press shrink-0 rounded-lg bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white"
+                  >
+                    Retry
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setMapDownloadError(null)}
+                  className="shrink-0 rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              uncoveredTarget && (
+                <div className="flex items-center justify-between gap-2.5">
+                  <div className="flex min-w-0 items-center gap-2 text-xs text-zinc-700">
+                    <CloudDownload className="h-4 w-4 shrink-0 text-zinc-900" />
+                    <span className="truncate">
+                      No map tiles cached for{' '}
+                      <span className="font-semibold text-zinc-950">
+                        {uncoveredTarget.contextLabel}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={mapDownloadBusy}
+                      onClick={() =>
+                        void handleRequestMapDownload(
+                          uncoveredTarget.latitude,
+                          uncoveredTarget.longitude,
+                        )
+                      }
+                      className="lo-press rounded-lg bg-zinc-950 px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      {mapDownloadBusy ? 'Starting…' : 'Download city map'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDismissedUncoveredKey(uncoveredTarget.coordKey)}
+                      aria-label="Dismiss missing map prompt"
+                      className="rounded-md p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Incoming Chat Toast Notification */}
       {chatToast && (
@@ -1718,6 +1958,81 @@ export default function HomePage() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Offline City Map Regions */}
+            <div className="border-t border-zinc-100 pt-2.5">
+              <button
+                type="button"
+                onClick={() => setOfflineMapsOpen((v) => !v)}
+                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100"
+              >
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                  <CloudDownload className="h-3.5 w-3.5 text-zinc-500" />
+                  Offline City Maps
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700">
+                    {mapRegions.filter((r) => !r.isStub).length}
+                  </span>
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform ${
+                      offlineMapsOpen ? 'rotate-180 text-zinc-800' : ''
+                    }`}
+                  />
+                </span>
+              </button>
+
+              {offlineMapsOpen && (
+                <div className="mt-2 space-y-1.5 px-1">
+                  {mapRegions
+                    .filter((r) => !r.isStub)
+                    .map((region) => (
+                      <button
+                        key={region.id}
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setFocusCoords({
+                            latitude: (region.minLat + region.maxLat) / 2,
+                            longitude: (region.minLon + region.maxLon) / 2,
+                            zoom: 12.5,
+                            nonce: Date.now(),
+                          });
+                        }}
+                        className="flex w-full items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/70 px-2.5 py-1.5 text-left text-[11px] transition hover:bg-zinc-100"
+                      >
+                        <span className="min-w-0 truncate font-medium text-zinc-900">
+                          {region.displayName ?? region.name}
+                        </span>
+                        <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500">
+                          {formatBytes(region.sizeBytes)}
+                        </span>
+                      </button>
+                    ))}
+                  {mapRegions.filter((r) => !r.isStub).length === 0 && (
+                    <p className="text-[11px] text-zinc-500">
+                      Only the empty placeholder tile stub is loaded. Download any city below.
+                    </p>
+                  )}
+                  {(allowMemberMapDownloads || session.user.role === 'HOST_ADMIN') &&
+                    (selfLocation || mapViewport) && (
+                      <button
+                        type="button"
+                        disabled={mapDownloadBusy || Boolean(activeMapJob)}
+                        onClick={() => {
+                          const target = mapViewport ?? selfLocation!;
+                          setMenuOpen(false);
+                          void handleRequestMapDownload(target.latitude, target.longitude);
+                        }}
+                        className="lo-press mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                      >
+                        <CloudDownload className="h-3.5 w-3.5" />
+                        {activeMapJob ? 'Download in progress…' : 'Download map for current view'}
+                      </button>
+                    )}
+                </div>
+              )}
             </div>
 
             {/* HTTP Tracker Token */}

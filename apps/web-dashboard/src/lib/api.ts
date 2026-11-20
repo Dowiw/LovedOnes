@@ -5,6 +5,8 @@ import type {
   LocationBroadcast,
   LocationPoint,
   LocationRequestItem,
+  MapDownloadJob,
+  MapRegion,
   PlaceTransitionEvent,
   PrivacyMode,
   QrInvitePayload,
@@ -651,4 +653,60 @@ export async function apiFetchGroupTrails(
     accessToken,
   );
   return res.trails;
+}
+
+export async function apiFetchMapRegions(): Promise<{
+  regions: MapRegion[];
+  jobs: MapDownloadJob[];
+  allowMemberDownloads: boolean;
+}> {
+  const { authBase } = getServiceBaseUrls();
+  const res = await fetch(`${authBase}/api/maps/regions`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch map regions (${res.status})`);
+  }
+  return (await res.json()) as {
+    regions: MapRegion[];
+    jobs: MapDownloadJob[];
+    allowMemberDownloads: boolean;
+  };
+}
+
+export async function apiRequestMapDownload(
+  accessToken: string,
+  payload: { latitude: number; longitude: number; cityName?: string; radiusKm?: number },
+): Promise<{
+  alreadyCovered: boolean;
+  region?: MapRegion;
+  regions?: MapRegion[];
+  job?: MapDownloadJob;
+}> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{
+    alreadyCovered: boolean;
+    region?: MapRegion;
+    regions?: MapRegion[];
+    job?: MapDownloadJob;
+  }>(`${authBase}/api/maps/download`, accessToken, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiFetchMapJobs(accessToken: string): Promise<MapDownloadJob[]> {
+  const { authBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ jobs: MapDownloadJob[] }>(
+    `${authBase}/api/maps/jobs`,
+    accessToken,
+  );
+  return res.jobs;
+}
+
+export async function apiDeleteMapRegion(accessToken: string, regionId: string): Promise<void> {
+  const { authBase } = getServiceBaseUrls();
+  await requestAuthedJson<{ deleted: boolean; id: string }>(
+    `${authBase}/api/maps/regions/${encodeURIComponent(regionId)}`,
+    accessToken,
+    { method: 'DELETE' },
+  );
 }

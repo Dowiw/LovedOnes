@@ -113,6 +113,14 @@ describe('@loved-ones/mobile-app', () => {
       type: 'vector',
       url: 'pmtiles://https://track.example.com/tiles/region.pmtiles',
     });
+
+    const compositeStyle = buildMobileMapStyle('https://track.example.com', null, 'en', true);
+    expect(compositeStyle.sources.openmaptiles).toEqual({
+      type: 'vector',
+      tiles: ['https://track.example.com/api/maps/tiles/{z}/{x}/{y}.pbf'],
+      minzoom: 0,
+      maxzoom: 15,
+    });
   });
 
   it('requests foreground + background permissions on launch and falls back to foreground when Always Allow is denied', async () => {

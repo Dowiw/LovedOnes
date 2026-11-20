@@ -4,19 +4,24 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle,
+  CloudDownload,
   Cpu,
   Database,
   HardDrive,
   QrCode,
   Radio,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
-import type { SystemTelemetry } from '@loved-ones/shared';
+import type { MapDownloadJob, MapRegion, SystemTelemetry } from '@loved-ones/shared';
 import { LiveLogTerminal } from '@/components/LiveLogTerminal';
 import { NavBar } from '@/components/NavBar';
 import { QrInvitePanel } from '@/components/QrInviteModal';
 import {
+  apiDeleteMapRegion,
   apiFetchGroups,
+  apiFetchMapJobs,
+  apiFetchMapRegions,
   apiFetchTelemetry,
   formatBytes,
   GroupItem,
@@ -29,6 +34,8 @@ export default function AdminDashboardPage() {
   const [session, setSession] = useState<StoredSession | null>(null);
   const [telemetry, setTelemetry] = useState<SystemTelemetry | null>(null);
   const [groups, setGroups] = useState<GroupItem[]>([]);
+  const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
+  const [mapJobs, setMapJobs] = useState<MapDownloadJob[]>([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,12 +45,16 @@ export default function AdminDashboardPage() {
 
   const refreshData = useCallback(async (token: string) => {
     try {
-      const [stats, grpList] = await Promise.all([
+      const [stats, grpList, regionsData, jobs] = await Promise.all([
         apiFetchTelemetry(token),
         apiFetchGroups(token),
+        apiFetchMapRegions(),
+        apiFetchMapJobs(token),
       ]);
       setTelemetry(stats);
       setGroups(grpList);
+      setMapRegions(regionsData.regions);
+      setMapJobs(jobs);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load telemetry');
@@ -245,6 +256,86 @@ export default function AdminDashboardPage() {
                       {formatBytes(u.locationBytes)}
                     </td>
                     <td className="px-5 py-3 font-mono text-zinc-600">{u.locationPoints}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
+          <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3.5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-950">
+              <CloudDownload className="h-4 w-4 text-zinc-700" />
+              Downloaded Map Regions ({mapRegions.filter((r) => !r.isStub).length})
+            </div>
+            {mapJobs.some((j) => j.status === 'resolving' || j.status === 'downloading') && (
+              <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+                Download active
+              </span>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-zinc-50/90 text-zinc-500">
+                <tr>
+                  <th className="px-5 py-3 font-medium">Region</th>
+                  <th className="px-5 py-3 font-medium">Bounds (Lon/Lat)</th>
+                  <th className="px-5 py-3 font-medium">Zoom</th>
+                  <th className="px-5 py-3 font-medium">Size</th>
+                  <th className="px-5 py-3 font-medium">Status</th>
+                  <th className="px-5 py-3 text-right font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {mapRegions.map((r) => (
+                  <tr key={r.id} className="hover:bg-zinc-50/80">
+                    <td className="px-5 py-3">
+                      <div className="font-medium text-zinc-950">
+                        {r.displayName ?? r.name}
+                      </div>
+                      <div className="font-mono text-[11px] text-zinc-400">{r.url}</div>
+                    </td>
+                    <td className="px-5 py-3 font-mono text-[11px] text-zinc-600">
+                      {r.minLon.toFixed(2)}, {r.minLat.toFixed(2)} → {r.maxLon.toFixed(2)},{' '}
+                      {r.maxLat.toFixed(2)}
+                    </td>
+                    <td className="px-5 py-3 font-mono text-zinc-700">
+                      z{r.minZoom}–{r.maxZoom}
+                    </td>
+                    <td className="px-5 py-3 font-mono text-zinc-700">
+                      {formatBytes(r.sizeBytes)}
+                    </td>
+                    <td className="px-5 py-3">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          r.isStub
+                            ? 'bg-zinc-100 text-zinc-500'
+                            : 'bg-zinc-950 text-white'
+                        }`}
+                      >
+                        {r.isStub ? 'Placeholder Stub' : r.isPrimary ? 'Primary' : 'City Extract'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {!r.isPrimary && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!session) return;
+                            void apiDeleteMapRegion(session.accessToken, r.id)
+                              .then(() => refreshData(session.accessToken))
+                              .catch((err) =>
+                                setError(err instanceof Error ? err.message : 'Delete failed'),
+                              );
+                          }}
+                          className="lo-press inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Remove
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

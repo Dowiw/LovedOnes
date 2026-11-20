@@ -98,6 +98,9 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-jwt-refresh-secret-key-min-32-chars}
       LOG_DIR: /var/log/app
       MAX_LOG_STORAGE_MB: ${MAX_LOG_STORAGE_MB:-500}
+      TILES_DIR: /srv/tiles
+      ALLOW_MEMBER_MAP_DOWNLOADS: ${ALLOW_MEMBER_MAP_DOWNLOADS:-true}
+      MAX_MAP_EXTRACT_MB: ${MAX_MAP_EXTRACT_MB:-1024}
       PUBLIC_SERVER_URL: ${PUBLIC_SERVER_URL:-http://localhost:${GATEWAY_PORT:-8080}}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -107,6 +110,7 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
     volumes:
       - ./logs:/var/log/app
+      - ./infra/tiles:/srv/tiles
     networks:
       - internal_net
     healthcheck:

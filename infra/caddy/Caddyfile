@@ -15,7 +15,7 @@
 	handle @tiles {
 		uri strip_prefix /tiles
 		root * /srv/tiles
-		@pmtiles path *.pmtiles /tiles/*.pmtiles
+		@pmtiles path *.pmtiles /tiles/*.pmtiles /tiles/regions/*.pmtiles
 		@styleJson path *.json
 		@staticTiles not path *.json
 		header Access-Control-Allow-Origin "*"
@@ -29,7 +29,7 @@
 		file_server
 	}
 
-	@authAdmin path /api/auth/* /api/admin/*
+	@authAdmin path /api/auth/* /api/admin/* /api/maps/*
 	handle @authAdmin {
 		encode zstd gzip
 		reverse_proxy auth-admin-service:4001

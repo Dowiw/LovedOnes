@@ -5,11 +5,16 @@ import { describe, expect, it } from 'vitest';
 import {
   applyPrivacyFuzzing,
   ChangePasswordSchema,
+  computeCityFallbackBbox,
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
+  findCoveringRegions,
+  isPointCoveredByRegions,
   isSafeAvatarUrl,
   LocationBatchSchema,
   LocationSnapshotQuerySchema,
+  type MapRegion,
+  normalizeCityBbox,
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
   normalizePrivacyMode,
@@ -17,6 +22,7 @@ import {
   parseInviteInput,
   QrInvitePayloadSchema,
   RespondLocationRequestSchema,
+  slugifyCityName,
   TrailQuerySchema,
   UpdateProfileSchema,
 } from '../index.js';
@@ -341,5 +347,54 @@ describe('@loved-ones/shared', () => {
     expect(parseInviteInput('inv_abc12345')).toEqual({ inviteToken: 'inv_abc12345' });
     expect(() => parseInviteInput('   ')).toThrow();
     expect(() => parseInviteInput('https://lovedones.doiw.dev/join')).toThrow();
+  });
+
+  it('evaluates regional PMTiles coverage and normalizes city bounding boxes', () => {
+    const regions: MapRegion[] = [
+      {
+        id: 'stub-only',
+        name: 'Stub',
+        url: '/tiles/region.pmtiles',
+        minLon: -180,
+        minLat: -85,
+        maxLon: 180,
+        maxLat: 85,
+        minZoom: 0,
+        maxZoom: 0,
+        sizeBytes: 264,
+        isStub: true,
+        isPrimary: true,
+      },
+      {
+        id: 'berlin',
+        name: 'Berlin',
+        url: '/tiles/regions/berlin.pmtiles',
+        minLon: 13.2,
+        minLat: 52.4,
+        maxLon: 13.65,
+        maxLat: 52.6,
+        minZoom: 0,
+        maxZoom: 15,
+        sizeBytes: 50_000_000,
+        isStub: false,
+        isPrimary: false,
+      },
+    ];
+
+    expect(isPointCoveredByRegions(52.52, 13.405, regions)).toBe(true);
+    expect(isPointCoveredByRegions(48.8566, 2.3522, regions)).toBe(false);
+    expect(findCoveringRegions(52.52, 13.405, regions).map((r) => r.id)).toEqual(['berlin']);
+
+    const fallback = computeCityFallbackBbox(48.8566, 2.3522, 15);
+    expect(fallback[0]).toBeLessThan(2.3522);
+    expect(fallback[2]).toBeGreaterThan(2.3522);
+    expect(fallback[1]).toBeLessThan(48.8566);
+    expect(fallback[3]).toBeGreaterThan(48.8566);
+
+    // Oversized administrative bbox should clamp sensibly around the requested coordinate
+    const clamped = normalizeCityBbox(48.8566, 2.3522, [-5, 41, 10, 52]);
+    expect(clamped[2] - clamped[0]).toBeLessThanOrEqual(2.5);
+    expect(clamped[3] - clamped[1]).toBeLessThanOrEqual(1.7);
+    expect(slugifyCityName('München', 48.1351, 11.582)).toContain('munchen-48_14n-11_58e');
   });
 });

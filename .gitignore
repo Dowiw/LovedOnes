@@ -9,6 +9,8 @@ logs/*.log*
 logs/*.json
 !logs/.gitkeep
 !infra/tiles/.gitkeep
+infra/tiles/regions/
+infra/tiles/*.tmp
 coverage/
 .DS_Store
 apps/mobile-app/android/

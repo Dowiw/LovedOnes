@@ -17,9 +17,22 @@ export function buildMobileMapStyle(
   serverUrl: string,
   localFileUri?: string | null,
   labelLanguage: MapLabelLanguage = 'en',
+  useCompositeServerTiles = false,
 ): StyleSpecification {
   const cleanServer = serverUrl.replace(/\/$/, '');
   const pmtilesUrl = buildPmtilesSourceUrl(serverUrl, localFileUri);
+  const openmaptilesSource =
+    useCompositeServerTiles && !localFileUri
+      ? {
+          type: 'vector' as const,
+          tiles: [`${cleanServer}/api/maps/tiles/{z}/{x}/{y}.pbf`],
+          minzoom: 0,
+          maxzoom: 15,
+        }
+      : {
+          type: 'vector' as const,
+          url: pmtilesUrl,
+        };
   const labelTextField: ['coalesce', ['get', string], ['get', string]] =
     labelLanguage === 'local'
       ? ['coalesce', ['get', 'name'], ['get', 'name:en']]
@@ -30,10 +43,7 @@ export function buildMobileMapStyle(
     sprite: `${cleanServer}/tiles/sprites/maki`,
     glyphs: `${cleanServer}/tiles/fonts/{fontstack}/{range}.pbf`,
     sources: {
-      openmaptiles: {
-        type: 'vector',
-        url: pmtilesUrl,
-      },
+      openmaptiles: openmaptilesSource,
     },
     layers: [
       {
@@ -653,12 +663,17 @@ export async function getCachedRegionPmtilesUri(): Promise<string | null> {
   return localFile.exists ? localFile.uri : null;
 }
 
-export async function downloadOfflineRegionPmtiles(serverUrl: string): Promise<string> {
+export async function downloadOfflineRegionPmtiles(
+  serverUrl: string,
+  regionUrl = '/tiles/region.pmtiles',
+  localFilename = 'region.pmtiles',
+): Promise<string> {
   const { File, Paths } = await import('expo-file-system');
   const cleanServer = serverUrl.replace(/\/$/, '');
-  const destination = new File(Paths.document, 'region.pmtiles');
+  const cleanRegionUrl = regionUrl.startsWith('/') ? regionUrl : `/${regionUrl}`;
+  const destination = new File(Paths.document, localFilename);
   const downloaded = await File.downloadFileAsync(
-    `${cleanServer}/tiles/region.pmtiles`,
+    `${cleanServer}${cleanRegionUrl}`,
     destination,
     { idempotent: true },
   );

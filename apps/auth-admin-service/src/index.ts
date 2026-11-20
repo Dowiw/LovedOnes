@@ -27,6 +27,10 @@ import {
 } from './adapters/postgres-redis-adapters.js';
 import { SmtpEmailSender } from './adapters/smtp-mailer.js';
 import { AuthGroupModule, EmailSender } from './domain/auth-group-module.js';
+import {
+  MapRegionsModule,
+  MapRegionsModuleOptions,
+} from './domain/map-regions-module.js';
 import { TelemetryQueryModule } from './domain/telemetry-query-module.js';
 
 export interface AuthAdminOptions {
@@ -38,6 +42,7 @@ export interface AuthAdminOptions {
   maxLogStorageMb?: number;
   publicServerUrl?: string;
   emailSender?: EmailSender;
+  mapRegions?: MapRegionsModuleOptions;
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
 }
@@ -94,6 +99,12 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     store: new PostgresRedisTelemetryStore(pool, redis, logDir),
     logDir,
     maxLogStorageMb,
+  });
+  const mapRegions = new MapRegionsModule({
+    ...(options.mapRegions ?? {}),
+    onLog: (level, msg, meta) => {
+      loggerHandle.logger[level](meta ?? {}, msg);
+    },
   });
 
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
@@ -359,6 +370,73 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     return telemetryQuery.getRecentLogs(200);
   });
 
+  // ---- Dynamic Map Region Coverage & PMTiles Download Endpoints ----
+
+  app.get('/api/maps/regions', async () => {
+    const regions = await mapRegions.listRegions();
+    return {
+      regions,
+      jobs: mapRegions.listJobs(),
+      allowMemberDownloads: mapRegions.allowMemberDownloads,
+    };
+  });
+
+  app.get('/api/maps/jobs', { preHandler: [requireAuth] }, async () => {
+    return { jobs: mapRegions.listJobs() };
+  });
+
+  app.get('/api/maps/jobs/:jobId', { preHandler: [requireAuth] }, async (request) => {
+    const { jobId } = request.params as { jobId: string };
+    return { job: mapRegions.getJob(jobId) };
+  });
+
+  app.post(
+    '/api/maps/download',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest, reply) => {
+      const result = await mapRegions.requestCityDownload(
+        { id: request.authUser!.id, role: request.authUser!.role },
+        request.body,
+      );
+      if (result.alreadyCovered) {
+        return reply.code(200).send(result);
+      }
+      return reply.code(202).send(result);
+    },
+  );
+
+  app.delete(
+    '/api/maps/regions/:regionId',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const { regionId } = request.params as { regionId: string };
+      const res = await mapRegions.deleteRegion(regionId);
+      loggerHandle.logger.info(
+        { userId: request.authUser!.id, regionId },
+        'host admin deleted downloaded map region',
+      );
+      return res;
+    },
+  );
+
+  app.get('/api/maps/tiles/:z/:x/:y', async (request, reply) => {
+    const params = request.params as { z: string; x: string; y: string };
+    const z = Number.parseInt(params.z, 10);
+    const x = Number.parseInt(params.x, 10);
+    const y = Number.parseInt(params.y.replace(/\.(pbf|mvt)$/i, ''), 10);
+    if (!Number.isFinite(z) || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return reply.code(400).send({ error: 'Invalid tile coordinates' });
+    }
+    const tile = await mapRegions.getCompositeTile(z, x, y);
+    if (!tile) {
+      reply.header('Cache-Control', 'public, max-age=300');
+      return reply.code(204).send();
+    }
+    reply.header('Content-Type', 'application/x-protobuf');
+    reply.header('Cache-Control', 'public, max-age=3600');
+    return reply.send(Buffer.from(tile));
+  });
+
   app.get('/api/admin/logs/stream', { websocket: true }, async (socket, request) => {
     const query = request.query as { token?: string };
     const rawToken = query.token ?? extractBearerToken(request.headers.authorization);
@@ -404,6 +482,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   });
 
   app.addHook('onClose', async () => {
+    await mapRegions.close();
     await loggerHandle.close();
     await redis.quit().catch(() => redis.disconnect());
     await pool.end();

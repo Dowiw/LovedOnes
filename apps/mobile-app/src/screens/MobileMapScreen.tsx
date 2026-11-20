@@ -14,11 +14,15 @@ import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-ca
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
 import {
+  findCoveringRegions,
+  isPointCoveredByRegions,
   isSafeAvatarUrl,
   parseInviteInput,
   type ChatMessage,
   type GroupRole,
   type LocationBroadcast,
+  type MapDownloadJob,
+  type MapRegion,
   type PrivacyMode,
 } from '@loved-ones/shared';
 import {
@@ -120,6 +124,10 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
+  const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
+  const [mapRegionsLoaded, setMapRegionsLoaded] = useState(false);
+  const [activeMapJob, setActiveMapJob] = useState<MapDownloadJob | null>(null);
+  const [dismissedUncoveredKey, setDismissedUncoveredKey] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   const [permissionInfo, setPermissionInfo] = useState<LocationPermissionResult | null>(null);
 
@@ -131,9 +139,14 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     [groups, activeGroupId],
   );
 
+  const useCompositeServerTiles = useMemo(() => {
+    const operational = mapRegions.filter((r) => !r.isStub);
+    return operational.length > 1 || operational.some((r) => !r.isPrimary);
+  }, [mapRegions]);
+
   const mapStyle = useMemo(
-    () => buildMobileMapStyle(serverUrl, localPmtilesUri, labelLanguage),
-    [serverUrl, localPmtilesUri, labelLanguage],
+    () => buildMobileMapStyle(serverUrl, localPmtilesUri, labelLanguage, useCompositeServerTiles),
+    [serverUrl, localPmtilesUri, labelLanguage, useCompositeServerTiles],
   );
 
   const refreshQueueCount = useCallback(async () => {
@@ -194,7 +207,51 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       .catch(() => {});
 
     void fetchGroups().catch(() => {});
+    void fetch(`${serverUrl}/api/maps/regions`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { regions?: MapRegion[]; jobs?: MapDownloadJob[] } | null) => {
+        if (!data) return;
+        if (data.regions) {
+          setMapRegions(data.regions);
+          setMapRegionsLoaded(true);
+        }
+        const running = data.jobs?.find(
+          (j) => j.status === 'queued' || j.status === 'resolving' || j.status === 'downloading',
+        );
+        if (running) setActiveMapJob(running);
+      })
+      .catch(() => {});
   }, [serverUrl, accessToken, fetchGroups]);
+
+  useEffect(() => {
+    if (!serverUrl || !accessToken || !activeMapJob) return;
+    if (activeMapJob.status === 'completed' || activeMapJob.status === 'failed') return;
+    const timer = setInterval(() => {
+      void fetch(`${serverUrl}/api/maps/jobs/${activeMapJob.id}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { job?: MapDownloadJob } | null) => {
+          if (!data?.job) return;
+          setActiveMapJob(data.job);
+          if (data.job.status === 'completed') {
+            setStatusBanner(`Map ready: ${data.job.cityName}`);
+            setActiveMapJob(null);
+            void fetch(`${serverUrl}/api/maps/regions`)
+              .then((rr) => (rr.ok ? rr.json() : null))
+              .then((rdata: { regions?: MapRegion[] } | null) => {
+                if (rdata?.regions) setMapRegions(rdata.regions);
+              })
+              .catch(() => {});
+          } else if (data.job.status === 'failed') {
+            setStatusBanner(data.job.error ?? 'City map download failed');
+            setActiveMapJob(null);
+          }
+        })
+        .catch(() => {});
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [serverUrl, accessToken, activeMapJob]);
 
   useEffect(() => {
     if (
@@ -389,11 +446,74 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
   async function handleCacheOfflineMap() {
     try {
-      const uri = await downloadOfflineRegionPmtiles(serverUrl);
+      const targetLat = selfCoord?.[1] ?? locations[0]?.latitude;
+      const targetLon = selfCoord?.[0] ?? locations[0]?.longitude;
+      const covering =
+        targetLat !== undefined && targetLon !== undefined
+          ? findCoveringRegions(targetLat, targetLon, mapRegions)[0]
+          : undefined;
+      const uri = await downloadOfflineRegionPmtiles(
+        serverUrl,
+        covering?.url ?? '/tiles/region.pmtiles',
+      );
       setLocalPmtilesUri(uri);
-      setStatusBanner('Cached regional PMTiles for offline rendering');
+      setStatusBanner(`Cached ${covering?.displayName ?? covering?.name ?? 'regional'} PMTiles offline`);
     } catch (err) {
       setStatusBanner(err instanceof Error ? err.message : 'Tile cache failed');
+    }
+  }
+
+  const uncoveredMobileTarget = useMemo(() => {
+    if (!mapRegionsLoaded) return null;
+    if (selfCoord && !isPointCoveredByRegions(selfCoord[1], selfCoord[0], mapRegions)) {
+      return {
+        latitude: selfCoord[1],
+        longitude: selfCoord[0],
+        key: `${selfCoord[1].toFixed(1)},${selfCoord[0].toFixed(1)}`,
+      };
+    }
+    const firstMember = locations[0];
+    if (firstMember && !isPointCoveredByRegions(firstMember.latitude, firstMember.longitude, mapRegions)) {
+      return {
+        latitude: firstMember.latitude,
+        longitude: firstMember.longitude,
+        key: `${firstMember.latitude.toFixed(1)},${firstMember.longitude.toFixed(1)}`,
+      };
+    }
+    return null;
+  }, [mapRegionsLoaded, mapRegions, selfCoord, locations]);
+
+  async function handleRequestServerCityMap(latitude: number, longitude: number) {
+    if (!serverUrl || !accessToken) return;
+    try {
+      const res = await fetch(`${serverUrl}/api/maps/download`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ latitude, longitude }),
+      });
+      const data = (await res.json()) as {
+        alreadyCovered?: boolean;
+        job?: MapDownloadJob;
+        regions?: MapRegion[];
+        error?: string;
+      };
+      if (!res.ok) {
+        setStatusBanner(data.error ?? 'Failed to request city map');
+        return;
+      }
+      if (data.alreadyCovered && data.regions) {
+        setMapRegions(data.regions);
+        setStatusBanner('City map is already cached on the server');
+        return;
+      }
+      if (data.job) {
+        setActiveMapJob(data.job);
+      }
+    } catch (err) {
+      setStatusBanner(err instanceof Error ? err.message : 'Failed to request city map');
     }
   }
 
@@ -873,6 +993,49 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             <Text style={styles.statusToastText} numberOfLines={1}>
               {statusBanner}
             </Text>
+          </View>
+        )}
+
+        {(activeMapJob ||
+          (uncoveredMobileTarget && dismissedUncoveredKey !== uncoveredMobileTarget.key)) && (
+          <View style={styles.chatToastBanner}>
+            {activeMapJob ? (
+              <View style={styles.chatToastTextWrap}>
+                <Text style={styles.chatToastSender} numberOfLines={1}>
+                  Downloading city map · {activeMapJob.progressPct}%
+                </Text>
+                <Text style={styles.chatToastBody} numberOfLines={1}>
+                  {activeMapJob.message ?? activeMapJob.cityName}
+                </Text>
+              </View>
+            ) : (
+              uncoveredMobileTarget && (
+                <>
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    style={styles.chatToastTextWrap}
+                    onPress={() =>
+                      void handleRequestServerCityMap(
+                        uncoveredMobileTarget.latitude,
+                        uncoveredMobileTarget.longitude,
+                      )
+                    }
+                  >
+                    <Text style={styles.chatToastSender} numberOfLines={1}>
+                      No map behind coordinates
+                    </Text>
+                    <Text style={styles.chatToastBody} numberOfLines={1}>
+                      Tap to download city tiles on server
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setDismissedUncoveredKey(uncoveredMobileTarget.key)}
+                  >
+                    <Text style={styles.chatToastAction}>Dismiss</Text>
+                  </TouchableOpacity>
+                </>
+              )
+            )}
           </View>
         )}
 

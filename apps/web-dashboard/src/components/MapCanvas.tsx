@@ -2,11 +2,169 @@
 
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
-import { Protocol } from 'pmtiles';
-import { isSafeAvatarUrl, type GroupPlace, type LocationBroadcast } from '@loved-ones/shared';
+import { PMTiles, Protocol } from 'pmtiles';
+import {
+  isSafeAvatarUrl,
+  type GroupPlace,
+  type LocationBroadcast,
+  type MapRegion,
+} from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
 
 let pmtilesProtocolRegistered = false;
+const archiveInstanceCache = new Map<string, PMTiles>();
+let activeCompositeEntries: Array<{ region: MapRegion; pmtiles: PMTiles }> = [];
+let hasSyncedRegions = false;
+
+function getOrCreateArchive(url: string): PMTiles {
+  let instance = archiveInstanceCache.get(url);
+  if (!instance) {
+    instance = new PMTiles(url);
+    archiveInstanceCache.set(url, instance);
+  }
+  return instance;
+}
+
+function syncCompositeEntries(tilesBase: string, regions: MapRegion[] | undefined): void {
+  if (!regions) return;
+  hasSyncedRegions = true;
+  activeCompositeEntries = regions
+    .filter((r) => !r.isStub)
+    .map((r) => ({
+      region: r,
+      pmtiles: getOrCreateArchive(`${tilesBase}${r.url}`),
+    }));
+}
+
+function tileCoordsToBbox(z: number, x: number, y: number): [number, number, number, number] {
+  const n = 2 ** z;
+  const minLon = (x / n) * 360 - 180;
+  const maxLon = ((x + 1) / n) * 360 - 180;
+  const latSouth = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 1)) / n))) * 180) / Math.PI;
+  const latNorth = (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
+  return [minLon, latSouth, maxLon, latNorth];
+}
+
+function boxesOverlap(
+  a: [number, number, number, number],
+  b: [number, number, number, number],
+): boolean {
+  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+function registerCompositePmtilesProtocol(defaultTilesBase: string): void {
+  if (pmtilesProtocolRegistered) return;
+  const fallbackProtocol = new Protocol();
+
+  maplibregl.addProtocol('pmtiles', async (params, abortController) => {
+    const rawUrl = params.url;
+    const [urlWithoutQuery, queryString] = rawUrl.split('?');
+    const isCompositeUrl = urlWithoutQuery.endsWith('/tiles/region.pmtiles');
+    const tileMatch = urlWithoutQuery.match(/^pmtiles:\/\/(.+)\/(\d+)\/(\d+)\/(\d+)$/);
+
+    if (tileMatch && tileMatch[1].endsWith('/tiles/region.pmtiles')) {
+      const z = Number.parseInt(tileMatch[2], 10);
+      const x = Number.parseInt(tileMatch[3], 10);
+      const y = Number.parseInt(tileMatch[4], 10);
+      const candidates = hasSyncedRegions
+        ? activeCompositeEntries
+        : [
+            {
+              region: {
+                id: 'default',
+                name: 'Region',
+                url: '/tiles/region.pmtiles',
+                minLon: -180,
+                minLat: -85,
+                maxLon: 180,
+                maxLat: 85,
+                minZoom: 0,
+                maxZoom: 15,
+                sizeBytes: 0,
+                isStub: false,
+                isPrimary: true,
+              },
+              pmtiles: getOrCreateArchive(`${defaultTilesBase}/tiles/region.pmtiles`),
+            },
+          ];
+
+      const tileBox = tileCoordsToBbox(z, x, y);
+      for (const entry of candidates) {
+        const r = entry.region;
+        if (z < r.minZoom || z > r.maxZoom) continue;
+        if (!boxesOverlap(tileBox, [r.minLon, r.minLat, r.maxLon, r.maxLat])) continue;
+        try {
+          const tile = await entry.pmtiles.getZxy(z, x, y, abortController.signal);
+          abortController.signal.throwIfAborted();
+          if (tile && tile.data) {
+            return {
+              data: new Uint8Array(tile.data),
+              cacheControl: tile.cacheControl,
+              expires: tile.expires,
+            };
+          }
+        } catch (err) {
+          if (abortController.signal.aborted) throw err;
+        }
+      }
+      return { data: new Uint8Array() };
+    }
+
+    if (params.type === 'json' && isCompositeUrl) {
+      const candidates = hasSyncedRegions
+        ? activeCompositeEntries
+        : [
+            {
+              region: {
+                id: 'default',
+                name: 'Region',
+                url: '/tiles/region.pmtiles',
+                minLon: -180,
+                minLat: -85,
+                maxLon: 180,
+                maxLat: 85,
+                minZoom: 0,
+                maxZoom: 15,
+                sizeBytes: 0,
+                isStub: false,
+                isPrimary: true,
+              },
+              pmtiles: getOrCreateArchive(`${defaultTilesBase}/tiles/region.pmtiles`),
+            },
+          ];
+
+      let metadata: Record<string, unknown> | null = null;
+      let maxZoom = 15;
+      if (candidates.length > 0) {
+        maxZoom = Math.max(15, ...candidates.map((c) => c.region.maxZoom));
+        try {
+          metadata = (await candidates[0].pmtiles.getMetadata()) as Record<string, unknown>;
+        } catch {
+          metadata = null;
+        }
+      }
+
+      return {
+        data: {
+          tilejson: '3.0.0',
+          scheme: 'xyz',
+          tiles: [`${urlWithoutQuery}/{z}/{x}/{y}${queryString ? `?${queryString}` : ''}`],
+          vector_layers: Array.isArray(metadata?.vector_layers) ? metadata.vector_layers : [],
+          attribution: typeof metadata?.attribution === 'string' ? metadata.attribution : undefined,
+          description: typeof metadata?.description === 'string' ? metadata.description : undefined,
+          name: typeof metadata?.name === 'string' ? metadata.name : 'LovedOnes Basemap',
+          minzoom: 0,
+          maxzoom: maxZoom,
+          bounds: [-180, -85.0511, 180, 85.0511],
+        },
+      };
+    }
+
+    return fallbackProtocol.tilev4(params, abortController);
+  });
+
+  pmtilesProtocolRegistered = true;
+}
 
 const TRAIL_SOURCE_ID = 'lovedones-trails-src';
 const TRAIL_LINE_LAYER_ID = 'lovedones-trails-line';
@@ -225,6 +383,8 @@ interface MapCanvasProps {
   locations: LocationBroadcast[];
   places?: GroupPlace[];
   trails?: LocationBroadcast[];
+  regions?: MapRegion[];
+  regionsRevision?: number;
   showTrails?: boolean;
   selectedUserId?: string | null;
   selectedPlaceId?: string | null;
@@ -236,6 +396,7 @@ interface MapCanvasProps {
   pickingPlace?: boolean;
   labelLanguage?: MapLabelLanguage;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
+  onViewportChange?: (viewport: { latitude: number; longitude: number; zoom: number }) => void;
   className?: string;
 }
 
@@ -243,6 +404,8 @@ export function MapCanvas({
   locations,
   places = [],
   trails = [],
+  regions,
+  regionsRevision = 0,
   showTrails = false,
   selectedUserId,
   selectedPlaceId,
@@ -254,6 +417,7 @@ export function MapCanvas({
   pickingPlace = false,
   labelLanguage = 'en',
   onMapSelectCoords,
+  onViewportChange,
   className = 'relative h-full w-full overflow-hidden bg-[#cfe3ee]',
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -279,6 +443,8 @@ export function MapCanvas({
   selfLocationRef.current = selfLocation;
   const onSelectCoordsRef = useRef(onMapSelectCoords);
   onSelectCoordsRef.current = onMapSelectCoords;
+  const onViewportChangeRef = useRef(onViewportChange);
+  onViewportChangeRef.current = onViewportChange;
 
   function buildMemberPopupHtml(loc: LocationBroadcast): string {
     const resolvedAvatar =
@@ -415,13 +581,10 @@ export function MapCanvas({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    if (!pmtilesProtocolRegistered) {
-      const protocol = new Protocol();
-      maplibregl.addProtocol('pmtiles', protocol.tile);
-      pmtilesProtocolRegistered = true;
-    }
-
     const { tilesBase } = getServiceBaseUrls();
+    syncCompositeEntries(tilesBase, regions);
+    registerCompositePmtilesProtocol(tilesBase);
+
     const styleUrl = `${tilesBase}/tiles/style.json?v=7`;
 
     const map = new maplibregl.Map({
@@ -441,11 +604,22 @@ export function MapCanvas({
       },
     });
 
+    const emitViewport = () => {
+      const center = map.getCenter();
+      onViewportChangeRef.current?.({
+        latitude: Number(center.lat.toFixed(6)),
+        longitude: Number(center.lng.toFixed(6)),
+        zoom: map.getZoom(),
+      });
+    };
+
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
     map.on('load', () => {
       styleReadyRef.current = true;
       applyMapLabelLanguage(map, labelLanguageRef.current);
+      emitViewport();
     });
+    map.on('moveend', emitViewport);
     map.on('error', () => {
       if (!map.isStyleLoaded()) {
         map.setStyle({
@@ -969,6 +1143,26 @@ export function MapCanvas({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [places, labelLanguage]);
+
+  useEffect(() => {
+    const { tilesBase } = getServiceBaseUrls();
+    syncCompositeEntries(tilesBase, regions);
+    const map = mapRef.current;
+    if (!map || regionsRevision <= 0) return;
+
+    const refreshSource = () => {
+      const source = map.getSource('openmaptiles') as maplibregl.VectorTileSource | undefined;
+      if (source && typeof source.setUrl === 'function') {
+        source.setUrl(`pmtiles:///tiles/region.pmtiles?rev=${regionsRevision}`);
+      }
+    };
+
+    if (styleReadyRef.current || map.isStyleLoaded()) {
+      refreshSource();
+    } else {
+      map.once('load', refreshSource);
+    }
+  }, [regions, regionsRevision]);
 
   return <div ref={containerRef} className={className} />;
 }
