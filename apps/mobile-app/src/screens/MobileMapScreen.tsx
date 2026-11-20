@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  AppState,
   Image,
+  Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -27,6 +31,7 @@ import {
   isSafeHexColor,
   parseInviteInput,
   withMinDelay,
+  type AppVersionInfo,
   type ChatMessage,
   type GroupRole,
   type LocationBroadcast,
@@ -34,6 +39,11 @@ import {
   type MapRegion,
   type PrivacyMode,
 } from '@loved-ones/shared';
+import {
+  checkMobileAppVersion,
+  formatAppUpdateNotice,
+  INSTALLED_APP_VERSION,
+} from '../services/appVersion';
 
 const MOBILE_COLOR_PRESETS = ['#f59e0b', '#0ea5e9', '#10b981', '#8b5cf6', '#f43f5e', '#18181b'];
 import {
@@ -88,6 +98,10 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const chatBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notifiedMsgIdsRef = useRef<Set<string>>(new Set());
   chatOpenRef.current = chatOpen;
+
+  const [appVersionInfo, setAppVersionInfo] = useState<AppVersionInfo | null>(null);
+  const [dismissedAppUpdateVersion, setDismissedAppUpdateVersion] = useState<string | null>(null);
+  const alertedUpdateVersionRef = useRef<string | null>(null);
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [joinQrOpen, setJoinQrOpen] = useState(false);
@@ -186,6 +200,55 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     void getCachedRegionPmtilesUri().then(setLocalPmtilesUri).catch(() => {});
     void refreshQueueCount().catch(() => {});
   }, [refreshQueueCount]);
+
+  const checkServerAppVersion = useCallback(
+    async (manual = false) => {
+      if (!serverUrl) return;
+      const platform = Platform.OS === 'ios' ? 'ios' : 'android';
+      const info = await checkMobileAppVersion(
+        serverUrl,
+        INSTALLED_APP_VERSION,
+        platform,
+      ).catch(() => null);
+      if (!info) {
+        if (manual) setStatusBanner('Unable to check app updates right now');
+        return;
+      }
+      setAppVersionInfo(info);
+      if (info.updateAvailable) {
+        if (alertedUpdateVersionRef.current !== info.latestMobileVersion || manual) {
+          alertedUpdateVersionRef.current = info.latestMobileVersion;
+          const notice = formatAppUpdateNotice(info, INSTALLED_APP_VERSION);
+          Alert.alert(notice.title, notice.body, [
+            ...(info.updateRequired ? [] : [{ text: 'Later', style: 'cancel' as const }]),
+            ...(info.downloadUrl
+              ? [
+                  {
+                    text: 'Download Update',
+                    onPress: () => {
+                      void Linking.openURL(info.downloadUrl!).catch(() => {});
+                    },
+                  },
+                ]
+              : []),
+          ]);
+        }
+      } else if (manual) {
+        setStatusBanner(`App is up to date (v${INSTALLED_APP_VERSION})`);
+      }
+    },
+    [serverUrl],
+  );
+
+  useEffect(() => {
+    void checkServerAppVersion(false);
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void checkServerAppVersion(false);
+      }
+    });
+    return () => sub.remove();
+  }, [checkServerAppVersion]);
 
   async function handleRequestPermissions() {
     try {
@@ -297,6 +360,10 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       transports: ['websocket', 'polling'],
     });
     socketRef.current = socket;
+
+    socket.on('connect', () => {
+      void checkServerAppVersion(false);
+    });
 
     socket.on('location:update', (update: LocationBroadcast) => {
       setLocations((prev) => {
@@ -578,8 +645,9 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     try {
       const res = await checkForOtaUpdate();
       setStatusBanner(res.message);
-    } catch (err) {
-      setStatusBanner(err instanceof Error ? err.message : 'OTA check failed');
+      await checkServerAppVersion(!res.updated);
+    } catch {
+      await checkServerAppVersion(true);
     }
   }
 
@@ -1153,6 +1221,39 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           </View>
         )}
 
+        {appVersionInfo?.updateAvailable &&
+          (appVersionInfo.updateRequired ||
+            dismissedAppUpdateVersion !== appVersionInfo.latestMobileVersion) && (
+            <View style={styles.chatToastBanner}>
+              <View style={styles.chatToastTextWrap}>
+                <Text style={styles.chatToastSender} numberOfLines={1}>
+                  {formatAppUpdateNotice(appVersionInfo, INSTALLED_APP_VERSION).title}
+                </Text>
+                <Text style={styles.chatToastBody} numberOfLines={1}>
+                  {formatAppUpdateNotice(appVersionInfo, INSTALLED_APP_VERSION).body}
+                </Text>
+              </View>
+              {appVersionInfo.downloadUrl && (
+                <TouchableOpacity
+                  onPress={() => {
+                    void Linking.openURL(appVersionInfo.downloadUrl!).catch(() => {});
+                  }}
+                >
+                  <Text style={styles.chatToastAction}>Download</Text>
+                </TouchableOpacity>
+              )}
+              {!appVersionInfo.updateRequired && (
+                <TouchableOpacity
+                  onPress={() =>
+                    setDismissedAppUpdateVersion(appVersionInfo.latestMobileVersion)
+                  }
+                >
+                  <Text style={[styles.chatToastAction, { color: '#71717a' }]}>Later</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
         {(activeMapJob ||
           (uncoveredMobileTarget && dismissedUncoveredKey !== uncoveredMobileTarget.key)) && (
           <View style={styles.chatToastBanner}>
@@ -1646,6 +1747,22 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                 <Text style={styles.outlineBlackText}>
                   {passwordBusy ? 'Updating Password...' : 'Update Password'}
                 </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.settingsCard}>
+              <Text style={styles.settingsSectionTitle}>App Version</Text>
+              <Text style={styles.settingsHint}>
+                Installed build: v{INSTALLED_APP_VERSION}
+                {appVersionInfo?.latestMobileVersion
+                  ? ` · Server latest: v${appVersionInfo.latestMobileVersion}`
+                  : ''}
+              </Text>
+              <TouchableOpacity
+                style={styles.outlineBlackBtn}
+                onPress={() => void checkServerAppVersion(true)}
+              >
+                <Text style={styles.outlineBlackText}>Check for App Update</Text>
               </TouchableOpacity>
             </View>
 

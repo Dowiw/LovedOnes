@@ -6,6 +6,7 @@ COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
 COPY packages/db/package.json packages/db/tsconfig.json ./packages/db/
 COPY apps/auth-admin-service/package.json apps/auth-admin-service/tsconfig.json ./apps/auth-admin-service/
+COPY apps/mobile-app/app.json ./apps/mobile-app/app.json
 RUN pnpm install --filter @loved-ones/auth-admin-service...
 COPY packages/shared ./packages/shared
 COPY packages/db ./packages/db

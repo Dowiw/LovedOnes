@@ -37,6 +37,7 @@ import {
   isPointCoveredByRegions,
   isSafeAvatarUrl,
   withMinDelay,
+  type AppVersionInfo,
   type ChatMessage,
   type GroupPlace,
   type LocationBroadcast,
@@ -55,6 +56,7 @@ import {
   apiCreateLocationRequest,
   apiCreateTrackerToken,
   apiDeleteGroupPlace,
+  apiFetchAppVersion,
   apiFetchGroupLocations,
   apiFetchGroupMessages,
   apiFetchGroupPlaces,
@@ -88,6 +90,7 @@ import {
 
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
 type MapViewMode = 'live' | 'trails' | 'places';
+const WEB_APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.1.0';
 
 function playChatChime() {
   try {
@@ -150,6 +153,8 @@ export default function HomePage() {
 
   const [locations, setLocations] = useState<LocationBroadcast[]>([]);
   const [trails, setTrails] = useState<LocationBroadcast[]>([]);
+  const [webVersionInfo, setWebVersionInfo] = useState<AppVersionInfo | null>(null);
+  const [dismissedWebUpdateVersion, setDismissedWebUpdateVersion] = useState<string | null>(null);
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('live');
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -640,6 +645,11 @@ export default function HomePage() {
       if (activeGroup) {
         socket.emit('group:join', activeGroup.id);
       }
+      void apiFetchAppVersion(WEB_APP_VERSION, 'web')
+        .then((info) => {
+          if (info.updateAvailable) setWebVersionInfo(info);
+        })
+        .catch(() => {});
     });
 
     socket.on('location:update', (update: LocationBroadcast) => {
@@ -1624,6 +1634,39 @@ export default function HomePage() {
           setPlaceLon(String(lon));
         }}
       />
+
+      {/* Server Update Reload Banner (when web tab stayed open across a server release) */}
+      {webVersionInfo?.updateAvailable &&
+        dismissedWebUpdateVersion !== webVersionInfo.serverVersion && (
+          <div className="pointer-events-none fixed left-1/2 top-4 z-30 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2">
+            <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-3 rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold text-zinc-950">
+                  Server updated to v{webVersionInfo.serverVersion}
+                </p>
+                <p className="truncate text-[11px] text-zinc-500">
+                  Reload this tab to load the latest dashboard.
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="lo-press rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
+                >
+                  Reload
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDismissedWebUpdateVersion(webVersionInfo.serverVersion)}
+                  className="rounded-lg px-2 py-1 text-[11px] font-medium text-zinc-500 hover:bg-zinc-100"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* Calm Missing-Map-Coverage / Download Progress Pill */}
       {(activeMapJob ||

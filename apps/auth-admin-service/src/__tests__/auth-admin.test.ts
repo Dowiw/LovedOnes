@@ -111,6 +111,12 @@ describe('@loved-ones/auth-admin-service integration', () => {
           },
         },
       },
+      appVersion: {
+        serverVersion: '0.2.0',
+        latestMobileVersion: '0.2.0',
+        minSupportedVersion: '0.1.5',
+        downloadUrl: 'https://github.com/Dowiw/LovedOnes/releases/latest',
+      },
     });
     app = created.app;
     await app.listen({ port: 0, host: '127.0.0.1' });
@@ -465,5 +471,30 @@ describe('@loved-ones/auth-admin-service integration', () => {
       targetCommit: 'c0ffee1',
     });
     expect(updaterApplyCount).toBe(1);
+
+    // 14. Outdated APK/IPA & Web client version check endpoint
+    const outdatedApkRes = await app.inject({
+      method: 'GET',
+      url: '/api/auth/app-version?platform=android&version=0.1.0',
+    });
+    expect(outdatedApkRes.statusCode).toBe(200);
+    expect(outdatedApkRes.json()).toMatchObject({
+      serverVersion: '0.2.0',
+      latestMobileVersion: '0.2.0',
+      minSupportedVersion: '0.1.5',
+      updateAvailable: true,
+      updateRequired: true,
+      downloadUrl: 'https://github.com/Dowiw/LovedOnes/releases/latest',
+    });
+
+    const currentApkRes = await app.inject({
+      method: 'GET',
+      url: '/api/auth/app-version?platform=ios&version=0.2.0',
+    });
+    expect(currentApkRes.statusCode).toBe(200);
+    expect(currentApkRes.json()).toMatchObject({
+      updateAvailable: false,
+      updateRequired: false,
+    });
   });
 });

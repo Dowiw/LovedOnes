@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import cors from '@fastify/cors';
@@ -6,6 +7,11 @@ import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
 import { createPool, resolveAuditContext, runMigrations } from '@loved-ones/db';
+import {
+  DEFAULT_APP_VERSION,
+  evaluateClientVersion,
+  MOBILE_DEFAULT_DOWNLOAD_URL,
+} from '@loved-ones/shared';
 import {
   attachAuthAndTelemetry,
   AuthenticatedRequest,
@@ -52,8 +58,30 @@ export interface AuthAdminOptions {
     updaterUrl?: string;
     allowRemoteUpdate?: boolean;
   };
+  appVersion?: {
+    serverVersion?: string;
+    latestMobileVersion?: string;
+    minSupportedVersion?: string;
+    downloadUrl?: string;
+    releaseNotes?: string | null;
+  };
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
+}
+
+function readJsonVersionFile(candidates: string[], extractor: (parsed: unknown) => unknown): string | null {
+  for (const candidate of candidates) {
+    try {
+      const raw = fs.readFileSync(candidate, 'utf8');
+      const val = extractor(JSON.parse(raw));
+      if (typeof val === 'string' && val.trim().length > 0) {
+        return val.trim();
+      }
+    } catch {
+      // ignore missing path
+    }
+  }
+  return null;
 }
 
 export async function createAuthAdminServer(options: AuthAdminOptions = {}): Promise<{
@@ -171,6 +199,61 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
 
   app.get('/health', async () => {
     return { status: 'ok', service: 'auth-admin-service' };
+  });
+
+  const resolvedServerVersion =
+    options.appVersion?.serverVersion ??
+    (process.env.APP_VERSION || undefined) ??
+    readJsonVersionFile(
+      [
+        path.resolve(process.cwd(), 'package.json'),
+        path.resolve(process.cwd(), '../../package.json'),
+      ],
+      (p) => (p as { version?: string })?.version,
+    ) ??
+    DEFAULT_APP_VERSION;
+
+  const resolvedLatestMobileVersion =
+    options.appVersion?.latestMobileVersion ??
+    (process.env.LATEST_MOBILE_VERSION || undefined) ??
+    readJsonVersionFile(
+      [
+        path.resolve(process.cwd(), 'apps/mobile-app/app.json'),
+        path.resolve(process.cwd(), '../../apps/mobile-app/app.json'),
+      ],
+      (p) => (p as { expo?: { version?: string } })?.expo?.version,
+    ) ??
+    resolvedServerVersion;
+
+  const resolvedMinSupportedVersion =
+    options.appVersion?.minSupportedVersion ??
+    (process.env.MIN_SUPPORTED_APP_VERSION || undefined) ??
+    DEFAULT_APP_VERSION;
+
+  const resolvedDownloadUrl =
+    options.appVersion?.downloadUrl ??
+    (process.env.MOBILE_DOWNLOAD_URL || undefined) ??
+    MOBILE_DEFAULT_DOWNLOAD_URL;
+
+  const resolvedReleaseNotes =
+    options.appVersion?.releaseNotes ??
+    (process.env.MOBILE_RELEASE_NOTES || null);
+
+  app.get('/api/auth/app-version', async (request) => {
+    const query = (request.query ?? {}) as { version?: string; platform?: string };
+    const headerVersion =
+      typeof request.headers['x-app-version'] === 'string'
+        ? request.headers['x-app-version']
+        : undefined;
+    return evaluateClientVersion({
+      clientVersion: query.version ?? headerVersion ?? null,
+      platform: query.platform ?? null,
+      serverVersion: resolvedServerVersion,
+      latestMobileVersion: resolvedLatestMobileVersion,
+      minSupportedVersion: resolvedMinSupportedVersion,
+      downloadUrl: resolvedDownloadUrl,
+      releaseNotes: resolvedReleaseNotes,
+    });
   });
 
   // ---- Auth & Onboarding Endpoints ----

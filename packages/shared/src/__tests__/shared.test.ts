@@ -7,9 +7,11 @@ import {
   averageNearbyTrailPings,
   buildGeodesicCircleRing,
   ChangePasswordSchema,
+  compareSemver,
   computeCityFallbackBbox,
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
+  evaluateClientVersion,
   findCoveringRegions,
   haversineMeters,
   hexToRgba,
@@ -551,5 +553,44 @@ describe('@loved-ones/shared', () => {
     const [walkTrail] = averageNearbyTrailPings(walkPings);
     expect(walkTrail.stops).toHaveLength(10);
     expect(haversineMeters(52.5, 13.4, 52.501, 13.4)).toBeGreaterThan(100);
+  });
+
+  it('compares semantic versions and detects outdated APK/IPA installs', () => {
+    expect(compareSemver('0.1.0', '0.2.0')).toBe(-1);
+    expect(compareSemver('v0.1.9', '0.1.10')).toBe(-1);
+    expect(compareSemver('0.2.0-rc.1', '0.2.0')).toBe(-1);
+    expect(compareSemver('0.2.0', '0.2.0')).toBe(0);
+    expect(compareSemver('0.3.0', '0.2.5')).toBe(1);
+
+    const outdated = evaluateClientVersion({
+      clientVersion: '0.1.0',
+      platform: 'android',
+      serverVersion: '0.2.0',
+      latestMobileVersion: '0.2.0',
+      minSupportedVersion: '0.1.5',
+      downloadUrl: 'https://github.com/Dowiw/LovedOnes/releases/latest',
+    });
+    expect(outdated.updateAvailable).toBe(true);
+    expect(outdated.updateRequired).toBe(true);
+
+    const softOutdated = evaluateClientVersion({
+      clientVersion: '0.1.5',
+      platform: 'ios',
+      serverVersion: '0.2.0',
+      latestMobileVersion: '0.2.0',
+      minSupportedVersion: '0.1.5',
+    });
+    expect(softOutdated.updateAvailable).toBe(true);
+    expect(softOutdated.updateRequired).toBe(false);
+
+    const current = evaluateClientVersion({
+      clientVersion: '0.2.0',
+      platform: 'android',
+      serverVersion: '0.2.0',
+      latestMobileVersion: '0.2.0',
+      minSupportedVersion: '0.1.5',
+    });
+    expect(current.updateAvailable).toBe(false);
+    expect(current.updateRequired).toBe(false);
   });
 });

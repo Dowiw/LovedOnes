@@ -1,4 +1,5 @@
 import type {
+  AppVersionInfo,
   ChatMessage,
   GroupPlace,
   GroupRole,
@@ -743,4 +744,17 @@ export async function apiTriggerSystemUpdate(
     method: 'POST',
     body: JSON.stringify({ rebuildEvenIfCurrent: Boolean(options.rebuildEvenIfCurrent) }),
   });
+}
+
+export async function apiFetchAppVersion(
+  clientVersion: string,
+  platform: 'web' | 'android' | 'ios' = 'web',
+): Promise<AppVersionInfo> {
+  const { authBase } = getServiceBaseUrls();
+  const qs = `platform=${encodeURIComponent(platform)}&version=${encodeURIComponent(clientVersion)}`;
+  const res = await fetch(`${authBase}/api/auth/app-version?${qs}`);
+  if (!res.ok) {
+    throw new Error(`Version check failed (${res.status})`);
+  }
+  return (await res.json()) as AppVersionInfo;
 }

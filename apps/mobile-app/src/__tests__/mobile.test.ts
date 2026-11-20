@@ -11,6 +11,11 @@ import {
   getStoredConfig,
   parseAndBindQrInvite,
 } from '../services/secureConfig';
+import {
+  checkMobileAppVersion,
+  formatAppUpdateNotice,
+  INSTALLED_APP_VERSION,
+} from '../services/appVersion';
 import { requestLocationPermissionsOnLaunch } from '../services/locationPermissions';
 
 describe('@loved-ones/mobile-app', () => {
@@ -154,5 +159,38 @@ describe('@loved-ones/mobile-app', () => {
       },
     });
     expect(denied.level).toBe('denied');
+  });
+
+  it('detects outdated APK/IPA installs when server reports a newer mobile release', async () => {
+    expect(INSTALLED_APP_VERSION).toBe('0.1.0');
+    const mockFetch = vi.fn(async (url: string | URL) => {
+      expect(String(url)).toContain('/api/auth/app-version?platform=android&version=0.1.0');
+      return new Response(
+        JSON.stringify({
+          serverVersion: '0.2.0',
+          minSupportedVersion: '0.1.5',
+          latestMobileVersion: '0.2.0',
+          updateAvailable: true,
+          updateRequired: true,
+          downloadUrl: 'https://github.com/Dowiw/LovedOnes/releases/latest',
+          releaseNotes: 'Trail averaging and remote updates',
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const info = await checkMobileAppVersion(
+      'https://track.example.com/',
+      '0.1.0',
+      'android',
+      mockFetch,
+    );
+    expect(info?.updateAvailable).toBe(true);
+    expect(info?.updateRequired).toBe(true);
+    expect(info?.latestMobileVersion).toBe('0.2.0');
+
+    const notice = formatAppUpdateNotice(info!, '0.1.0');
+    expect(notice.title).toContain('0.2.0');
+    expect(notice.body).toContain('0.1.0');
   });
 });
