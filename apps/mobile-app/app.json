@@ -2,7 +2,7 @@
   "expo": {
     "name": "LovedOnes",
     "slug": "loved-ones",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -18,17 +18,20 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "org.lovedones.app",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Share your live location with authorized family groups.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Continue sharing background location updates with your group while the app is minimized.",
         "NSCameraUsageDescription": "Scan zero-config onboarding QR codes from your host admin dashboard.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
       "package": "org.lovedones.app",
-      "versionCode": 1,
+      "versionCode": 2,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
