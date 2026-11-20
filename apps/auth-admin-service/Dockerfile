@@ -18,5 +18,8 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app ./
+COPY infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 4001
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["node", "apps/auth-admin-service/dist/index.js"]

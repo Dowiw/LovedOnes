@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT_DIR"
+
+generate_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  elif command -v node >/dev/null 2>&1; then
+    node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))"
+  else
+    LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64
+  fi
+}
+
+if [ ! -f .env ]; then
+  cp .env.example .env
+  JWT_GEN="$(generate_secret)"
+  REFRESH_GEN="$(generate_secret)"
+  sed -i.bak \
+    -e "s|^JWT_SECRET=.*|JWT_SECRET=${JWT_GEN}|" \
+    -e "s|^JWT_REFRESH_SECRET=.*|JWT_REFRESH_SECRET=${REFRESH_GEN}|" \
+    .env
+  rm -f .env.bak
+
+  ARCH="$(uname -m)"
+  if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+    printf '\nPOSTGIS_IMAGE=imresamu/postgis:16-3.4-alpine\n' >> .env
+  fi
+fi
+
+GATEWAY_PORT="$(grep -E '^GATEWAY_PORT=' .env | tail -n 1 | cut -d= -f2- || true)"
+GATEWAY_PORT="${GATEWAY_PORT:-8080}"
+
+docker compose up -d --build "$@"
+echo "LovedOnes is running at http://localhost:${GATEWAY_PORT}"

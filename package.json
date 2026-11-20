@@ -7,6 +7,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
+    "start": "./bin/start",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",

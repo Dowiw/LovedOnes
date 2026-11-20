@@ -23,30 +23,19 @@ Runs anywhere Docker runs — cloud VMs, bare-metal Linux servers, home servers,
 
 You'll need **Docker** and **Docker Compose** installed.
 
-### 1. Create your config file
+1. Clone the repository and start everything with one command:
 
-```bash
-cp .env.example .env
-```
+   ```bash
+   ./bin/start
+   ```
 
-Open `.env` and update these essentials:
+   *(Or run `docker compose up -d` directly — `.env` is optional for local use, and `./bin/start` automatically generates random JWT secrets in `.env` and selects the `arm64` PostGIS image when needed.)*
 
-- **`JWT_SECRET`** and **`JWT_REFRESH_SECRET`** — set each to a long random string (at least 32 characters).
-- **`GATEWAY_PORT`** — the port you want the web app on locally (use `8080`, or `80` if nothing else uses port 80).
-- **`PUBLIC_SERVER_URL`** — the address people use to open the app (e.g. `http://localhost:8080` for local testing, or `https://track.yourdomain.com` if using a domain).
-- **`POSTGIS_IMAGE`** *(optional, for native `arm64` hosts)* — set `POSTGIS_IMAGE=imresamu/postgis:16-3.4-alpine` instead of the default `amd64` image.
-
-### 2. Start everything
-
-```bash
-docker compose up -d --build
-```
-
-### 3. Create your admin account
-
-Open `http://localhost:8080` (or `http://localhost` if using port 80) in your browser and register your first account.
+2. Open **`http://localhost:8080`** and register your first account.
 
 > The very first account created on a fresh database automatically becomes the **Host Admin**, giving you access to `/admin` and `/admin/invites`.
+>
+> For local hot-reload development, run `./bin/dev`.
 
 ---
 

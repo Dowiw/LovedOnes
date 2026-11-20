@@ -2,13 +2,20 @@ networks:
   internal_net:
     driver: bridge
 
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: ${LOG_MAX_SIZE:-100m}
+    max-file: ${LOG_MAX_FILE:-5}
+
 services:
   gateway:
     image: caddy:2-alpine
     container_name: lovedones-gateway
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "${GATEWAY_PORT:-80}:80"
+      - "${GATEWAY_PORT:-8080}:80"
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./infra/tiles:/srv/tiles:ro
@@ -17,15 +24,19 @@ services:
     networks:
       - internal_net
     depends_on:
-      - auth-admin-service
-      - realtime-service
-      - web-dashboard
+      auth-admin-service:
+        condition: service_healthy
+      realtime-service:
+        condition: service_healthy
+      web-dashboard:
+        condition: service_healthy
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: lovedones-cloudflared
     profiles: ["tunnel"]
     restart: unless-stopped
+    logging: *default-logging
     command: tunnel --no-autoupdate run --url http://gateway:80
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
@@ -36,8 +47,10 @@ services:
 
   postgres:
     image: ${POSTGIS_IMAGE:-postgis/postgis:16-3.4-alpine}
+    # Use POSTGIS_IMAGE=imresamu/postgis:16-3.4-alpine on native arm64 hosts
     container_name: lovedones-postgres
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -57,6 +70,7 @@ services:
     image: redis:7-alpine
     container_name: lovedones-redis
     restart: unless-stopped
+    logging: *default-logging
     command: redis-server --appendonly yes
     volumes:
       - redisdata:/data
@@ -74,20 +88,26 @@ services:
       dockerfile: apps/auth-admin-service/Dockerfile
     container_name: lovedones-auth-admin
     restart: unless-stopped
+    logging: *default-logging
     environment:
       NODE_ENV: production
       PORT: 4001
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-lovedones}
-      REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-lovedones}}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-key-minimum-32-characters-long}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-jwt-refresh-secret-key-min-32-chars}
       LOG_DIR: /var/log/app
       MAX_LOG_STORAGE_MB: ${MAX_LOG_STORAGE_MB:-500}
-      PUBLIC_SERVER_URL: ${PUBLIC_SERVER_URL:-http://localhost}
+      PUBLIC_SERVER_URL: ${PUBLIC_SERVER_URL:-http://localhost:${GATEWAY_PORT:-8080}}
     volumes:
       - ./logs:/var/log/app
     networks:
       - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4001/health | grep -q '\"status\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,17 +120,23 @@ services:
       dockerfile: apps/realtime-service/Dockerfile
     container_name: lovedones-realtime
     restart: unless-stopped
+    logging: *default-logging
     environment:
       NODE_ENV: production
       PORT: 4002
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-lovedones}
-      REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-lovedones}}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-key-minimum-32-characters-long}
       LOG_DIR: /var/log/app
     volumes:
       - ./logs:/var/log/app
     networks:
       - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4002/health | grep -q '\"status\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,12 +150,13 @@ services:
     container_name: lovedones-map-service
     profiles: ["standalone-maps"]
     restart: unless-stopped
+    logging: *default-logging
     environment:
       NODE_ENV: production
       PORT: 8080
       TILES_DIR: /srv/tiles
       LOG_DIR: /var/log/app
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
     volumes:
       - ./infra/tiles:/srv/tiles:ro
       - ./logs:/var/log/app
@@ -142,15 +169,24 @@ services:
       dockerfile: apps/web-dashboard/Dockerfile
     container_name: lovedones-web-dashboard
     restart: unless-stopped
+    logging: *default-logging
     environment:
       NODE_ENV: production
+      HOSTNAME: "0.0.0.0"
       PORT: 3000
-      NEXT_PUBLIC_GATEWAY_URL: ${PUBLIC_SERVER_URL:-http://localhost}
+      NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-}
     networks:
       - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:3000/"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     depends_on:
-      - auth-admin-service
-      - realtime-service
+      auth-admin-service:
+        condition: service_healthy
+      realtime-service:
+        condition: service_healthy
 
 volumes:
   pgdata:
