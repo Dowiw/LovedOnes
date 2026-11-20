@@ -12,14 +12,11 @@ Thanks for helping improve LovedOnes! Whether it's a bug fix, doc tweak, or new 
 ## Local Setup
 
 ```bash
-cp .env.example .env
 pnpm install
-docker compose -f docker-compose.dev.yml up -d --wait
-set -a && source .env && set +a
-pnpm dev
+./bin/dev
 ```
 
-Only working on the web UI against the full Docker stack (`:8080`)? Run Next.js on a free port with hot reload:
+Only working on the web UI against the full stack (`:8080`)? Run the web dev server on a free port with hot reload:
 
 ```bash
 NEXT_PUBLIC_GATEWAY_URL=http://localhost:8080 pnpm --filter @loved-ones/web-dashboard exec next dev -p 3002

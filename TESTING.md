@@ -1,22 +1,22 @@
 # Developer Testing Guide
 
-Exact steps to verify the **whole Docker stack**, the **Next.js frontend**, the **automated test suite**, and the **mobile dev client**.
+Exact steps to verify the **container stack**, the **web frontend**, the **automated test suite**, and the **mobile client**.
 
 ---
 
-## 1. Whole Docker Setup Verification
+## 1. Full Stack Verification
 
-### Step 1 — Validate & Start the Full Stack
+### Step 1 — Validate & Start the Stack
 
-Ensure `.env` exists (copied from `.env.example` with `GATEWAY_PORT=8080` if not using port `80`). Stop `docker-compose.dev.yml` first if it is running so ports don't collide:
+Stop `docker-compose.dev.yml` first if it is running so ports don't collide, then launch the stack with a single command:
 
 ```bash
-# Validate both Compose files
+# Validate Compose files
 docker compose config -q && docker compose -f docker-compose.dev.yml config -q
 
-# Ensure dev stack is down, then build and launch all 6 default containers
+# Ensure dev stack is down, then initialize .env (if absent), build, and start
 docker compose -f docker-compose.dev.yml down
-docker compose up -d --build
+./bin/start
 ```
 
 ### Step 2 — Check Container Health & Startup Logs
@@ -46,9 +46,9 @@ Expected lines:
 - `realtime-service listening` (`port: 4002`)
 - `web-dashboard` → `✓ Ready`
 
-### Step 3 — Verify Every Caddy Gateway Route (`http://localhost:8080`)
+### Step 3 — Verify Every Gateway Route (`http://localhost:8080`)
 
-Run these checks against Caddy ([infra/caddy/Caddyfile](infra/caddy/Caddyfile)):
+Run these checks against the reverse proxy gateway ([infra/caddy/Caddyfile](infra/caddy/Caddyfile)):
 
 ```bash
 # 1. Next.js HTML pages return 200 OK
@@ -66,23 +66,25 @@ curl -sI http://localhost:8080/tiles/style.json
 curl -sSi -H "Range: bytes=0-7" http://localhost:8080/tiles/region.pmtiles | head -n 12
 # Expect: HTTP/1.1 206 Partial Content, Accept-Ranges: bytes, Content-Range: bytes 0-7/...
 
-# 4. Caddy -> auth-admin-service proxy works (expects JSON 404 from Fastify)
+# 4. Gateway -> auth-admin-service proxy works (expects JSON 404 from Fastify)
 curl -sSi http://localhost:8080/api/auth/invites/nonexistent
 
-# 5. Caddy -> realtime-service Socket.io handshake works (expects HTTP 200)
+# 5. Gateway -> realtime-service Socket.io handshake works (expects HTTP 200)
 curl -sSi "http://localhost:8080/socket.io/?EIO=4&transport=polling"
 ```
 
-### Step 4 — Verify Persistence & Cloudflare Tunnel (Optional)
+### Step 4 — Verify Persistence & Remote Ingress (Optional)
 
-- **Restart persistence:** After creating a user/group in Section 2, run `docker compose restart`, refresh `http://localhost:8080/`, and confirm your account/group/messages persist via the `pgdata` volume.
+- **Restart persistence:** After creating a user/group in Section 2, run `docker compose restart`, refresh `http://localhost:8080/`, and confirm your account/group/messages persist via the database volume.
 - **Reset to a fresh empty DB (if needed before a clean test):**
   ```bash
   docker compose down -v
-  docker compose up -d --build
+  ./bin/start
   ```
-  *(Warning: `-v` deletes all database, Redis, and Caddy data volumes.)*
-- **Cloudflare Tunnel check:** If `CLOUDFLARE_TUNNEL_TOKEN` and `PUBLIC_SERVER_URL=https://<your-domain>` are set in `.env`, run `docker compose --profile tunnel up -d` and check `docker compose logs --tail=20 cloudflared` for registered tunnel connections, then open `https://<your-domain>/` in a browser.
+  *(Warning: `-v` deletes all database, broker, and gateway data volumes.)*
+
+#### Using Cloudflare (Optional Tunnel Profile)
+- Set `CLOUDFLARE_TUNNEL_TOKEN` and `PUBLIC_SERVER_URL=https://<your-domain>` in `.env`, run `docker compose --profile tunnel up -d`, inspect `docker compose logs --tail=20 cloudflared` for registered connections, and open `https://<your-domain>/`.
 
 ---
 
@@ -94,7 +96,7 @@ Use **two browser sessions** side by side:
 
 ### Step 1 — Register the First Host Admin & Create a Group (Window A)
 
-1. Open `http://localhost:8080/` (or your Cloudflare domain).
+1. Open `http://localhost:8080/` (or your public domain).
 2. Click **`Need an account? Register here`** to switch to registration mode (**`Create your LovedOnes account`**).
 3. Enter Email (`admin@example.com`), Username (`HostAdmin`), Password (at least 8 characters), and submit.
 4. Confirm the top bar shows `HostAdmin` with badge **`HOST_ADMIN`** and navigation links **`Live Map & Chat`**, **`Admin Telemetry`**, and **`QR Invites`**.
@@ -104,7 +106,7 @@ Use **two browser sessions** side by side:
 
 1. In Window A, click **`QR Invites`** in the top nav (`/admin/invites`).
 2. Select Group **`Family`**, keep Role `MEMBER`, and click **`Create QR Invite`**.
-3. Confirm both a QR image and **`Web Invite Link`** appear (check that the URL host matches `PUBLIC_SERVER_URL` in `.env`, e.g., `http://localhost:8080/join?token=inv_...` or your `https://` tunnel domain).
+3. Confirm both a QR image and **`Web Invite Link`** appear (check that the URL host matches `PUBLIC_SERVER_URL` in `.env`, e.g., `http://localhost:8080/join?token=inv_...` or your public `https://` origin).
 4. Click **`Copy`** on **`Web Invite Link`**.
 5. Paste and open that URL in **Window B (Incognito)** (`/join?token=inv_...`).
 6. Verify the **`Group Invite`** card displays `Family` and role `MEMBER`.
@@ -141,34 +143,34 @@ With DevTools → **Network** open on `/` and `/admin`:
 
 ## 3. Automated Test Suite (`pnpm test`)
 
-### Fast In-Process Unit & Domain Tests (No Docker Needed)
+### Fast In-Process Unit & Domain Tests (No External Services Needed)
 
 ```bash
-pnpm --filter @loved-ones/shared test                                                                  # 6 tests
-pnpm --filter @loved-ones/auth-admin-service exec vitest run src/__tests__/auth-group-module.test.ts   # 6 tests
-pnpm --filter @loved-ones/realtime-service exec vitest run src/__tests__/realtime-module.test.ts       # 3 tests
+pnpm --filter @loved-ones/shared test                                                                  # 10 tests
+pnpm --filter @loved-ones/auth-admin-service exec vitest run src/__tests__/auth-group-module.test.ts   # 7 tests
+pnpm --filter @loved-ones/realtime-service exec vitest run src/__tests__/realtime-module.test.ts       # 7 tests
 pnpm --filter @loved-ones/map-service test                                                             # 1 test
 pnpm --filter @loved-ones/web-dashboard test                                                           # 2 tests
-pnpm --filter @loved-ones/mobile-app test                                                              # 4 tests
+pnpm --filter @loved-ones/mobile-app test                                                              # 5 tests
 ```
 
 ### Full Build, Typecheck & Postgres/Redis Integration Tests
 
-Integration tests in `@loved-ones/db`, `auth-admin.test.ts`, and `realtime.test.ts` connect to `localhost:5432` and `localhost:6379` (which are only exposed by `docker-compose.dev.yml`, not the production `docker-compose.yml`):
+Integration tests in `@loved-ones/db`, `auth-admin.test.ts`, and `realtime.test.ts` connect to `localhost:5432` and `localhost:6379` (which are exposed by `docker-compose.dev.yml`):
 
 ```bash
-# 1. Stop production stack cleanly (keep pgdata) and start dev Postgres + Redis
+# 1. Stop default stack cleanly (keep pgdata) and start dev backing stores
 docker compose down
 docker compose -f docker-compose.dev.yml up -d --wait postgres redis
 
-# 2. Build, typecheck, and run all 9 test files (25 tests)
+# 2. Build, typecheck, and run all 9 test files (38 tests)
 pnpm build
 pnpm typecheck
 pnpm test
 
-# 3. Restore the production stack on :8080
+# 3. Restore the default stack on :8080
 docker compose -f docker-compose.dev.yml down
-docker compose up -d
+./bin/start
 ```
 
 > **Database isolation note:** `auth-admin.test.ts` drops and recreates `lovedones_test_auth` (Redis DB `/1`) and `realtime.test.ts` drops and recreates `lovedones_test_realtime` (Redis DB `/2`). `db.test.ts` uses `DATABASE_URL` (default `lovedones`) and deletes its synthetic test rows after running.
@@ -177,33 +179,28 @@ docker compose up -d
 
 | Package | Test File | Tests | Dependencies | Coverage |
 | :--- | :--- | :---: | :--- | :--- |
-| `@loved-ones/shared` | [`shared.test.ts`](packages/shared/src/__tests__/shared.test.ts) | 6 | In-process | Zod schemas, `normalizePrivacyMode`, `applyPrivacyFuzzing`, `pino-roll`, strict `jose` `access` vs `refresh` JWT |
-| `@loved-ones/db` | [`db.test.ts`](packages/db/src/__tests__/db.test.ts) | 1 | Postgres (`:5432`) | PostGIS migrations, `insertLocationBatch`, `getLatestGroupLocations`, `getDatabaseTelemetry` |
+| `@loved-ones/shared` | [`shared.test.ts`](packages/shared/src/__tests__/shared.test.ts) | 10 | In-process | Zod schemas, privacy fuzzing, `pino-roll`, JWT `access`/`refresh`/`tracker` tokens, OwnTracks/Overland & bbox/trail queries |
+| `@loved-ones/db` | [`db.test.ts`](packages/db/src/__tests__/db.test.ts) | 4 | Postgres (`:5432`) | PostGIS migrations, idempotent batch inserts, snapshots, spatial trails, check-in overrides & `ST_DWithin` geofences |
 | `@loved-ones/map-service` | [`map-service.test.ts`](apps/map-service/src/__tests__/map-service.test.ts) | 1 | Local `infra/tiles` | `style.json` and `HTTP 206` byte ranges on `region.pmtiles` |
-| `@loved-ones/auth-admin-service` | [`auth-group-module.test.ts`](apps/auth-admin-service/src/__tests__/auth-group-module.test.ts) | 6 | In-process | First-user `HOST_ADMIN`, atomic invite rollback, refresh token rejection of access JWTs, RBAC `403`, non-downgrading `joinByInvite`, `PUBLIC_SERVER_URL` precedence, telemetry thresholds |
+| `@loved-ones/auth-admin-service` | [`auth-group-module.test.ts`](apps/auth-admin-service/src/__tests__/auth-group-module.test.ts) | 7 | In-process | First-user `HOST_ADMIN`, atomic invites, token isolation, RBAC `403`, tracker token JTI lifecycle, telemetry thresholds |
 | `@loved-ones/auth-admin-service` | [`auth-admin.test.ts`](apps/auth-admin-service/src/__tests__/auth-admin.test.ts) | 1 | Postgres + Redis | End-to-end Argon2id registration, refresh, QR invites, `/api/admin/telemetry`, `/api/admin/logs/stream` WS |
-| `@loved-ones/realtime-service` | [`realtime-module.test.ts`](apps/realtime-service/src/__tests__/realtime-module.test.ts) | 3 | In-process | `EXACT`/`FUZZED`/`GHOST`/`SPECTATOR` rules, `recordedAt` fuzzing stability, `403` guards, single-counted telemetry |
-| `@loved-ones/realtime-service` | [`realtime.test.ts`](apps/realtime-service/src/__tests__/realtime.test.ts) | 1 | Postgres + Redis | Live Socket.io + Redis adapter GPS ingestion, privacy switches, chat, and socket/point telemetry |
+| `@loved-ones/realtime-service` | [`realtime-module.test.ts`](apps/realtime-service/src/__tests__/realtime-module.test.ts) | 7 | In-process | Privacy modes, Null Island/accuracy/velocity filtering, OwnTracks/Overland, `ETag`/`?since=`, trails, check-ins & places |
+| `@loved-ones/realtime-service` | [`realtime.test.ts`](apps/realtime-service/src/__tests__/realtime.test.ts) | 1 | Postgres + Redis | Live Socket.io + REST GPS ingestion, `304` snapshots, `/trails`, check-ins, `ST_DWithin` place alerts & telemetry |
 | `@loved-ones/web-dashboard` | [`api-helpers.test.ts`](apps/web-dashboard/src/__tests__/api-helpers.test.ts) | 2 | In-process | Byte formatting, relative gateway URL resolution, log WebSocket URL builder |
-| `@loved-ones/mobile-app` | [`mobile.test.ts`](apps/mobile-app/src/__tests__/mobile.test.ts) | 4 | In-process | QR JSON & `/join?token=...` parsing, `SecureStore` binding, offline queue batch flush, `pmtiles://` styles |
+| `@loved-ones/mobile-app` | [`mobile.test.ts`](apps/mobile-app/src/__tests__/mobile.test.ts) | 5 | In-process | QR JSON & `/join?token=...` parsing, offline queue flush, `pmtiles://` styles, launch permission fallback |
 
 ---
 
 ## 4. Testing the Mobile App (`apps/mobile-app`)
 
-Standard **Expo Go** cannot load `@maplibre/maplibre-react-native` because it contains custom native C++ code.
+Because the mobile client bundles native map rendering (`@maplibre/maplibre-react-native`), install a custom **Development Build** rather than a generic sandbox runner:
 
-1. **Build & install the Development Client APK once:**
-   ```bash
-   cd apps/mobile-app
-   eas build --platform android --profile development
-   ```
-2. **Start Metro** (use `--tunnel` if your phone isn't on the same local network as your dev machine):
+1. **Build and install the development client** for your mobile target from `apps/mobile-app` using cloud or local native build tooling.
+2. **Start the dev server** (pass `--tunnel` if your test device is not on the same local network):
    ```bash
    pnpm --filter @loved-ones/mobile-app start
-   # or: npx expo start --dev-client --tunnel
    ```
 3. **Test end-to-end on device:**
    - Scan the QR code from `/admin/invites` on `QrOnboardingScreen` and verify `serverUrl` binds automatically.
-   - Verify MapLibre renders tiles from `/tiles/region.pmtiles` (swap [`infra/tiles/region.pmtiles`](infra/tiles/region.pmtiles) with a regional Protomaps extract for street-level detail).
-   - Enable background tracking, turn on **Airplane Mode** for 1–2 minutes to buffer points in SQLite, then reconnect and confirm the queued batch flushes to `POST /api/realtime/locations`.
+   - Verify map tiles load from `/tiles/region.pmtiles` (swap [`infra/tiles/region.pmtiles`](infra/tiles/region.pmtiles) with a regional vector extract for street-level detail).
+   - Enable background tracking, toggle offline/airplane mode for 1–2 minutes to buffer points locally, then reconnect and confirm queued points flush to `POST /api/realtime/locations`.

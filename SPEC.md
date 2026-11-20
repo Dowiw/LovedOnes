@@ -6,17 +6,17 @@
 
 ## 1. System Architecture & Services
 
-The system is a decoupled microservices platform orchestrated via Docker Compose and designed to run either as a single-node appliance or scaled horizontally behind a reverse proxy or load balancer. All application services are stateless and coordinate through PostgreSQL/PostGIS and Redis.
+The system is a decoupled microservices platform orchestrated via containers or local workspace processes and designed to run either as a single-node appliance or scaled horizontally behind any reverse proxy or load balancer. All application services are stateless and coordinate through a spatial SQL database and Redis-compatible pub/sub store.
 
-### 1.1 Infrastructure & Ingress Containers
-* **`gateway` (Caddy 2 Alpine):** Single HTTP/WebSocket entry point (or replaceable by an external reverse proxy / cloud load balancer). Routes traffic by path or subdomain:
+### 1.1 Infrastructure & Ingress Services
+* **`gateway` (Reverse Proxy):** Single HTTP/WebSocket entry point (bundled with Caddy 2, or replaceable by any external reverse proxy / cloud load balancer). Routes traffic by path or subdomain:
   * `/api/auth/*` and `/api/admin/*` -> `auth-admin-service:4001`
   * `/api/realtime/*` and `/socket.io/*` -> `realtime-service:4002`
-  * `/tiles/*` -> served directly from Caddy (`file_server` over `/srv/tiles` with `Accept-Ranges: bytes` + CORS; `map-service` available via optional `standalone-maps` profile)
+  * `/tiles/*` -> served directly from `/srv/tiles` with `Accept-Ranges: bytes` + CORS (`apps/map-service` remains available via optional `standalone-maps` profile)
   * `/*` -> `web-dashboard:3000`
-* **`cloudflared` (Optional Profile):** Official `cloudflare/cloudflared` container for zero-port-forward hosting on any NATted or firewalled network. Connects directly to `http://gateway:80`.
-* **`postgres` (`${POSTGIS_IMAGE:-postgis/postgis:16-3.4-alpine}`):** Primary relational and spatial datastore (use `imresamu/postgis:16-3.4-alpine` for native `linux/arm64`, or point `DATABASE_URL` at an external managed PostgreSQL/PostGIS cluster).
-* **`redis` (`redis:7-alpine` or managed Redis via `REDIS_URL`):** Pub/Sub message broker, Socket.io adapter, live log ring-buffer, session store, and per-user telemetry counter store.
+* **`tunnel` (Optional Profile):** Optional encrypted ingress connector for zero-port-forward hosting on NATted or firewalled networks (bundled example uses `cloudflared`), forwarding directly to `http://gateway:80`.
+* **`postgres` (Spatial Relational Store):** Primary PostgreSQL/PostGIS datastore (supports multi-arch container images or any external `DATABASE_URL`).
+* **`redis` (Broker & Cache):** Pub/Sub message broker, WebSocket adapter, live log ring-buffer, session store, and per-user telemetry counter store (supports local container or external `REDIS_URL`).
 
 ### 1.2 Application Microservices & Clients (Monorepo Packages)
 1. **`packages/shared`:** Shared TypeScript interfaces, Zod validation schemas, Socket.io event payloads, and Pino logger configuration.
@@ -30,16 +30,15 @@ The system is a decoupled microservices platform orchestrated via Docker Compose
    * Ingests live GPS batches and chat messages, persists to PostGIS, and broadcasts to authorized group rooms.
    * Enforces privacy modes per group (`ACTIVE`, `GHOST`, `FUZZED_1KM`).
 4. **`apps/map-service` (Optional Standalone Range Server / `standalone-maps` Profile):**
-   * Serves static `.pmtiles` OpenStreetMap archives and MapLibre `style.json` / glyphs via HTTP Range Requests (`Accept-Ranges: bytes`) with CORS enabled for custom/standalone deployments (`gateway` serves `/tiles/*` directly in the default Compose stack).
-5. **`apps/web-dashboard` (Next.js + Tailwind CSS + TypeScript + MapLibre GL JS):**
-   * **User Portal:** Browser-accessible live map (using the `pmtiles` JS protocol plugin), group chat, and optional foreground Web Geolocation sharing (designed for iOS Safari / desktop users).
+   * Serves static `.pmtiles` vector archives and map styles/glyphs via HTTP Range Requests (`Accept-Ranges: bytes`) with CORS enabled for custom/standalone deployments (`gateway` serves `/tiles/*` directly in the default stack).
+5. **`apps/web-dashboard` (Web Portal):**
+   * **User Portal:** Browser-accessible live map, group chat, check-in requests, geofenced places, and optional foreground Web Geolocation sharing across desktop and mobile web browsers.
    * **Admin Portal (`/admin`):** QR invite generator, live scrolling `STDOUT` log terminal via WebSockets, storage alerts, and per-user compute/memory breakdown.
-6. **`apps/mobile-app` (React Native + Expo SDK 58 + TypeScript):**
-   * Native Android & iOS client using `expo-dev-client`, `expo-location`, `expo-task-manager`, and `@maplibre/maplibre-react-native` (v11+ New Architecture).
-   * Supports QR code onboarding scan, offline SQLite location queue when disconnected, native PMTiles map rendering (`pmtiles://https://...` and local cached `pmtiles://file://...`), and OTA updates via `expo-updates`.
+6. **`apps/mobile-app` (Native Mobile Client):**
+   * Native Android & iOS client with QR onboarding, offline SQLite location queue when disconnected, native PMTiles map rendering (`pmtiles://https://...` and local cached `pmtiles://file://...`), and OTA updates.
 
 ### 1.3 Scaling Across Systems & Topologies
-* **Stateless Horizontal Scaling:** Multiple replicas of `auth-admin-service` (stateless JWTs + Redis sessions) and `realtime-service` (`@socket.io/redis-adapter`) can run behind Caddy or any L7 load balancer without sticky state in process memory.
+* **Stateless Horizontal Scaling:** Multiple replicas of `auth-admin-service` (stateless JWTs + Redis sessions) and `realtime-service` (`@socket.io/redis-adapter`) can run behind any L7 load balancer or reverse proxy without sticky state in process memory.
 * **Edge & Cloud Storage Options:** Static `.pmtiles` archives served via HTTP Byte-Range requests can sit behind CDN caching or object storage proxies for multi-region clients.
 
 ---
@@ -151,7 +150,7 @@ CREATE INDEX idx_messages_group_time ON messages (group_id, created_at DESC);
 
 ### 4.1 Zero-Config QR Invite Flow
 
-1. Host Admin opens `/admin/invites` on `web-dashboard` (accessible via LAN IP or Cloudflare Tunnel URL).
+1. Host Admin opens `/admin/invites` on `web-dashboard` (accessible via local network IP or public HTTPS origin).
 2. Admin selects a Group, Role, and Expiration, triggering `POST /api/admin/invites`.
 3. `auth-admin-service` returns a JSON payload and deep link:
 ```json

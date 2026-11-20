@@ -6,9 +6,9 @@ Read `SPEC.md` at the repository root as the single source of truth for schemas,
 
 The stack targets Linux, macOS, and Windows (WSL2) workstations as well as `amd64` and `arm64` servers and cloud hosts:
 
-1. **Multi-Arch & External Backing Stores:** Both Compose stacks default to `postgis/postgis:16-3.4-alpine` (`amd64`), support overriding `POSTGIS_IMAGE=imresamu/postgis:16-3.4-alpine` for native `arm64` hosts (Apple Silicon, AWS Graviton, ARM SBCs), and accept external `DATABASE_URL` / `REDIS_URL` endpoints for managed or horizontally scaled deployments.
-2. **Filesystem Hygiene (Windows WSL2 Note):** On Linux and macOS, run directly on the native filesystem. On Windows WSL2, keep the repository inside the Linux home directory (e.g., `~/project_repos/LovedOnes`) rather than `/mnt/c/...` so Docker mounts and file-watching (`inotify`) stay fast.
-3. **Mobile Testing Across Host OSes (Android & iOS Expo Dev Client):** Because `@maplibre/maplibre-react-native` (v11+) includes custom native C++ code, it cannot run inside the standard Expo Go app. Compile a custom **Development Build** (`eas build --platform android --profile development`, `eas build --platform ios --profile development`, or locally via Android Studio / Xcode) once, install it on a device, and connect to Metro using `npx expo start --dev-client --tunnel` (or direct LAN).
+1. **Multi-Arch & External Backing Stores:** Both Compose stacks default to `postgis/postgis:16-3.4-alpine` (`amd64`), support overriding `POSTGIS_IMAGE=imresamu/postgis:16-3.4-alpine` for native `arm64` hosts (ARM workstations, cloud instances, and SBCs), and accept external `DATABASE_URL` / `REDIS_URL` endpoints for managed or horizontally scaled deployments.
+2. **Filesystem Hygiene:** Keep the repository on the host's native Linux filesystem rather than a virtualized host share (e.g., `/mnt/c/...` on WSL2) so container mounts and file-watching stay fast.
+3. **Mobile Testing Across Host OSes:** Because `@maplibre/maplibre-react-native` (v11+) includes custom native C++ code, it cannot run inside a generic sandbox runner. Compile a custom **Development Build** once via cloud or local native build tooling, install it on a device, and connect to the dev bundler over LAN or tunnel.
 
 ## Monorepo Architecture & Package Ownership
 
