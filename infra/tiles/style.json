@@ -363,7 +363,7 @@
         "text-font": ["PlusJakartaSans-Medium"],
         "text-size": ["interpolate", ["linear"], ["zoom"], 11, 10, 15, 12],
         "text-letter-spacing": 0.04,
-        "symbol-spacing": 380
+        "symbol-spacing": 520
       },
       "paint": {
         "text-color": "#4b7b94",
@@ -372,12 +372,45 @@
       }
     },
     {
+      "id": "road-labels-minor",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "roads",
+      "minzoom": 14.5,
+      "filter": [
+        "all",
+        ["==", ["get", "kind"], "minor_road"],
+        ["!", ["has", "service"]],
+        ["has", "name"]
+      ],
+      "layout": {
+        "symbol-placement": "line",
+        "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+        "text-font": ["PlusJakartaSans-Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 14.5, 10, 17, 12],
+        "text-max-angle": 35,
+        "text-padding": 18,
+        "symbol-spacing": 620
+      },
+      "paint": {
+        "text-color": "#525866",
+        "text-halo-color": "rgba(255, 255, 255, 0.94)",
+        "text-halo-width": 1.7,
+        "text-halo-blur": 0.3
+      }
+    },
+    {
       "id": "road-labels",
       "type": "symbol",
       "source": "openmaptiles",
       "source-layer": "roads",
       "minzoom": 12,
-      "filter": ["all", ["!", ["in", ["get", "kind"], ["literal", ["rail", "path"]]]], ["has", "name"]],
+      "filter": [
+        "all",
+        ["in", ["get", "kind"], ["literal", ["highway", "major_road"]]],
+        ["!", ["has", "service"]],
+        ["has", "name"]
+      ],
       "layout": {
         "symbol-placement": "line",
         "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
@@ -391,11 +424,11 @@
           14,
           11.5,
           17,
-          13.5
+          13
         ],
-        "text-max-angle": 45,
-        "text-padding": 3,
-        "symbol-spacing": 200
+        "text-max-angle": 35,
+        "text-padding": 16,
+        "symbol-spacing": 560
       },
       "paint": {
         "text-color": "#3f444e",

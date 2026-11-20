@@ -18,6 +18,7 @@ const LANGUAGE_LABEL_LAYER_IDS = [
   'pois-food-labels',
   'pois-retail-labels',
   'water-labels',
+  'road-labels-minor',
   'road-labels',
   'pois-parks-labels',
   'pois-health-local',
@@ -117,7 +118,7 @@ export function MapCanvas({
     }
 
     const { tilesBase } = getServiceBaseUrls();
-    const styleUrl = `${tilesBase}/tiles/style.json?v=6`;
+    const styleUrl = `${tilesBase}/tiles/style.json?v=7`;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
