@@ -29,6 +29,154 @@ const LANGUAGE_LABEL_LAYER_IDS = [
   'places-cities',
 ] as const;
 
+const CONTEXT_NEIGHBORHOOD_LAYERS = ['places-neighborhoods'] as const;
+const CONTEXT_POI_LAYERS = [
+  'pois-landmarks-labels',
+  'pois-parks-labels',
+  'pois-civic-local',
+  'pois-health-major',
+  'pois-health-local',
+  'pois-food-labels',
+  'pois-retail-labels',
+] as const;
+const CONTEXT_ROAD_LAYERS = ['road-labels', 'road-labels-minor'] as const;
+const CONTEXT_CITY_LAYERS = ['places-cities'] as const;
+
+function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const r = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * r * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatRelativeTime(isoDate: string): string {
+  const ms = Date.parse(isoDate);
+  if (!Number.isFinite(ms)) return 'Recently';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (diffSec < 45) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
+}
+
+function pickFeatureLabel(
+  props: Record<string, unknown> | undefined,
+  lang: MapLabelLanguage,
+): string | null {
+  if (!props) return null;
+  const local = typeof props.name === 'string' ? props.name.trim() : '';
+  const en = typeof props['name:en'] === 'string' ? props['name:en'].trim() : '';
+  const chosen = lang === 'local' ? local || en : en || local;
+  return chosen || null;
+}
+
+function queryNearestLayerLabel(
+  map: maplibregl.Map,
+  px: number,
+  py: number,
+  radiusPx: number,
+  layerIds: readonly string[],
+  lang: MapLabelLanguage,
+): string | null {
+  const activeLayers = layerIds.filter((id) => Boolean(map.getLayer(id)));
+  if (activeLayers.length === 0) return null;
+  try {
+    const features = map.queryRenderedFeatures(
+      [
+        [px - radiusPx, py - radiusPx],
+        [px + radiusPx, py + radiusPx],
+      ],
+      { layers: activeLayers },
+    );
+    for (const f of features) {
+      const label = pickFeatureLabel(f.properties as Record<string, unknown> | undefined, lang);
+      if (label) return label;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function resolveHumanLocationContext(
+  map: maplibregl.Map,
+  lon: number,
+  lat: number,
+  places: GroupPlace[],
+  lang: MapLabelLanguage,
+  isFuzzed: boolean,
+): { prefix: 'At' | 'Located near'; label: string } | null {
+  if (!isFuzzed && places.length > 0) {
+    let bestInside: { name: string; dist: number } | null = null;
+    let bestNearby: { name: string; dist: number } | null = null;
+    for (const p of places) {
+      const d = distanceMeters(lat, lon, p.latitude, p.longitude);
+      if (d <= p.radiusMeters && (!bestInside || d < bestInside.dist)) {
+        bestInside = { name: p.name, dist: d };
+      } else if (d <= Math.max(p.radiusMeters * 1.8, 350) && (!bestNearby || d < bestNearby.dist)) {
+        bestNearby = { name: p.name, dist: d };
+      }
+    }
+    if (bestInside) return { prefix: 'At', label: bestInside.name };
+    if (bestNearby) return { prefix: 'Located near', label: bestNearby.name };
+  }
+
+  if (!map.isStyleLoaded()) return null;
+  const pt = map.project([lon, lat]);
+  const canvas = map.getCanvas();
+  const w = canvas?.clientWidth || 1000;
+  const h = canvas?.clientHeight || 800;
+  if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return null;
+  if (pt.x < -200 || pt.x > w + 200 || pt.y < -200 || pt.y > h + 200) return null;
+
+  const neighborhood =
+    queryNearestLayerLabel(map, pt.x, pt.y, 85, CONTEXT_NEIGHBORHOOD_LAYERS, lang) ??
+    queryNearestLayerLabel(map, pt.x, pt.y, 180, CONTEXT_NEIGHBORHOOD_LAYERS, lang);
+
+  if (isFuzzed) {
+    const city = queryNearestLayerLabel(map, pt.x, pt.y, 240, CONTEXT_CITY_LAYERS, lang);
+    const broad = neighborhood ?? city;
+    return broad ? { prefix: 'Located near', label: broad } : null;
+  }
+
+  const poi = queryNearestLayerLabel(map, pt.x, pt.y, 32, CONTEXT_POI_LAYERS, lang);
+  const road = queryNearestLayerLabel(map, pt.x, pt.y, 36, CONTEXT_ROAD_LAYERS, lang);
+  const city = queryNearestLayerLabel(map, pt.x, pt.y, 240, CONTEXT_CITY_LAYERS, lang);
+
+  const label = neighborhood ?? poi ?? road ?? city;
+  return label ? { prefix: 'Located near', label } : null;
+}
+
+function buildPopupDetailsHtml(params: {
+  latitude: number;
+  longitude: number;
+  recordedAt: string;
+  extraLines?: string[];
+}): string {
+  const extras = (params.extraLines ?? [])
+    .map((line) => `<div class="text-zinc-500">${escapeHtml(line)}</div>`)
+    .join('');
+  return `
+    <details class="mt-1.5 border-t border-zinc-100 pt-1.5">
+      <summary class="cursor-pointer select-none text-[11px] font-medium text-zinc-500 hover:text-zinc-900">
+        Details
+      </summary>
+      <div class="mt-1 space-y-0.5 text-[11px]">
+        ${extras}
+        <div class="font-mono text-zinc-500">${params.latitude.toFixed(4)}, ${params.longitude.toFixed(4)}</div>
+        <div class="text-zinc-400">${escapeHtml(new Date(params.recordedAt).toLocaleTimeString())}</div>
+      </div>
+    </details>
+  `;
+}
+
 function buildLabelTextExpression(lang: MapLabelLanguage): maplibregl.ExpressionSpecification {
   return lang === 'local'
     ? ['coalesce', ['get', 'name'], ['get', 'name:en']]
@@ -111,7 +259,9 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const styleReadyRef = useRef(false);
-  const markersRef = useRef<Map<string, { marker: maplibregl.Marker; signature: string }>>(new Map());
+  const markersRef = useRef<
+    Map<string, { marker: maplibregl.Marker; signature: string; loc: LocationBroadcast }>
+  >(new Map());
   const markerAnimFramesRef = useRef<Map<string, number>>(new Map());
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const draftPlaceMarkerRef = useRef<maplibregl.Marker | null>(null);
@@ -119,8 +269,101 @@ export function MapCanvas({
   const hasAutoFramedRef = useRef(false);
   const labelLanguageRef = useRef<MapLabelLanguage>(labelLanguage);
   labelLanguageRef.current = labelLanguage;
+  const placesRef = useRef<GroupPlace[]>(places);
+  placesRef.current = places;
+  const currentUserIdRef = useRef<string | null>(currentUserId);
+  currentUserIdRef.current = currentUserId;
+  const currentUserAvatarUrlRef = useRef<string | null>(currentUserAvatarUrl);
+  currentUserAvatarUrlRef.current = currentUserAvatarUrl;
+  const selfLocationRef = useRef<SelfLocationFix | null>(selfLocation);
+  selfLocationRef.current = selfLocation;
   const onSelectCoordsRef = useRef(onMapSelectCoords);
   onSelectCoordsRef.current = onMapSelectCoords;
+
+  function buildMemberPopupHtml(loc: LocationBroadcast): string {
+    const resolvedAvatar =
+      loc.avatarUrl ??
+      (loc.userId === currentUserIdRef.current ? currentUserAvatarUrlRef.current : null) ??
+      null;
+    const safeAvatar = isSafeAvatarUrl(resolvedAvatar) ? resolvedAvatar : null;
+    const safeUser = escapeHtml(loc.username);
+    const popupAvatarHtml = safeAvatar
+      ? `<img src="${escapeHtml(safeAvatar)}" alt="${safeUser}" class="h-7 w-7 rounded-full object-cover border border-zinc-200 shrink-0" />`
+      : '';
+    const privacyBadge = loc.isFuzzed ? `${loc.privacyMode} · ~1 km` : loc.privacyMode;
+    const ctx = mapRef.current
+      ? resolveHumanLocationContext(
+          mapRef.current,
+          loc.longitude,
+          loc.latitude,
+          placesRef.current,
+          labelLanguageRef.current,
+          loc.isFuzzed,
+        )
+      : null;
+    const contextHtml = ctx
+      ? `<div class="text-[11px] text-zinc-700">${escapeHtml(ctx.prefix)} <span class="font-medium text-zinc-950">${escapeHtml(ctx.label)}</span></div>`
+      : '';
+    const extraLines =
+      loc.batteryLevel !== null && loc.batteryLevel !== undefined
+        ? [`Battery ${loc.batteryLevel}%`]
+        : [];
+    const detailsHtml = buildPopupDetailsHtml({
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      recordedAt: loc.recordedAt,
+      extraLines,
+    });
+
+    return `
+      <div class="text-xs space-y-1 min-w-[180px]">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            ${popupAvatarHtml}
+            <div class="truncate font-semibold text-zinc-950">${safeUser}</div>
+          </div>
+          <span class="shrink-0 rounded-full ${loc.isFuzzed ? 'bg-amber-100 text-amber-800' : 'bg-zinc-100 text-zinc-700'} px-2 py-0.5 text-[10px] font-semibold">${escapeHtml(privacyBadge)}</span>
+        </div>
+        ${contextHtml}
+        <div class="text-[11px] text-zinc-500">Last seen ${escapeHtml(formatRelativeTime(loc.recordedAt))}</div>
+        ${detailsHtml}
+      </div>
+    `;
+  }
+
+  function buildSelfPopupHtml(fix: SelfLocationFix): string {
+    const accLabel =
+      typeof fix.accuracy === 'number' && Number.isFinite(fix.accuracy)
+        ? `Accuracy ±${Math.round(fix.accuracy)} m`
+        : 'Live browser GPS';
+    const ctx = mapRef.current
+      ? resolveHumanLocationContext(
+          mapRef.current,
+          fix.longitude,
+          fix.latitude,
+          placesRef.current,
+          labelLanguageRef.current,
+          false,
+        )
+      : null;
+    const contextHtml = ctx
+      ? `<div class="text-[11px] text-zinc-700">${escapeHtml(ctx.prefix)} <span class="font-medium text-zinc-950">${escapeHtml(ctx.label)}</span></div>`
+      : '';
+    const detailsHtml = buildPopupDetailsHtml({
+      latitude: fix.latitude,
+      longitude: fix.longitude,
+      recordedAt: fix.recordedAt,
+      extraLines: [accLabel],
+    });
+    return `
+      <div class="text-xs space-y-1 min-w-[175px]">
+        <div class="font-semibold text-zinc-950">You (Live GPS)</div>
+        ${contextHtml}
+        <div class="text-[11px] text-zinc-500">Updated ${escapeHtml(formatRelativeTime(fix.recordedAt))}</div>
+        ${detailsHtml}
+      </div>
+    `;
+  }
 
   function glideMarker(key: string, marker: maplibregl.Marker, targetLng: number, targetLat: number) {
     const frames = markerAnimFramesRef.current;
@@ -265,28 +508,16 @@ export function MapCanvas({
       const resolvedAvatar =
         loc.avatarUrl ?? (loc.userId === currentUserId ? currentUserAvatarUrl : null) ?? null;
       const safeAvatar = isSafeAvatarUrl(resolvedAvatar) ? resolvedAvatar : null;
-      const safeUser = escapeHtml(loc.username);
       const signature = `${loc.username}|${safeAvatar ?? ''}|${loc.isFuzzed ? '1' : '0'}`;
       const existing = markersRef.current.get(loc.userId);
-      const popupAvatarHtml = safeAvatar
-        ? `<img src="${escapeHtml(safeAvatar)}" alt="${safeUser}" class="h-7 w-7 rounded-full object-cover border border-zinc-200 shrink-0" />`
-        : '';
-      const popupHtml = `
-        <div class="text-xs space-y-1">
-          <div class="flex items-center gap-2">
-            ${popupAvatarHtml}
-            <div class="font-semibold text-zinc-900">${safeUser}</div>
-          </div>
-          <div class="text-zinc-600">${loc.privacyMode}${loc.isFuzzed ? ' · ~1 km area' : ' · Exact'}</div>
-          ${loc.batteryLevel !== null && loc.batteryLevel !== undefined ? `<div class="text-zinc-500">Battery ${loc.batteryLevel}%</div>` : ''}
-          <div class="font-mono text-[11px] text-zinc-500">${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}</div>
-          <div class="text-[11px] text-zinc-400">${new Date(loc.recordedAt).toLocaleTimeString()}</div>
-        </div>
-      `;
 
       if (existing && existing.signature === signature) {
+        existing.loc = loc;
         glideMarker(loc.userId, existing.marker, loc.longitude, loc.latitude);
-        existing.marker.getPopup()?.setHTML(popupHtml);
+        const popup = existing.marker.getPopup();
+        if (popup?.isOpen()) {
+          popup.setHTML(buildMemberPopupHtml(loc));
+        }
       } else {
         existing?.marker.remove();
 
@@ -345,11 +576,17 @@ export function MapCanvas({
 
         el.appendChild(innerWrap);
 
+        const popup = new maplibregl.Popup({ offset: 18 }).setHTML(buildMemberPopupHtml(loc));
+        popup.on('open', () => {
+          const latest = markersRef.current.get(loc.userId)?.loc ?? loc;
+          popup.setHTML(buildMemberPopupHtml(latest));
+        });
+
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([loc.longitude, loc.latitude])
-          .setPopup(new maplibregl.Popup({ offset: 18 }).setHTML(popupHtml))
+          .setPopup(popup)
           .addTo(map);
-        markersRef.current.set(loc.userId, { marker, signature });
+        markersRef.current.set(loc.userId, { marker, signature, loc });
       }
     }
 
@@ -408,18 +645,6 @@ export function MapCanvas({
     const hasExactServerMarker = Boolean(
       currentUserId && locations.some((l) => l.userId === currentUserId && !l.isFuzzed),
     );
-    const accLabel =
-      typeof selfLocation.accuracy === 'number' && Number.isFinite(selfLocation.accuracy)
-        ? `±${Math.round(selfLocation.accuracy)} m`
-        : 'Live browser fix';
-    const popupHtml = `
-      <div class="text-xs space-y-1">
-        <div class="font-semibold text-zinc-900">You (Live GPS)</div>
-        <div class="text-zinc-600">${escapeHtml(accLabel)}</div>
-        <div class="font-mono text-[11px] text-zinc-500">${selfLocation.latitude.toFixed(4)}, ${selfLocation.longitude.toFixed(4)}</div>
-        <div class="text-[11px] text-zinc-400">${new Date(selfLocation.recordedAt).toLocaleTimeString()}</div>
-      </div>
-    `;
 
     // Rebuild cleanly when label visibility switches so exact server pin and self puck don't double-label
     selfMarkerRef.current?.remove();
@@ -469,9 +694,16 @@ export function MapCanvas({
     innerWrap.appendChild(pulseWrap);
     el.appendChild(innerWrap);
 
+    const selfPopup = new maplibregl.Popup({ offset: 18 }).setHTML(buildSelfPopupHtml(selfLocation));
+    selfPopup.on('open', () => {
+      if (selfLocationRef.current) {
+        selfPopup.setHTML(buildSelfPopupHtml(selfLocationRef.current));
+      }
+    });
+
     selfMarkerRef.current = new maplibregl.Marker({ element: el })
       .setLngLat([selfLocation.longitude, selfLocation.latitude])
-      .setPopup(new maplibregl.Popup({ offset: 18 }).setHTML(popupHtml))
+      .setPopup(selfPopup)
       .addTo(map);
   }, [selfLocation, currentUserId, currentUserAvatarUrl, locations]);
 
@@ -723,6 +955,20 @@ export function MapCanvas({
       applyMapLabelLanguage(map, labelLanguage);
     }
   }, [labelLanguage]);
+
+  useEffect(() => {
+    for (const entry of markersRef.current.values()) {
+      const popup = entry.marker.getPopup();
+      if (popup?.isOpen()) {
+        popup.setHTML(buildMemberPopupHtml(entry.loc));
+      }
+    }
+    const selfPopup = selfMarkerRef.current?.getPopup();
+    if (selfPopup?.isOpen() && selfLocationRef.current) {
+      selfPopup.setHTML(buildSelfPopupHtml(selfLocationRef.current));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [places, labelLanguage]);
 
   return <div ref={containerRef} className={className} />;
 }

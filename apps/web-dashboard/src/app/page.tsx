@@ -7,8 +7,8 @@ import {
   Activity,
   Bell,
   BellOff,
-  BellRing,
   Check,
+  ChevronDown,
   Compass,
   Copy,
   EyeOff,
@@ -18,8 +18,8 @@ import {
   LocateFixed,
   LogOut,
   MapPin,
+  Menu,
   MessageSquare,
-  PanelLeft,
   PanelRight,
   Plus,
   QrCode,
@@ -188,8 +188,9 @@ export default function HomePage() {
   const [placeBusy, setPlaceBusy] = useState(false);
   const [placeError, setPlaceError] = useState<string | null>(null);
 
-  const [leftOpen, setLeftOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(true);
+  const [groupPopoverOpen, setGroupPopoverOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [rightOpen, setRightOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('people');
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [chatToast, setChatToast] = useState<ChatMessage | null>(null);
@@ -201,6 +202,7 @@ export default function HomePage() {
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
+  const leftDockRef = useRef<HTMLDivElement | null>(null);
   const rightOpenRef = useRef(rightOpen);
   rightOpenRef.current = rightOpen;
   const inspectorTabRef = useRef(inspectorTab);
@@ -287,10 +289,31 @@ export default function HomePage() {
     }
   }
 
+  useEffect(() => {
+    if (!groupPopoverOpen && !menuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setGroupPopoverOpen(false);
+        setMenuOpen(false);
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (leftDockRef.current && !leftDockRef.current.contains(event.target as Node)) {
+        setGroupPopoverOpen(false);
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [groupPopoverOpen, menuOpen]);
+
   function openChatTab() {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      setLeftOpen(false);
-    }
+    setGroupPopoverOpen(false);
+    setMenuOpen(false);
     setRightOpen(true);
     setInspectorTab('chat');
     setUnreadChatCount(0);
@@ -1393,22 +1416,54 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Top-Left Floating Dock & Controls */}
-      <div className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col gap-2.5 sm:left-4 sm:top-4 sm:w-[304px]">
-        {/* Compact Icon Bar */}
-        <div className="lo-float-in pointer-events-auto flex items-center justify-between rounded-xl border border-zinc-200/80 bg-white/92 px-2.5 py-1.5 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-950 text-white">
-              <MapPin className="h-4 w-4" />
+      {/* Top-Left Calm Capsule & Progressive Disclosure Popovers */}
+      <div
+        ref={leftDockRef}
+        className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col gap-2.5 sm:left-4 sm:top-4 sm:w-[316px]"
+      >
+        <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-1.5 rounded-xl border border-zinc-200/80 bg-white/92 p-1.5 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
+          <button
+            type="button"
+            onClick={() => {
+              setMenuOpen(false);
+              setGroupPopoverOpen((v) => {
+                const next = !v;
+                if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
+                  setRightOpen(false);
+                }
+                return next;
+              });
+            }}
+            aria-expanded={groupPopoverOpen}
+            title="Switch active group or privacy mode"
+            className={`lo-press flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition ${
+              groupPopoverOpen ? 'bg-zinc-100 text-zinc-950' : 'hover:bg-zinc-100/80'
+            }`}
+          >
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white">
+              <MapPin className="h-3.5 w-3.5" />
             </span>
-            <span className="pr-1 text-xs font-bold tracking-tight text-zinc-950">LovedOnes</span>
-          </div>
+            <div className="min-w-0 flex-1 leading-tight">
+              <div className="truncate text-xs font-bold tracking-tight text-zinc-950">
+                {activeGroup?.name ?? 'LovedOnes'}
+              </div>
+              <div className="truncate text-[10px] font-medium text-zinc-500">
+                {activeGroup ? activeGroup.myPrivacy : 'Select or join group'}
+              </div>
+            </div>
+            <ChevronDown
+              className={`h-3.5 w-3.5 shrink-0 text-zinc-500 transition-transform duration-200 ${
+                groupPopoverOpen ? 'rotate-180 text-zinc-950' : ''
+              }`}
+            />
+          </button>
 
-          <div className="flex items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
               onClick={() => {
-                setLeftOpen((v) => {
+                setGroupPopoverOpen(false);
+                setMenuOpen((v) => {
                   const next = !v;
                   if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
                     setRightOpen(false);
@@ -1416,210 +1471,189 @@ export default function HomePage() {
                   return next;
                 });
               }}
-              title="Toggle workspace controls"
-              className={`rounded-lg p-2 transition ${leftOpen ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
-                }`}
+              aria-expanded={menuOpen}
+              title="Workspace menu (GPS, labels, tracker, account)"
+              className={`lo-press relative rounded-lg p-2 transition ${
+                menuOpen
+                  ? 'bg-zinc-950 text-white'
+                  : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950'
+              }`}
             >
-              <PanelLeft className="h-3.5 w-3.5" />
+              <Menu className="h-4 w-4" />
+              {geoSharing && !menuOpen && (
+                <span
+                  title="Live GPS active"
+                  className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-zinc-950 ring-2 ring-white"
+                />
+              )}
             </button>
+
             <button
               type="button"
               onClick={() => {
-                setLeftOpen(true);
-                if (typeof window !== 'undefined' && window.innerWidth < 768) {
-                  setRightOpen(false);
-                }
-                setTrackerOpen((v) => !v);
-              }}
-              title="HTTP Tracker Setup"
-              className={`rounded-lg p-2 transition ${trackerOpen ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
-                }`}
-            >
-              <KeyRound className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setAccountSettingsOpen(true)}
-              title="Account Settings"
-              className={`rounded-lg p-2 transition ${accountSettingsOpen ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
-                }`}
-            >
-              <Settings className="h-3.5 w-3.5" />
-            </button>
-            {session.user.role === 'HOST_ADMIN' && (
-              <>
-                <Link
-                  href="/admin"
-                  title="System Telemetry"
-                  className="rounded-lg p-2 text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950"
-                >
-                  <Activity className="h-3.5 w-3.5" />
-                </Link>
-                <Link
-                  href="/admin/invites"
-                  title="QR Invites"
-                  className="rounded-lg p-2 text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950"
-                >
-                  <QrCode className="h-3.5 w-3.5" />
-                </Link>
-              </>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setRightOpen((v) => {
-                  const next = !v;
-                  if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
-                    setLeftOpen(false);
-                  }
-                  return next;
-                });
+                setGroupPopoverOpen(false);
+                setMenuOpen(false);
+                setRightOpen((v) => !v);
               }}
               title="Toggle inspector panel"
-              className={`relative rounded-lg p-2 transition md:hidden ${rightOpen ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
-                }`}
+              className={`lo-press relative rounded-lg p-2 transition md:hidden ${
+                rightOpen
+                  ? 'bg-zinc-950 text-white'
+                  : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950'
+              }`}
             >
-              <PanelRight className="h-3.5 w-3.5" />
-              {unreadChatCount > 0 && (
+              <PanelRight className="h-4 w-4" />
+              {!rightOpen && unreadChatCount + pendingIncomingCount > 0 && (
                 <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1 text-[9px] font-bold text-white ring-2 ring-white">
-                  {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                  {unreadChatCount + pendingIncomingCount > 9
+                    ? '9+'
+                    : unreadChatCount + pendingIncomingCount}
                 </span>
               )}
             </button>
           </div>
         </div>
 
-        {leftOpen && (
-          <>
-            {/* Group & Privacy Floating Card */}
-            <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/92 p-3.5 shadow-[0_12px_36px_rgba(9,9,11,0.08)] backdrop-blur-xl">
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-                  <Users className="h-3.5 w-3.5" />
-                  Groups ({groups.length})
-                </span>
-                <div className="flex items-center gap-1">
+        {groupPopoverOpen && (
+          <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                <Users className="h-3.5 w-3.5" />
+                Groups ({groups.length})
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGroupPopoverOpen(false);
+                    setJoinQrOnboardingPrompt(false);
+                    setJoinQrOpen(true);
+                  }}
+                  className="lo-press flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100"
+                >
+                  <QrCode className="h-3 w-3" />
+                  Join QR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowNewGroupForm((v) => !v)}
+                  className="lo-press flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950"
+                >
+                  <Plus className="h-3 w-3" />
+                  New
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {groups.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => setActiveGroupId(g.id)}
+                  className={`lo-press rounded-lg px-3 py-1 text-xs font-medium transition ${
+                    activeGroup?.id === g.id
+                      ? 'bg-zinc-950 text-white shadow-sm'
+                      : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950'
+                  }`}
+                >
+                  {g.name}
+                </button>
+              ))}
+              {groups.length === 0 && (
+                <div className="w-full space-y-2 pt-0.5">
+                  <p className="text-xs text-zinc-500">
+                    Not in a group yet. Scan an invite QR code or create one.
+                  </p>
                   <button
                     type="button"
                     onClick={() => {
+                      setGroupPopoverOpen(false);
                       setJoinQrOnboardingPrompt(false);
                       setJoinQrOpen(true);
                     }}
-                    className="lo-press flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100"
+                    className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800"
                   >
-                    <QrCode className="h-3 w-3" />
-                    Join QR
+                    <QrCode className="h-3.5 w-3.5" />
+                    Scan or Paste QR Invite
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewGroupForm((v) => !v)}
-                    className="lo-press flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950"
-                  >
-                    <Plus className="h-3 w-3" />
-                    New
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
-                {groups.map((g) => (
-                  <button
-                    key={g.id}
-                    type="button"
-                    onClick={() => setActiveGroupId(g.id)}
-                    className={`lo-press rounded-lg px-3 py-1 text-xs font-medium transition ${activeGroup?.id === g.id
-                      ? 'bg-zinc-950 text-white shadow-sm'
-                      : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950'
-                      }`}
-                  >
-                    {g.name}
-                  </button>
-                ))}
-                {groups.length === 0 && (
-                  <div className="w-full space-y-2 pt-0.5">
-                    <p className="text-xs text-zinc-500">
-                      Not in a group yet. Scan an invite QR code or create one.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setJoinQrOnboardingPrompt(false);
-                        setJoinQrOpen(true);
-                      }}
-                      className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800"
-                    >
-                      <QrCode className="h-3.5 w-3.5" />
-                      Scan or Paste QR Invite
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {showNewGroupForm && (
-                <form onSubmit={handleCreateGroup} className="mt-2.5 flex gap-1.5">
-                  <input
-                    type="text"
-                    value={newGroupName}
-                    onChange={(e) => setNewGroupName(e.target.value)}
-                    placeholder="Group name..."
-                    className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
-                  />
-                  <button
-                    type="submit"
-                    disabled={creatingGroup || !newGroupName.trim()}
-                    className="lo-press rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                  >
-                    Add
-                  </button>
-                </form>
-              )}
-
-              {activeGroup && (
-                <div className="mt-3 border-t border-zinc-100 pt-3">
-                  <div className="mb-1.5 flex items-center justify-between text-[11px] text-zinc-500">
-                    <span className="font-medium">Sharing mode</span>
-                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600">
-                      {activeGroup.myRole}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1">
-                    {(['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => void handlePrivacyChange(mode)}
-                        className={`lo-press flex items-center justify-center gap-1 rounded-md py-1.5 text-[11px] font-semibold transition ${activeGroup.myPrivacy === mode
-                          ? 'bg-zinc-950 text-white shadow-sm'
-                          : 'text-zinc-600 hover:text-zinc-950'
-                          }`}
-                      >
-                        {mode === 'EXACT' && <LocateFixed className="h-3 w-3" />}
-                        {mode === 'FUZZED' && <Compass className="h-3 w-3" />}
-                        {mode === 'GHOST' && <EyeOff className="h-3 w-3" />}
-                        {mode}
-                      </button>
-                    ))}
-                  </div>
-                  {myPrivacyOverrideUntil && Date.parse(myPrivacyOverrideUntil) > Date.now() && (
-                    <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900">
-                      Exact check-in active until{' '}
-                      {new Date(myPrivacyOverrideUntil).toLocaleTimeString()}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
 
-            {/* Live Beacon Card */}
-            <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/92 p-3.5 shadow-[0_12px_36px_rgba(9,9,11,0.08)] backdrop-blur-xl">
+            {showNewGroupForm && (
+              <form onSubmit={handleCreateGroup} className="mt-2.5 flex gap-1.5">
+                <input
+                  type="text"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  placeholder="Group name..."
+                  className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={creatingGroup || !newGroupName.trim()}
+                  className="lo-press rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </form>
+            )}
+
+            {activeGroup && (
+              <div className="mt-3 border-t border-zinc-100 pt-3">
+                <div className="mb-1.5 flex items-center justify-between text-[11px] text-zinc-500">
+                  <span className="font-medium">Sharing mode</span>
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600">
+                    {activeGroup.myRole}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1">
+                  {(['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => void handlePrivacyChange(mode)}
+                      className={`lo-press flex items-center justify-center gap-1 rounded-md py-1.5 text-[11px] font-semibold transition ${
+                        activeGroup.myPrivacy === mode
+                          ? 'bg-zinc-950 text-white shadow-sm'
+                          : 'text-zinc-600 hover:text-zinc-950'
+                      }`}
+                    >
+                      {mode === 'EXACT' && <LocateFixed className="h-3 w-3" />}
+                      {mode === 'FUZZED' && <Compass className="h-3 w-3" />}
+                      {mode === 'GHOST' && <EyeOff className="h-3 w-3" />}
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                {myPrivacyOverrideUntil && Date.parse(myPrivacyOverrideUntil) > Date.now() && (
+                  <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900">
+                    Exact check-in active until{' '}
+                    {new Date(myPrivacyOverrideUntil).toLocaleTimeString()}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {menuOpen && (
+          <div className="lo-float-in pointer-events-auto max-h-[calc(100vh-5.5rem)] space-y-3 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+            {/* Live GPS Beacon */}
+            <div>
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                Location Beacon
+              </div>
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => setGeoSharing((s) => !s)}
-                  className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${geoSharing
-                    ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100'
-                    : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800'
-                    }`}
+                  className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                    geoSharing
+                      ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100'
+                      : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800'
+                  }`}
                 >
                   <Radio className="h-3.5 w-3.5" />
                   {geoSharing ? 'Stop Live GPS' : 'Share Live GPS'}
@@ -1652,20 +1686,67 @@ export default function HomePage() {
                   Test Ping
                 </button>
               </div>
-              {geoStatus && <p className="mt-2 truncate font-mono text-[11px] text-zinc-500">{geoStatus}</p>}
+              {geoStatus && (
+                <p className="mt-2 truncate font-mono text-[11px] text-zinc-500">{geoStatus}</p>
+              )}
+            </div>
+
+            {/* Map Label Language */}
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                <Globe className="h-3.5 w-3.5 text-zinc-500" />
+                Map Labels
+              </div>
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5">
+                {(
+                  [
+                    ['en', 'EN'],
+                    ['local', 'Local'],
+                  ] as const
+                ).map(([lang, label]) => (
+                  <button
+                    key={lang}
+                    type="button"
+                    onClick={() => handleChangeLabelLanguage(lang)}
+                    className={`lo-press rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                      labelLanguage === lang
+                        ? 'bg-zinc-950 text-white shadow-sm'
+                        : 'text-zinc-600 hover:text-zinc-950'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* HTTP Tracker Token */}
+            <div className="border-t border-zinc-100 pt-2.5">
+              <button
+                type="button"
+                onClick={() => setTrackerOpen((v) => !v)}
+                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100"
+              >
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                  <KeyRound className="h-3.5 w-3.5 text-zinc-500" />
+                  HTTP Tracker Token
+                </span>
+                <span className="flex items-center gap-1.5">
+                  {trackerActive && (
+                    <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-900">
+                      {Math.max(1, Math.ceil(trackerTtlSeconds / 86400))}d left
+                    </span>
+                  )}
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform ${
+                      trackerOpen ? 'rotate-180 text-zinc-800' : ''
+                    }`}
+                  />
+                </span>
+              </button>
 
               {trackerOpen && (
-                <div className="mt-3 space-y-2.5 border-t border-zinc-100 pt-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-semibold text-zinc-800">
-                      HTTP Tracker Token
-                    </span>
-                    {trackerActive && (
-                      <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-900">
-                        {Math.max(1, Math.ceil(trackerTtlSeconds / 86400))}d left
-                      </span>
-                    )}
-                  </div>
+                <div className="mt-2 space-y-2.5 px-1">
                   <div className="flex items-center gap-1.5">
                     <select
                       value={trackerDays}
@@ -1734,68 +1815,105 @@ export default function HomePage() {
                 </div>
               )}
             </div>
-          </>
+
+            {/* Account, Host Admin & Sign Out */}
+            <div className="space-y-1 border-t border-zinc-100 pt-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setAccountSettingsOpen(true);
+                }}
+                className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition hover:bg-zinc-100"
+              >
+                <span className="flex items-center gap-2.5">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-[10px] font-bold text-white">
+                    {isSafeAvatarUrl(session.user.avatarUrl) ? (
+                      <img
+                        src={session.user.avatarUrl}
+                        alt={session.user.username}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      session.user.username.slice(0, 1).toUpperCase()
+                    )}
+                  </span>
+                  <span className="text-xs font-medium text-zinc-800">
+                    Account Settings
+                    <span className="ml-1.5 text-[10px] text-zinc-400">
+                      @{session.user.username}
+                    </span>
+                  </span>
+                </span>
+                <Settings className="h-3.5 w-3.5 text-zinc-400" />
+              </button>
+
+              {session.user.role === 'HOST_ADMIN' && (
+                <>
+                  <Link
+                    href="/admin"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center justify-between rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Activity className="h-3.5 w-3.5 text-zinc-500" />
+                      System Telemetry
+                    </span>
+                  </Link>
+                  <Link
+                    href="/admin/invites"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center justify-between rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950"
+                  >
+                    <span className="flex items-center gap-2">
+                      <QrCode className="h-3.5 w-3.5 text-zinc-500" />
+                      QR Invites
+                    </span>
+                  </Link>
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  handleSignOut();
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950"
+              >
+                <LogOut className="h-3.5 w-3.5 text-zinc-500" />
+                Sign out
+              </button>
+            </div>
+          </div>
         )}
       </div>
 
-      {/* Top-Right Action Pills & Floating Tabbed Inspector */}
+      {/* Top-Right Single Inspector Toggle & Floating Tabbed Inspector */}
       <div className="pointer-events-none absolute bottom-16 left-3 right-3 z-20 flex flex-col items-end gap-2.5 md:bottom-auto md:left-auto md:right-4 md:top-4 md:w-[350px]">
-        <div className="lo-float-in pointer-events-auto hidden items-center gap-2 md:flex">
-          <button
-            type="button"
-            onClick={openChatTab}
-            className={`lo-press flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-medium shadow-[0_8px_24px_rgba(9,9,11,0.08)] backdrop-blur-xl transition ${unreadChatCount > 0
-              ? 'bg-zinc-950 text-white hover:bg-zinc-800'
-              : 'border border-zinc-200/80 bg-white/92 text-zinc-800 hover:bg-white hover:text-zinc-950'
-              }`}
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            Chat
-            {unreadChatCount > 0 && (
-              <span className="rounded-full bg-white px-1.5 py-0.2 text-[10px] font-bold text-zinc-950">
-                {unreadChatCount}
-              </span>
-            )}
-          </button>
+        <div className="lo-float-in pointer-events-auto hidden items-center md:flex">
           <button
             type="button"
             onClick={() => {
-              setRightOpen(true);
-              setInspectorTab('requests');
+              setGroupPopoverOpen(false);
+              setMenuOpen(false);
+              setRightOpen((v) => !v);
             }}
-            className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200/80 bg-white/92 px-3.5 py-2 text-xs font-medium text-zinc-800 shadow-[0_8px_24px_rgba(9,9,11,0.08)] backdrop-blur-xl transition hover:bg-white hover:text-zinc-950"
-          >
-            <BellRing className="h-3.5 w-3.5" />
-            Check-In
-            {pendingIncomingCount > 0 && (
-              <span className="rounded-full bg-zinc-950 px-1.5 py-0.2 text-[10px] font-bold text-white">
-                {pendingIncomingCount}
-              </span>
-            )}
-          </button>
-          {activeGroup?.myRole === 'ADMIN' && (
-            <button
-              type="button"
-              onClick={() => {
-                setRightOpen(true);
-                setInspectorTab('places');
-              }}
-              className="lo-press flex items-center gap-1 rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-semibold text-white shadow-[0_8px_24px_rgba(9,9,11,0.12)] transition hover:bg-zinc-800"
-            >
-              <Plus className="h-3.5 w-3.5 text-white" />
-              New Place
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setRightOpen((v) => !v)}
-            title="Toggle inspector"
-            className="lo-press relative rounded-lg border border-zinc-200/80 bg-white/92 p-2 text-zinc-700 shadow-[0_8px_24px_rgba(9,9,11,0.08)] backdrop-blur-xl transition hover:bg-white hover:text-zinc-950"
+            aria-expanded={rightOpen}
+            title="Toggle group inspector (People, Chat, Places, Ask)"
+            className={`lo-press relative flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium shadow-[0_8px_24px_rgba(9,9,11,0.08)] backdrop-blur-xl transition ${
+              rightOpen
+                ? 'bg-zinc-950 text-white hover:bg-zinc-800'
+                : 'border border-zinc-200/80 bg-white/92 text-zinc-800 hover:bg-white hover:text-zinc-950'
+            }`}
           >
             <PanelRight className="h-4 w-4" />
-            {!rightOpen && unreadChatCount > 0 && (
-              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1 text-[9px] font-bold text-white ring-2 ring-white">
-                {unreadChatCount > 9 ? '9+' : unreadChatCount}
+            <span>Inspector</span>
+            {!rightOpen && unreadChatCount + pendingIncomingCount > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1.5 text-[10px] font-bold text-white">
+                {unreadChatCount + pendingIncomingCount > 9
+                  ? '9+'
+                  : unreadChatCount + pendingIncomingCount}
               </span>
             )}
           </button>
@@ -2317,31 +2435,6 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Bottom-Right Map Label Language Toggle */}
-      <div
-        title="Switch map label language between English and local street/landmark names"
-        className="lo-float-in pointer-events-auto absolute bottom-[5.25rem] right-2.5 z-20 flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/92 p-1 shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl sm:bottom-4 sm:right-14"
-      >
-        <Globe className="ml-2 mr-0.5 h-3 w-3 text-zinc-500" />
-        {(
-          [
-            ['en', 'EN'],
-            ['local', 'Local'],
-          ] as const
-        ).map(([lang, label]) => (
-          <button
-            key={lang}
-            type="button"
-            onClick={() => handleChangeLabelLanguage(lang)}
-            className={`lo-press rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${labelLanguage === lang
-              ? 'bg-zinc-950 text-white shadow-sm'
-              : 'text-zinc-600 hover:text-zinc-950'
-              }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
       <QrJoinModal
         open={joinQrOpen}
         mode="authenticated"
