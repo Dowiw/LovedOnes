@@ -137,3 +137,11 @@ Traffic enters through a single reverse proxy gateway (`gateway`), so only one p
 - **Database (`packages/db`):** Spatial SQL database and pub/sub message broker.
 
 For deeper technical details, see [SPEC.md](SPEC.md), [GLOSSARY.md](GLOSSARY.md), and [AGENTS.md](AGENTS.md). Licensed under the [MIT License](LICENSE).
+
+---
+
+## Credits & Attribution
+
+- **Map POI Icons:** [Mapbox Maki](https://github.com/mapbox/maki) (`CC0 1.0`, bundled into self-hosted sprites under [`infra/tiles/sprites/`](infra/tiles/sprites/CREDITS.md)) packed with [`spreet`](https://github.com/flother/spreet) (`MIT`).
+- **Map Typography:** [Plus Jakarta Sans](https://github.com/tokotype/PlusJakartaSans) (`SIL Open Font License 1.1`, self-hosted SDF glyphs under [`infra/tiles/fonts/`](infra/tiles/fonts/OFL.txt)).
+- **Basemap & Vector Data:** Built for [Protomaps](https://protomaps.com) PMTiles extracts derived from [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (`ODbL`).

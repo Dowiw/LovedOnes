@@ -117,7 +117,7 @@ export function MapCanvas({
     }
 
     const { tilesBase } = getServiceBaseUrls();
-    const styleUrl = `${tilesBase}/tiles/style.json?v=5`;
+    const styleUrl = `${tilesBase}/tiles/style.json?v=6`;
 
     const map = new maplibregl.Map({
       container: containerRef.current,

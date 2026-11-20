@@ -89,6 +89,7 @@ describe('@loved-ones/mobile-app', () => {
     );
 
     const style = buildMobileMapStyle('https://track.example.com');
+    expect(style.sprite).toBe('https://track.example.com/tiles/sprites/maki');
     expect(style.glyphs).toBe(
       'https://track.example.com/tiles/fonts/{fontstack}/{range}.pbf',
     );
@@ -99,6 +100,10 @@ describe('@loved-ones/mobile-app', () => {
       ['get', 'name:en'],
       ['get', 'name'],
     ]);
+    const healthMajor = style.layers.find((l) => l.id === 'pois-health-major');
+    expect(
+      (healthMajor as { layout?: { 'icon-image'?: unknown } })?.layout?.['icon-image'],
+    ).toBeDefined();
     const localStyle = buildMobileMapStyle('https://track.example.com', null, 'local');
     const localRoadLabels = localStyle.layers.find((l) => l.id === 'road-labels');
     expect(

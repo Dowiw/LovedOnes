@@ -136,6 +136,7 @@ export default function HomePage() {
   const [rightOpen, setRightOpen] = useState(true);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('people');
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
+  const [creditsOpen, setCreditsOpen] = useState(false);
 
   useEffect(() => {
     setSession(loadSession());
@@ -1430,25 +1431,67 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Bottom-Left Floating Profile Pill */}
-      <div className="pointer-events-auto absolute bottom-3 left-3 z-20 hidden items-center gap-2.5 rounded-full border border-white/75 bg-white/90 py-1.5 pl-2 pr-3 shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:bottom-4 sm:left-4 sm:flex">
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white">
-          {session.user.username.slice(0, 1).toUpperCase()}
-        </span>
-        <div className="leading-tight">
-          <div className="text-xs font-semibold text-zinc-900">{session.user.username}</div>
-          <div className="text-[10px] text-zinc-500">
-            {session.user.role === 'HOST_ADMIN' ? 'Host Admin' : 'Member'}
+      {/* Bottom-Left Floating Profile Pill & Map Credits */}
+      <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-end gap-2 sm:bottom-4 sm:left-4 sm:flex">
+        <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-white/75 bg-white/90 py-1.5 pl-2 pr-3 shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white">
+            {session.user.username.slice(0, 1).toUpperCase()}
+          </span>
+          <div className="leading-tight">
+            <div className="text-xs font-semibold text-zinc-900">{session.user.username}</div>
+            <div className="text-[10px] text-zinc-500">
+              {session.user.role === 'HOST_ADMIN' ? 'Host Admin' : 'Member'}
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            title="Sign out"
+            className="ml-1 rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={handleSignOut}
-          title="Sign out"
-          className="ml-1 rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
-        >
-          <LogOut className="h-3.5 w-3.5" />
-        </button>
+
+        <div className="pointer-events-auto relative">
+          {creditsOpen && (
+            <div className="mb-2 w-60 rounded-2xl border border-white/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+              <div className="mb-1 font-semibold text-zinc-900">Map Credits</div>
+              <p>
+                Icons:{' '}
+                <a
+                  href="https://github.com/mapbox/maki"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-zinc-900 underline decoration-zinc-300 underline-offset-2"
+                >
+                  Mapbox Maki
+                </a>{' '}
+                (CC0 1.0)
+              </p>
+              <p>
+                Font:{' '}
+                <a
+                  href="https://github.com/tokotype/PlusJakartaSans"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-zinc-900 underline decoration-zinc-300 underline-offset-2"
+                >
+                  Plus Jakarta Sans
+                </a>{' '}
+                (OFL 1.1)
+              </p>
+              <p>Data: OpenStreetMap · Protomaps</p>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setCreditsOpen((v) => !v)}
+            className="rounded-full border border-white/75 bg-white/85 px-2.5 py-1.5 text-[10px] font-medium text-zinc-500 shadow-sm backdrop-blur-xl transition hover:bg-white hover:text-zinc-900"
+          >
+            © Maki · OSM
+          </button>
+        </div>
       </div>
 
       {/* Bottom-Center Floating Map View Mode Switcher */}
