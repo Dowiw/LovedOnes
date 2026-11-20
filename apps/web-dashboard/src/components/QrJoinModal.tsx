@@ -260,7 +260,7 @@ export function QrJoinModal({
 
         {!preview ? (
           <>
-            <div className="mb-4 grid grid-cols-3 gap-1 rounded-full bg-zinc-100 p-1 text-[11px] font-semibold">
+            <div className="mb-4 grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold">
               {(
                 [
                   ['camera', 'Camera', Camera],
@@ -275,7 +275,7 @@ export function QrJoinModal({
                     setError(null);
                     setTab(id);
                   }}
-                  className={`flex items-center justify-center gap-1.5 rounded-full py-1.5 transition ${
+                  className={`lo-press flex items-center justify-center gap-1.5 rounded-md py-1.5 transition ${
                     tab === id
                       ? 'bg-zinc-950 text-white shadow-sm'
                       : 'text-zinc-600 hover:text-zinc-950'
@@ -296,14 +296,14 @@ export function QrJoinModal({
                       <button
                         type="button"
                         onClick={() => setTab('upload')}
-                        className="rounded-full bg-zinc-950 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
+                        className="lo-press rounded-lg bg-zinc-950 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
                       >
                         Upload QR Image
                       </button>
                       <button
                         type="button"
                         onClick={() => setTab('paste')}
-                        className="rounded-full border border-zinc-300 bg-white px-3.5 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-100"
+                        className="lo-press rounded-lg border border-zinc-300 bg-white px-3.5 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-100"
                       >
                         Paste Link
                       </button>
@@ -373,7 +373,7 @@ export function QrJoinModal({
                 <button
                   type="submit"
                   disabled={loadingPreview || !pasteText.trim()}
-                  className="w-full rounded-full bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                  className="lo-press w-full rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
                 >
                   {loadingPreview ? 'Checking invite...' : 'Verify Invite'}
                 </button>
@@ -414,7 +414,7 @@ export function QrJoinModal({
                   setPreview(null);
                   setError(null);
                 }}
-                className="flex-1 rounded-full border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100"
+                className="lo-press flex-1 rounded-lg border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100"
               >
                 Scan Different QR
               </button>
@@ -422,7 +422,7 @@ export function QrJoinModal({
                 type="button"
                 disabled={!preview.valid || joining}
                 onClick={() => void handleConfirm()}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-full bg-zinc-950 py-2.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
               >
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 {joining
@@ -446,7 +446,7 @@ export function QrJoinModal({
             <button
               type="button"
               onClick={onClose}
-              className="w-full rounded-full border border-zinc-200 bg-white py-2 text-xs font-semibold text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950"
+              className="lo-press w-full rounded-lg border border-zinc-200 bg-white py-2 text-xs font-semibold text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950"
             >
               Skip for now — take me to the map
             </button>

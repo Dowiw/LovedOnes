@@ -89,15 +89,15 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
   }, [lines, filter]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3.5">
+    <div className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-5 py-3.5">
         <div className="flex items-center gap-2.5">
-          <Terminal className="h-4 w-4 text-zinc-900" />
-          <span className="text-sm font-semibold text-zinc-900">Live Service Logs</span>
+          <Terminal className="h-4 w-4 text-zinc-950" />
+          <span className="text-sm font-semibold text-zinc-950">Live Service Logs</span>
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
               connected
-                ? 'bg-zinc-900 text-white'
+                ? 'bg-zinc-950 text-white'
                 : 'bg-zinc-100 text-zinc-500'
             }`}
           >
@@ -116,12 +116,12 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter logs..."
-            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none"
+            className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none"
           />
           <button
             type="button"
             onClick={() => setPaused((p) => !p)}
-            className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-slate-50"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-950"
           >
             {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
             {paused ? 'Resume' : 'Pause'}
@@ -129,7 +129,7 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
           <button
             type="button"
             onClick={() => setLines([])}
-            className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-slate-50"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-950"
           >
             <Trash2 className="h-3.5 w-3.5" />
             Clear

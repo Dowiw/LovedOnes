@@ -425,7 +425,7 @@ export function AccountSettingsModal({
           <button
             type="submit"
             disabled={profileBusy}
-            className="w-full rounded-full bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+            className="lo-press w-full rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
           >
             {profileBusy ? 'Saving Profile...' : 'Save Profile'}
           </button>
@@ -593,7 +593,7 @@ export function AccountSettingsModal({
           <button
             type="submit"
             disabled={passwordBusy}
-            className="w-full rounded-full border border-zinc-950 bg-white py-2 text-xs font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:opacity-50"
+            className="lo-press w-full rounded-lg border border-zinc-950 bg-white py-2 text-xs font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:opacity-50"
           >
             {passwordBusy ? 'Updating Password...' : 'Update Password'}
           </button>

@@ -108,16 +108,16 @@ export default function AdminInvitesPage() {
           onCreated={() => void refresh(session.accessToken)}
         />
 
-        <section className="overflow-hidden rounded-xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
-            <span className="text-sm font-semibold text-zinc-900">
+        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
+          <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3.5">
+            <span className="text-sm font-semibold text-zinc-950">
               Active &amp; Recent Invites ({invites.length})
             </span>
             {deleteError && <span className="text-xs font-medium text-rose-600">{deleteError}</span>}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50/80 text-zinc-500">
+              <thead className="bg-zinc-50/90 text-zinc-500">
                 <tr>
                   <th className="px-5 py-3 font-medium">Token</th>
                   <th className="px-5 py-3 font-medium">Group</th>
@@ -127,11 +127,11 @@ export default function AdminInvitesPage() {
                   <th className="px-5 py-3 text-right font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-zinc-100">
                 {invites.map((inv) => (
-                  <tr key={inv.token} className="hover:bg-slate-50/70">
+                  <tr key={inv.token} className="hover:bg-zinc-50/80">
                     <td className="px-5 py-3 font-mono text-zinc-700">{inv.token}</td>
-                    <td className="px-5 py-3 font-medium text-zinc-900">{inv.groupName}</td>
+                    <td className="px-5 py-3 font-medium text-zinc-950">{inv.groupName}</td>
                     <td className="px-5 py-3 text-zinc-600">{inv.assignedRole}</td>
                     <td className="px-5 py-3 font-mono text-zinc-600">
                       {inv.uses} / {inv.maxUses}
@@ -145,7 +145,7 @@ export default function AdminInvitesPage() {
                         disabled={deletingToken === inv.token}
                         onClick={() => void handleDeleteInvite(inv.token)}
                         title="Delete invite"
-                        className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-600 transition hover:border-rose-200 hover:bg-rose-50 disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-600 transition hover:border-rose-200 hover:bg-rose-50 disabled:opacity-50"
                       >
                         <Trash2 className="h-3 w-3" />
                         {deletingToken === inv.token ? 'Deleting...' : 'Delete'}

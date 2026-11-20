@@ -288,6 +288,9 @@ export default function HomePage() {
   }
 
   function openChatTab() {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setLeftOpen(false);
+    }
     setRightOpen(true);
     setInspectorTab('chat');
     setUnreadChatCount(0);
@@ -1300,7 +1303,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setPreAuthQrOpen(true)}
-                className="lo-press flex w-full items-center justify-center gap-2 rounded-full border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50"
+                className="lo-press flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50 hover:text-zinc-950"
               >
                 <QrCode className="h-3.5 w-3.5" />
                 Have an invite QR or link? Scan or paste
@@ -1391,22 +1394,30 @@ export default function HomePage() {
       )}
 
       {/* Top-Left Floating Dock & Controls */}
-      <div className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col gap-2.5 sm:left-4 sm:top-4 sm:w-[300px]">
+      <div className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col gap-2.5 sm:left-4 sm:top-4 sm:w-[304px]">
         {/* Compact Icon Bar */}
-        <div className="lo-float-in pointer-events-auto flex items-center justify-between rounded-full border border-white/75 bg-white/88 px-2.5 py-1.5 shadow-[0_8px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-          <div className="flex items-center gap-1.5">
+        <div className="lo-float-in pointer-events-auto flex items-center justify-between rounded-xl border border-zinc-200/80 bg-white/92 px-2.5 py-1.5 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
+          <div className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-950 text-white">
               <MapPin className="h-4 w-4" />
             </span>
-            <span className="pr-1 text-xs font-bold tracking-tight text-zinc-900">LovedOnes</span>
+            <span className="pr-1 text-xs font-bold tracking-tight text-zinc-950">LovedOnes</span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5">
             <button
               type="button"
-              onClick={() => setLeftOpen((v) => !v)}
+              onClick={() => {
+                setLeftOpen((v) => {
+                  const next = !v;
+                  if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
+                    setRightOpen(false);
+                  }
+                  return next;
+                });
+              }}
               title="Toggle workspace controls"
-              className={`rounded-full p-2 transition ${leftOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+              className={`rounded-lg p-2 transition ${leftOpen ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
                 }`}
             >
               <PanelLeft className="h-3.5 w-3.5" />
@@ -1415,10 +1426,13 @@ export default function HomePage() {
               type="button"
               onClick={() => {
                 setLeftOpen(true);
+                if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                  setRightOpen(false);
+                }
                 setTrackerOpen((v) => !v);
               }}
               title="HTTP Tracker Setup"
-              className={`rounded-full p-2 transition ${trackerOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+              className={`rounded-lg p-2 transition ${trackerOpen ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
                 }`}
             >
               <KeyRound className="h-3.5 w-3.5" />
@@ -1427,7 +1441,7 @@ export default function HomePage() {
               type="button"
               onClick={() => setAccountSettingsOpen(true)}
               title="Account Settings"
-              className={`rounded-full p-2 transition ${accountSettingsOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+              className={`rounded-lg p-2 transition ${accountSettingsOpen ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
                 }`}
             >
               <Settings className="h-3.5 w-3.5" />
@@ -1437,14 +1451,14 @@ export default function HomePage() {
                 <Link
                   href="/admin"
                   title="System Telemetry"
-                  className="rounded-full p-2 text-zinc-600 transition hover:bg-slate-100 hover:text-zinc-900"
+                  className="rounded-lg p-2 text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950"
                 >
                   <Activity className="h-3.5 w-3.5" />
                 </Link>
                 <Link
                   href="/admin/invites"
                   title="QR Invites"
-                  className="rounded-full p-2 text-zinc-600 transition hover:bg-slate-100 hover:text-zinc-900"
+                  className="rounded-lg p-2 text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950"
                 >
                   <QrCode className="h-3.5 w-3.5" />
                 </Link>
@@ -1452,9 +1466,17 @@ export default function HomePage() {
             )}
             <button
               type="button"
-              onClick={() => setRightOpen((v) => !v)}
+              onClick={() => {
+                setRightOpen((v) => {
+                  const next = !v;
+                  if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
+                    setLeftOpen(false);
+                  }
+                  return next;
+                });
+              }}
               title="Toggle inspector panel"
-              className={`relative rounded-full p-2 transition md:hidden ${rightOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+              className={`relative rounded-lg p-2 transition md:hidden ${rightOpen ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
                 }`}
             >
               <PanelRight className="h-3.5 w-3.5" />
@@ -1470,7 +1492,7 @@ export default function HomePage() {
         {leftOpen && (
           <>
             {/* Group & Privacy Floating Card */}
-            <div className="lo-float-in pointer-events-auto rounded-xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+            <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/92 p-3.5 shadow-[0_12px_36px_rgba(9,9,11,0.08)] backdrop-blur-xl">
               <div className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                   <Users className="h-3.5 w-3.5" />
@@ -1483,7 +1505,7 @@ export default function HomePage() {
                       setJoinQrOnboardingPrompt(false);
                       setJoinQrOpen(true);
                     }}
-                    className="lo-press flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100"
+                    className="lo-press flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100"
                   >
                     <QrCode className="h-3 w-3" />
                     Join QR
@@ -1491,7 +1513,7 @@ export default function HomePage() {
                   <button
                     type="button"
                     onClick={() => setShowNewGroupForm((v) => !v)}
-                    className="lo-press flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-slate-200"
+                    className="lo-press flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950"
                   >
                     <Plus className="h-3 w-3" />
                     New
@@ -1499,15 +1521,15 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div className="mt-2 flex flex-wrap gap-1.5">
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
                 {groups.map((g) => (
                   <button
                     key={g.id}
                     type="button"
                     onClick={() => setActiveGroupId(g.id)}
-                    className={`lo-press rounded-full px-3 py-1 text-xs font-medium transition ${activeGroup?.id === g.id
-                      ? 'bg-zinc-900 text-white shadow-sm'
-                      : 'bg-slate-100 text-zinc-700 hover:bg-slate-200'
+                    className={`lo-press rounded-lg px-3 py-1 text-xs font-medium transition ${activeGroup?.id === g.id
+                      ? 'bg-zinc-950 text-white shadow-sm'
+                      : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950'
                       }`}
                   >
                     {g.name}
@@ -1524,7 +1546,7 @@ export default function HomePage() {
                         setJoinQrOnboardingPrompt(false);
                         setJoinQrOpen(true);
                       }}
-                      className="lo-press flex w-full items-center justify-center gap-1.5 rounded-full bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800"
+                      className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800"
                     >
                       <QrCode className="h-3.5 w-3.5" />
                       Scan or Paste QR Invite
@@ -1540,12 +1562,12 @@ export default function HomePage() {
                     value={newGroupName}
                     onChange={(e) => setNewGroupName(e.target.value)}
                     placeholder="Group name..."
-                    className="min-w-0 flex-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                    className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
                   />
                   <button
                     type="submit"
                     disabled={creatingGroup || !newGroupName.trim()}
-                    className="lo-press rounded-full bg-zinc-900 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                    className="lo-press rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                   >
                     Add
                   </button>
@@ -1553,22 +1575,22 @@ export default function HomePage() {
               )}
 
               {activeGroup && (
-                <div className="mt-3 border-t border-slate-100 pt-3">
+                <div className="mt-3 border-t border-zinc-100 pt-3">
                   <div className="mb-1.5 flex items-center justify-between text-[11px] text-zinc-500">
                     <span className="font-medium">Sharing mode</span>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-zinc-600">
+                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600">
                       {activeGroup.myRole}
                     </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-1 rounded-full bg-slate-100 p-1">
+                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1">
                     {(['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => (
                       <button
                         key={mode}
                         type="button"
                         onClick={() => void handlePrivacyChange(mode)}
-                        className={`lo-press flex items-center justify-center gap-1 rounded-full py-1.5 text-[11px] font-semibold transition ${activeGroup.myPrivacy === mode
-                          ? 'bg-zinc-900 text-white shadow-sm'
-                          : 'text-zinc-600 hover:text-zinc-900'
+                        className={`lo-press flex items-center justify-center gap-1 rounded-md py-1.5 text-[11px] font-semibold transition ${activeGroup.myPrivacy === mode
+                          ? 'bg-zinc-950 text-white shadow-sm'
+                          : 'text-zinc-600 hover:text-zinc-950'
                           }`}
                       >
                         {mode === 'EXACT' && <LocateFixed className="h-3 w-3" />}
@@ -1589,12 +1611,12 @@ export default function HomePage() {
             </div>
 
             {/* Live Beacon Card */}
-            <div className="lo-float-in pointer-events-auto rounded-xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-              <div className="flex items-center gap-2">
+            <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/92 p-3.5 shadow-[0_12px_36px_rgba(9,9,11,0.08)] backdrop-blur-xl">
+              <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => setGeoSharing((s) => !s)}
-                  className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition ${geoSharing
+                  className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${geoSharing
                     ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100'
                     : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800'
                     }`}
@@ -1617,7 +1639,7 @@ export default function HomePage() {
                         nonce: Date.now(),
                       });
                     }}
-                    className="rounded-full border border-slate-200 bg-white p-2 text-zinc-800 hover:bg-slate-50"
+                    className="lo-press rounded-lg border border-zinc-200 bg-white p-2 text-zinc-800 hover:bg-zinc-50"
                   >
                     <LocateFixed className="h-3.5 w-3.5" />
                   </button>
@@ -1625,15 +1647,15 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => void handleSendTestPing()}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-slate-50"
+                  className="lo-press rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950"
                 >
                   Test Ping
                 </button>
               </div>
-              {geoStatus && <p className="mt-2 truncate text-[11px] text-zinc-500">{geoStatus}</p>}
+              {geoStatus && <p className="mt-2 truncate font-mono text-[11px] text-zinc-500">{geoStatus}</p>}
 
               {trackerOpen && (
-                <div className="mt-3 space-y-2.5 border-t border-slate-100 pt-3">
+                <div className="mt-3 space-y-2.5 border-t border-zinc-100 pt-3">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-semibold text-zinc-800">
                       HTTP Tracker Token
@@ -1648,7 +1670,7 @@ export default function HomePage() {
                     <select
                       value={trackerDays}
                       onChange={(e) => setTrackerDays(Number(e.target.value))}
-                      className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] text-zinc-800"
+                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none"
                     >
                       <option value={7}>7 days</option>
                       <option value={30}>30 days</option>
@@ -1659,7 +1681,7 @@ export default function HomePage() {
                       type="button"
                       disabled={trackerLoading}
                       onClick={() => void handleGenerateTrackerToken()}
-                      className="flex-1 rounded-full bg-zinc-900 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                      className="lo-press flex-1 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
                     >
                       {trackerActive ? 'Rotate' : 'Generate'}
                     </button>
@@ -1669,7 +1691,7 @@ export default function HomePage() {
                         disabled={trackerLoading}
                         onClick={() => void handleRevokeTrackerToken()}
                         title="Revoke token"
-                        className="rounded-full border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100"
+                        className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -1677,7 +1699,7 @@ export default function HomePage() {
                   </div>
 
                   {trackerIssued && (
-                    <div className="space-y-1.5 rounded-lg bg-slate-50 p-2.5 text-[10px]">
+                    <div className="space-y-1.5 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2.5 text-[10px]">
                       {(
                         [
                           ['owntracks', 'OwnTracks URL', trackerIssued.owntracksUrl],
@@ -1691,15 +1713,15 @@ export default function HomePage() {
                             <input
                               readOnly
                               value={val}
-                              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-[10px] text-zinc-800"
+                              className="w-full rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[10px] text-zinc-800"
                             />
                             <button
                               type="button"
                               onClick={() => handleCopyText(key, val)}
-                              className="shrink-0 rounded-lg border border-slate-200 bg-white p-1.5 text-zinc-700 hover:bg-slate-100"
+                              className="shrink-0 rounded-md border border-zinc-200 bg-white p-1.5 text-zinc-700 hover:bg-zinc-100"
                             >
                               {copiedField === key ? (
-                                <Check className="h-3 w-3 text-zinc-900" />
+                                <Check className="h-3 w-3 text-zinc-950" />
                               ) : (
                                 <Copy className="h-3 w-3" />
                               )}
@@ -1722,9 +1744,9 @@ export default function HomePage() {
           <button
             type="button"
             onClick={openChatTab}
-            className={`lo-press flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition ${unreadChatCount > 0
+            className={`lo-press flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-medium shadow-[0_8px_24px_rgba(9,9,11,0.08)] backdrop-blur-xl transition ${unreadChatCount > 0
               ? 'bg-zinc-950 text-white hover:bg-zinc-800'
-              : 'border border-white/75 bg-white/90 text-zinc-800 hover:bg-white'
+              : 'border border-zinc-200/80 bg-white/92 text-zinc-800 hover:bg-white hover:text-zinc-950'
               }`}
           >
             <MessageSquare className="h-3.5 w-3.5" />
@@ -1741,7 +1763,7 @@ export default function HomePage() {
               setRightOpen(true);
               setInspectorTab('requests');
             }}
-            className="lo-press flex items-center gap-1.5 rounded-full border border-white/75 bg-white/90 px-3.5 py-2 text-xs font-medium text-zinc-800 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:bg-white"
+            className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200/80 bg-white/92 px-3.5 py-2 text-xs font-medium text-zinc-800 shadow-[0_8px_24px_rgba(9,9,11,0.08)] backdrop-blur-xl transition hover:bg-white hover:text-zinc-950"
           >
             <BellRing className="h-3.5 w-3.5" />
             Check-In
@@ -1758,7 +1780,7 @@ export default function HomePage() {
                 setRightOpen(true);
                 setInspectorTab('places');
               }}
-              className="lo-press flex items-center gap-1 rounded-full bg-zinc-900 px-3.5 py-2 text-xs font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,0.12)] transition hover:bg-zinc-800"
+              className="lo-press flex items-center gap-1 rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-semibold text-white shadow-[0_8px_24px_rgba(9,9,11,0.12)] transition hover:bg-zinc-800"
             >
               <Plus className="h-3.5 w-3.5 text-white" />
               New Place
@@ -1768,7 +1790,7 @@ export default function HomePage() {
             type="button"
             onClick={() => setRightOpen((v) => !v)}
             title="Toggle inspector"
-            className="lo-press relative rounded-full border border-white/75 bg-white/90 p-2 text-zinc-700 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:bg-white"
+            className="lo-press relative rounded-lg border border-zinc-200/80 bg-white/92 p-2 text-zinc-700 shadow-[0_8px_24px_rgba(9,9,11,0.08)] backdrop-blur-xl transition hover:bg-white hover:text-zinc-950"
           >
             <PanelRight className="h-4 w-4" />
             {!rightOpen && unreadChatCount > 0 && (
@@ -1780,10 +1802,10 @@ export default function HomePage() {
         </div>
 
         {rightOpen && (
-          <div className="lo-float-in pointer-events-auto flex max-h-[44vh] w-full flex-col overflow-hidden rounded-xl border border-white/75 bg-white/90 shadow-[0_16px_44px_rgba(15,23,42,0.1)] backdrop-blur-xl md:max-h-[calc(100vh-140px)]">
-            {/* Segmented Pill Tabs (matching screenshot reference) */}
-            <div className="border-b border-slate-100 p-2">
-              <div className="grid grid-cols-4 gap-1 rounded-lg bg-slate-100 p-1 text-[11px] font-semibold">
+          <div className="lo-float-in pointer-events-auto flex max-h-[44vh] w-full flex-col overflow-hidden rounded-xl border border-zinc-200/80 bg-white/92 shadow-[0_16px_44px_rgba(9,9,11,0.1)] backdrop-blur-xl md:max-h-[calc(100vh-140px)]">
+            {/* Segmented Pill Tabs */}
+            <div className="border-b border-zinc-100 p-2">
+              <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold">
                 {(
                   [
                     ['people', `People (${locations.length})`],
@@ -1803,8 +1825,8 @@ export default function HomePage() {
                       }
                     }}
                     className={`lo-press rounded-md py-1.5 transition ${inspectorTab === tab
-                      ? 'bg-zinc-900 text-white shadow-sm'
-                      : 'text-zinc-600 hover:text-zinc-900'
+                      ? 'bg-zinc-950 text-white shadow-sm'
+                      : 'text-zinc-600 hover:text-zinc-950'
                       }`}
                   >
                     {label}
@@ -1819,14 +1841,14 @@ export default function HomePage() {
                 {locations.map((loc) => (
                   <div
                     key={loc.userId}
-                    className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2.5 transition hover:bg-white"
+                    className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2.5 transition hover:border-zinc-200 hover:bg-white"
                   >
                     <button
                       type="button"
                       onClick={() => setSelectedUserId(loc.userId)}
                       className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-900 text-xs font-bold text-white">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
                         {isSafeAvatarUrl(loc.avatarUrl) ? (
                           <img
                             src={loc.avatarUrl}
@@ -1838,7 +1860,7 @@ export default function HomePage() {
                         )}
                       </span>
                       <div className="min-w-0">
-                        <div className="truncate text-xs font-semibold text-zinc-900">
+                        <div className="truncate text-xs font-semibold text-zinc-950">
                           {loc.username}
                         </div>
                         <div className="truncate font-mono text-[10px] text-zinc-400">
@@ -1849,7 +1871,7 @@ export default function HomePage() {
                     <span
                       className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${loc.isFuzzed
                         ? 'bg-amber-100 text-amber-800'
-                        : 'bg-zinc-900 text-white'
+                        : 'bg-zinc-950 text-white'
                         }`}
                     >
                       {loc.privacyMode}
@@ -1867,15 +1889,15 @@ export default function HomePage() {
             {/* Chat Tab */}
             {inspectorTab === 'chat' && (
               <div key="tab-chat" className="lo-tab-enter flex min-h-[260px] flex-1 flex-col overflow-hidden">
-                <div className="flex items-center justify-between border-b border-slate-100 px-3 py-1.5 text-[11px] text-zinc-500">
+                <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-1.5 text-[11px] text-zinc-500">
                   <button
                     type="button"
                     onClick={handleToggleChatAlerts}
-                    className="lo-press flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-zinc-700 transition hover:bg-slate-100"
+                    className="lo-press flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-zinc-700 transition hover:bg-zinc-100"
                     title={chatAlertsEnabled ? 'Mute chat sound and desktop alerts' : 'Unmute chat alerts'}
                   >
                     {chatAlertsEnabled ? (
-                      <Bell className="h-3 w-3 text-zinc-900" />
+                      <Bell className="h-3 w-3 text-zinc-950" />
                     ) : (
                       <BellOff className="h-3 w-3 text-zinc-400" />
                     )}
@@ -1885,7 +1907,7 @@ export default function HomePage() {
                     <button
                       type="button"
                       onClick={() => void handleEnableBrowserNotifications()}
-                      className="lo-press rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-zinc-800"
+                      className="lo-press rounded-md bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-zinc-800"
                     >
                       Enable desktop alerts
                     </button>
@@ -1911,8 +1933,8 @@ export default function HomePage() {
                         </div>
                         <div
                           className={`max-w-[85%] rounded-lg px-3 py-2 text-xs ${mine
-                            ? 'bg-zinc-900 text-white'
-                            : 'border border-slate-200/80 bg-slate-50 text-zinc-900'
+                            ? 'bg-zinc-950 text-white'
+                            : 'border border-zinc-200/80 bg-zinc-50 text-zinc-900'
                             }`}
                         >
                           {m.content}
@@ -1930,7 +1952,7 @@ export default function HomePage() {
 
                 <form
                   onSubmit={handleSendChat}
-                  className="flex gap-1.5 border-t border-slate-100 p-2.5"
+                  className="flex gap-1.5 border-t border-zinc-100 p-2.5"
                 >
                   <input
                     type="text"
@@ -1938,12 +1960,12 @@ export default function HomePage() {
                     onChange={(e) => setChatInput(e.target.value)}
                     disabled={!activeGroup}
                     placeholder={activeGroup ? 'Message group...' : 'Select a group'}
-                    className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none disabled:opacity-50"
+                    className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none disabled:opacity-50"
                   />
                   <button
                     type="submit"
                     disabled={!activeGroup || !chatInput.trim()}
-                    className="lo-press flex shrink-0 items-center justify-center rounded-lg bg-zinc-900 px-3.5 py-2 text-white hover:bg-zinc-800 disabled:opacity-50"
+                    className="lo-press flex shrink-0 items-center justify-center rounded-lg bg-zinc-950 px-3.5 py-2 text-white hover:bg-zinc-800 disabled:opacity-50"
                   >
                     <Send className="h-3.5 w-3.5" />
                   </button>
@@ -1957,11 +1979,11 @@ export default function HomePage() {
                 {activeGroup?.myRole === 'ADMIN' && (
                   <form
                     onSubmit={handleCreatePlace}
-                    className="space-y-2 rounded-lg border border-slate-100 bg-slate-50/80 p-2.5"
+                    className="space-y-2 rounded-lg border border-zinc-200/70 bg-zinc-50/80 p-2.5"
                   >
                     <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-600">
                       <span className="flex items-center gap-1 font-medium">
-                        <MapPin className="h-3 w-3 text-zinc-900" />
+                        <MapPin className="h-3 w-3 text-zinc-950" />
                         {draftPlace
                           ? `Pin at ${draftPlace.latitude.toFixed(4)}, ${draftPlace.longitude.toFixed(4)}`
                           : 'Click or tap map to place pin'}
@@ -1973,7 +1995,7 @@ export default function HomePage() {
                             setPlaceLat('');
                             setPlaceLon('');
                           }}
-                          className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-900"
+                          className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-950"
                         >
                           Clear
                         </button>
@@ -1985,7 +2007,7 @@ export default function HomePage() {
                         value={placeName}
                         onChange={(e) => setPlaceName(e.target.value)}
                         placeholder="Home, School, Office..."
-                        className="min-w-0 flex-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-zinc-900 focus:outline-none"
+                        className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
                       />
                       <input
                         type="number"
@@ -1994,7 +2016,7 @@ export default function HomePage() {
                         value={placeRadius}
                         onChange={(e) => setPlaceRadius(Number(e.target.value))}
                         title="Radius (m)"
-                        className="w-16 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900"
+                        className="w-16 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
                       />
                     </div>
                     <div className="flex gap-1.5">
@@ -2003,19 +2025,19 @@ export default function HomePage() {
                         value={placeLat}
                         onChange={(e) => setPlaceLat(e.target.value)}
                         placeholder="Lat (click map)"
-                        className="min-w-0 flex-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] text-zinc-900"
+                        className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 focus:border-zinc-400 focus:outline-none"
                       />
                       <input
                         type="text"
                         value={placeLon}
                         onChange={(e) => setPlaceLon(e.target.value)}
                         placeholder="Lon (click map)"
-                        className="min-w-0 flex-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] text-zinc-900"
+                        className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 focus:border-zinc-400 focus:outline-none"
                       />
                       <button
                         type="submit"
                         disabled={placeBusy}
-                        className="shrink-0 rounded-full bg-zinc-900 px-3 py-1 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                        className="lo-press shrink-0 rounded-lg bg-zinc-950 px-3 py-1 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
                       >
                         Save
                       </button>
@@ -2028,14 +2050,14 @@ export default function HomePage() {
                   {places.map((p) => (
                     <div
                       key={p.id}
-                      className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2 text-xs hover:bg-white"
+                      className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2 text-xs transition hover:border-zinc-200 hover:bg-white"
                     >
                       <button
                         type="button"
                         onClick={() => setSelectedPlaceId(p.id)}
                         className="min-w-0 flex-1 text-left"
                       >
-                        <div className="truncate font-semibold text-zinc-900">{p.name}</div>
+                        <div className="truncate font-semibold text-zinc-950">{p.name}</div>
                         <div className="font-mono text-[10px] text-zinc-400">
                           {p.latitude.toFixed(4)}, {p.longitude.toFixed(4)} ·{' '}
                           {Math.round(p.radiusMeters)}m
@@ -2046,7 +2068,7 @@ export default function HomePage() {
                           type="button"
                           onClick={() => void handleDeletePlace(p.id)}
                           title="Delete place"
-                          className="ml-2 rounded-full p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600"
+                          className="ml-2 rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -2061,7 +2083,7 @@ export default function HomePage() {
                 </div>
 
                 {placeTransitions.length > 0 && (
-                  <div className="border-t border-slate-100 pt-2.5">
+                  <div className="border-t border-zinc-100 pt-2.5">
                     <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
                       Activity
                     </div>
@@ -2072,9 +2094,9 @@ export default function HomePage() {
                           className="flex items-center justify-between text-zinc-600"
                         >
                           <span className="truncate">
-                            <span className="font-semibold text-zinc-900">{evt.username}</span>{' '}
+                            <span className="font-semibold text-zinc-950">{evt.username}</span>{' '}
                             {evt.transition === 'enter' ? 'arrived at' : 'left'}{' '}
-                            <span className="font-medium text-zinc-900">{evt.placeName}</span>
+                            <span className="font-medium text-zinc-950">{evt.placeName}</span>
                           </span>
                           <span className="ml-2 shrink-0 text-[10px] text-zinc-400">
                             {new Date(evt.recordedAt).toLocaleTimeString()}
@@ -2095,7 +2117,7 @@ export default function HomePage() {
                     <select
                       value={checkinTargetUserId}
                       onChange={(e) => setCheckinTargetUserId(e.target.value)}
-                      className="min-w-0 flex-1 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-zinc-900"
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
                     >
                       {activeGroup.members
                         .filter((m) => m.userId !== session.user.id)
@@ -2108,7 +2130,7 @@ export default function HomePage() {
                     <select
                       value={checkinDuration}
                       onChange={(e) => setCheckinDuration(Number(e.target.value))}
-                      className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-zinc-900"
+                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
                     >
                       <option value={15}>15m</option>
                       <option value={30}>30m</option>
@@ -2117,7 +2139,7 @@ export default function HomePage() {
                     <button
                       type="submit"
                       disabled={checkinBusy || !checkinTargetUserId}
-                      className="shrink-0 rounded-full bg-zinc-900 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                      className="lo-press shrink-0 rounded-lg bg-zinc-950 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
                     >
                       Ask
                     </button>
@@ -2136,10 +2158,10 @@ export default function HomePage() {
                     return (
                       <div
                         key={req.id}
-                        className="rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 text-xs"
+                        className="rounded-lg border border-zinc-100 bg-zinc-50/75 p-2.5 text-xs"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium text-zinc-900">
+                          <span className="font-medium text-zinc-950">
                             {isIncoming
                               ? `${req.requesterUsername} asked (${req.suggestedDurationMinutes}m)`
                               : `Asked ${req.targetUsername} (${req.suggestedDurationMinutes}m)`}
@@ -2154,7 +2176,7 @@ export default function HomePage() {
                               type="button"
                               disabled={checkinBusy}
                               onClick={() => void handleRespondCheckIn(req.id, 'accept')}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-full bg-zinc-950 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
+                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg bg-zinc-950 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
                             >
                               <Check className="h-3 w-3" /> Accept
                             </button>
@@ -2162,7 +2184,7 @@ export default function HomePage() {
                               type="button"
                               disabled={checkinBusy}
                               onClick={() => void handleRespondCheckIn(req.id, 'decline')}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-full border border-slate-200 bg-white py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-slate-100"
+                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg border border-zinc-200 bg-white py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100"
                             >
                               <X className="h-3 w-3" /> Decline
                             </button>
@@ -2185,14 +2207,14 @@ export default function HomePage() {
 
       {/* Bottom-Left Floating Profile Pill & Map Credits */}
       <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-end gap-2 sm:bottom-4 sm:left-4 sm:flex">
-        <div className="lo-float-in pointer-events-auto flex items-center gap-2 rounded-full border border-white/75 bg-white/90 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+        <div className="lo-float-in pointer-events-auto flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white/92 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
           <button
             type="button"
             onClick={() => setAccountSettingsOpen(true)}
             title="Account settings & profile photo"
-            className="lo-press flex items-center gap-2.5 rounded-full pr-1 text-left transition hover:opacity-85"
+            className="lo-press flex items-center gap-2.5 rounded-lg pr-1 text-left transition hover:opacity-85"
           >
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-900 text-xs font-bold text-white">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
               {isSafeAvatarUrl(session.user.avatarUrl) ? (
                 <img
                   src={session.user.avatarUrl}
@@ -2204,7 +2226,7 @@ export default function HomePage() {
               )}
             </span>
             <div className="leading-tight">
-              <div className="text-xs font-semibold text-zinc-900">{session.user.username}</div>
+              <div className="text-xs font-semibold text-zinc-950">{session.user.username}</div>
               <div className="text-[10px] text-zinc-500">
                 {session.user.role === 'HOST_ADMIN' ? 'Host Admin · Settings' : 'Account Settings'}
               </div>
@@ -2214,7 +2236,7 @@ export default function HomePage() {
             type="button"
             onClick={() => setAccountSettingsOpen(true)}
             title="Account settings"
-            className="lo-press rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
+            className="lo-press rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950"
           >
             <Settings className="h-3.5 w-3.5" />
           </button>
@@ -2222,7 +2244,7 @@ export default function HomePage() {
             type="button"
             onClick={handleSignOut}
             title="Sign out"
-            className="lo-press rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
+            className="lo-press rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950"
           >
             <LogOut className="h-3.5 w-3.5" />
           </button>
@@ -2230,15 +2252,15 @@ export default function HomePage() {
 
         <div className="pointer-events-auto relative">
           {creditsOpen && (
-            <div className="lo-float-in mb-2 w-60 rounded-xl border border-white/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(15,23,42,0.12)] backdrop-blur-xl">
-              <div className="mb-1 font-semibold text-zinc-900">Map Credits</div>
+            <div className="lo-float-in mb-2 w-60 rounded-xl border border-zinc-200/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+              <div className="mb-1 font-semibold text-zinc-950">Map Credits</div>
               <p>
                 Icons:{' '}
                 <a
                   href="https://github.com/mapbox/maki"
                   target="_blank"
                   rel="noreferrer"
-                  className="font-medium text-zinc-900 underline decoration-zinc-300 underline-offset-2"
+                  className="font-medium text-zinc-950 underline decoration-zinc-300 underline-offset-2"
                 >
                   Mapbox Maki
                 </a>{' '}
@@ -2250,7 +2272,7 @@ export default function HomePage() {
                   href="https://github.com/tokotype/PlusJakartaSans"
                   target="_blank"
                   rel="noreferrer"
-                  className="font-medium text-zinc-900 underline decoration-zinc-300 underline-offset-2"
+                  className="font-medium text-zinc-950 underline decoration-zinc-300 underline-offset-2"
                 >
                   Plus Jakarta Sans
                 </a>{' '}
@@ -2262,7 +2284,7 @@ export default function HomePage() {
           <button
             type="button"
             onClick={() => setCreditsOpen((v) => !v)}
-            className="lo-press rounded-full border border-white/75 bg-white/85 px-2.5 py-1.5 text-[10px] font-medium text-zinc-500 shadow-sm backdrop-blur-xl transition hover:bg-white hover:text-zinc-900"
+            className="lo-press rounded-lg border border-zinc-200/80 bg-white/90 px-2.5 py-1.5 text-[10px] font-medium text-zinc-500 shadow-sm backdrop-blur-xl transition hover:bg-white hover:text-zinc-950"
           >
             © Maki · OSM
           </button>
@@ -2271,7 +2293,7 @@ export default function HomePage() {
 
       {/* Bottom-Center Floating Map View Mode Switcher */}
       <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 sm:bottom-4">
-        <div className="lo-float-in flex items-center gap-1 rounded-full border border-white/75 bg-white/90 p-1 text-xs font-semibold shadow-[0_8px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl">
+        <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/92 p-1 text-xs font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl">
           {(
             [
               ['live', 'Live', MapPin],
@@ -2283,9 +2305,9 @@ export default function HomePage() {
               key={mode}
               type="button"
               onClick={() => setMapViewMode(mode)}
-              className={`lo-press flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition ${mapViewMode === mode
-                ? 'bg-zinc-900 text-white shadow-sm'
-                : 'text-zinc-600 hover:text-zinc-900'
+              className={`lo-press flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 transition ${mapViewMode === mode
+                ? 'bg-zinc-950 text-white shadow-sm'
+                : 'text-zinc-600 hover:text-zinc-950'
                 }`}
             >
               <Icon className="h-3.5 w-3.5" />
@@ -2298,7 +2320,7 @@ export default function HomePage() {
       {/* Bottom-Right Map Label Language Toggle */}
       <div
         title="Switch map label language between English and local street/landmark names"
-        className="lo-float-in pointer-events-auto absolute bottom-[5.25rem] right-2.5 z-20 flex items-center gap-1 rounded-full border border-white/75 bg-white/90 p-1 shadow-[0_8px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl sm:bottom-4 sm:right-14"
+        className="lo-float-in pointer-events-auto absolute bottom-[5.25rem] right-2.5 z-20 flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/92 p-1 shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl sm:bottom-4 sm:right-14"
       >
         <Globe className="ml-2 mr-0.5 h-3 w-3 text-zinc-500" />
         {(
@@ -2311,9 +2333,9 @@ export default function HomePage() {
             key={lang}
             type="button"
             onClick={() => handleChangeLabelLanguage(lang)}
-            className={`lo-press rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${labelLanguage === lang
-              ? 'bg-zinc-900 text-white shadow-sm'
-              : 'text-zinc-600 hover:text-zinc-900'
+            className={`lo-press rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${labelLanguage === lang
+              ? 'bg-zinc-950 text-white shadow-sm'
+              : 'text-zinc-600 hover:text-zinc-950'
               }`}
           >
             {label}

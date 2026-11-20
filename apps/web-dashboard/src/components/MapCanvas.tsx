@@ -299,7 +299,7 @@ export function MapCanvas({
 
         const pill = document.createElement('div');
         pill.className =
-          'mb-1.5 rounded-full border border-slate-200/90 bg-white/95 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-900 shadow-md backdrop-blur';
+          'mb-1.5 rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-950 shadow-md backdrop-blur';
         pill.textContent = loc.username;
 
         if (safeAvatar) {
@@ -514,7 +514,7 @@ export function MapCanvas({
           'lo-pin-drop flex flex-col items-center transition-transform duration-200 ease-out hover:scale-110';
         const label = document.createElement('div');
         label.className =
-          'rounded-full border border-slate-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-800 shadow-sm backdrop-blur';
+          'rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-900 shadow-sm backdrop-blur';
         label.textContent = `${place.name} · ${Math.round(place.radiusMeters)}m`;
         const dot = document.createElement('div');
         dot.className =
