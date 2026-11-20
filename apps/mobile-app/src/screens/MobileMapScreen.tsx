@@ -8,7 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Camera, Map, Marker } from '@maplibre/maplibre-react-native';
+import { Camera, type CameraRef, Map, Marker } from '@maplibre/maplibre-react-native';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
 import type { ChatMessage, LocationBroadcast, PrivacyMode } from '@loved-ones/shared';
@@ -57,12 +57,14 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [chatOpen, setChatOpen] = useState(false);
 
   const [tracking, setTracking] = useState(false);
+  const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   const [permissionInfo, setPermissionInfo] = useState<LocationPermissionResult | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
+  const cameraRef = useRef<CameraRef | null>(null);
 
   const activeGroup = useMemo(
     () => groups.find((g) => g.id === activeGroupId) ?? groups[0] ?? null,
@@ -169,11 +171,41 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       .catch(() => {});
   }, [serverUrl, accessToken, activeGroup]);
 
+  async function captureFocusAndSyncPosition(): Promise<{ flushed: number; remaining: number } | null> {
+    const pos = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    }).catch(() => Location.getLastKnownPositionAsync().catch(() => null));
+    if (!pos) return null;
+
+    const coord: [number, number] = [pos.coords.longitude, pos.coords.latitude];
+    setSelfCoord(coord);
+    cameraRef.current?.flyTo({ center: coord, zoom: 14.5, duration: 700 });
+
+    await enqueueLocationPoints([
+      {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        altitude: pos.coords.altitude ?? null,
+        accuracy:
+          typeof pos.coords.accuracy === 'number' && pos.coords.accuracy >= 0
+            ? pos.coords.accuracy
+            : null,
+        speed: pos.coords.speed && pos.coords.speed >= 0 ? pos.coords.speed : null,
+        batteryLevel: null,
+        recordedAt: new Date(pos.timestamp || Date.now()).toISOString(),
+      },
+    ]);
+    const result = await flushOfflineLocations(serverUrl, accessToken);
+    await refreshQueueCount();
+    return result;
+  }
+
   async function handleToggleTracking() {
     try {
       if (tracking) {
         await stopBackgroundTracking();
         setTracking(false);
+        setSelfCoord(null);
         setStatusBanner('Location tracking paused');
       } else {
         const started = await startBackgroundTracking();
@@ -184,6 +216,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             ? 'Background GPS beacon active (Always Allow)'
             : 'Foreground GPS beacon active (While Using App fallback)',
         );
+        await captureFocusAndSyncPosition().catch(() => null);
       }
     } catch (err) {
       setStatusBanner(err instanceof Error ? err.message : 'Unable to toggle location tracking');
@@ -197,24 +230,10 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         setStatusBanner('Location permission required');
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      await enqueueLocationPoints([
-        {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          altitude: pos.coords.altitude ?? null,
-          accuracy:
-            typeof pos.coords.accuracy === 'number' && pos.coords.accuracy >= 0
-              ? pos.coords.accuracy
-              : null,
-          speed: pos.coords.speed && pos.coords.speed >= 0 ? pos.coords.speed : null,
-          batteryLevel: null,
-          recordedAt: new Date(pos.timestamp || Date.now()).toISOString(),
-        },
-      ]);
-      const result = await flushOfflineLocations(serverUrl, accessToken);
-      await refreshQueueCount();
-      setStatusBanner(`Synced ${result.flushed} points (${result.remaining} queued)`);
+      const result = await captureFocusAndSyncPosition();
+      if (result) {
+        setStatusBanner(`Synced ${result.flushed} points (${result.remaining} queued)`);
+      }
     } catch (err) {
       await refreshQueueCount();
       setStatusBanner(err instanceof Error ? err.message : 'Saved offline in SQLite queue');
@@ -262,19 +281,36 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     setChatText('');
   }
 
-  const centerCoord: [number, number] = locations[0]
-    ? [locations[0].longitude, locations[0].latitude]
-    : [13.4448, 52.5069];
+  const centerCoord: [number, number] = selfCoord
+    ? selfCoord
+    : locations[0]
+      ? [locations[0].longitude, locations[0].latitude]
+      : [13.4448, 52.5069];
+
+  const showSelfMarker = Boolean(
+    selfCoord && !locations.some((loc) => loc.userId === config.user?.id && !loc.isFuzzed),
+  );
 
   return (
     <View style={styles.root}>
       <Map style={styles.map} mapStyle={mapStyle}>
         <Camera
+          ref={cameraRef}
           initialViewState={{
             center: centerCoord,
             zoom: 11,
           }}
         />
+        {showSelfMarker && selfCoord && (
+          <Marker id="self-live" lngLat={selfCoord}>
+            <View style={styles.marker}>
+              <Text style={styles.selfMarkerLabel}>You</Text>
+              <View style={styles.selfMarkerHalo}>
+                <View style={styles.selfMarkerDot} />
+              </View>
+            </View>
+          </Marker>
+        )}
         {locations.map((loc) => (
           <Marker key={loc.userId} id={loc.userId} lngLat={[loc.longitude, loc.latitude]}>
             <View style={styles.marker}>
@@ -514,6 +550,35 @@ const styles = StyleSheet.create({
   markerDot: { width: 12, height: 12, borderRadius: 999 },
   dotExact: { backgroundColor: '#16a34a' },
   dotFuzzed: { backgroundColor: '#d97706' },
+  selfMarkerLabel: {
+    backgroundColor: '#18181b',
+    color: '#80f15a',
+    fontSize: 11,
+    fontWeight: '700',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    marginBottom: 4,
+    overflow: 'hidden',
+  },
+  selfMarkerHalo: {
+    width: 26,
+    height: 26,
+    borderRadius: 999,
+    backgroundColor: 'rgba(128, 241, 90, 0.35)',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selfMarkerDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: '#80f15a',
+    borderWidth: 2,
+    borderColor: '#18181b',
+  },
   topOverlay: {
     position: 'absolute',
     top: 48,

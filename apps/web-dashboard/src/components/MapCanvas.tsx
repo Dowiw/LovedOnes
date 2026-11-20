@@ -21,6 +21,20 @@ function escapeHtml(raw: string): string {
     .replace(/'/g, '&#39;');
 }
 
+interface SelfLocationFix {
+  latitude: number;
+  longitude: number;
+  accuracy?: number | null;
+  recordedAt: string;
+}
+
+interface FocusCoordsRequest {
+  latitude: number;
+  longitude: number;
+  zoom?: number;
+  nonce: number;
+}
+
 interface MapCanvasProps {
   locations: LocationBroadcast[];
   places?: GroupPlace[];
@@ -28,6 +42,9 @@ interface MapCanvasProps {
   showTrails?: boolean;
   selectedUserId?: string | null;
   selectedPlaceId?: string | null;
+  currentUserId?: string | null;
+  selfLocation?: SelfLocationFix | null;
+  focusCoords?: FocusCoordsRequest | null;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
   className?: string;
 }
@@ -39,6 +56,9 @@ export function MapCanvas({
   showTrails = false,
   selectedUserId,
   selectedPlaceId,
+  currentUserId = null,
+  selfLocation = null,
+  focusCoords = null,
   onMapSelectCoords,
   className = 'relative h-full w-full overflow-hidden bg-[#cfe3ee]',
 }: MapCanvasProps) {
@@ -47,6 +67,8 @@ export function MapCanvas({
   const styleReadyRef = useRef(false);
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const selfMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const hasAutoFramedRef = useRef(false);
   const onSelectCoordsRef = useRef(onMapSelectCoords);
   onSelectCoordsRef.current = onMapSelectCoords;
 
@@ -109,6 +131,8 @@ export function MapCanvas({
         marker.remove();
       }
       placeMarkersRef.current.clear();
+      selfMarkerRef.current?.remove();
+      selfMarkerRef.current = null;
       map.remove();
       mapRef.current = null;
     };
@@ -179,14 +203,89 @@ export function MapCanvas({
     if (selectedUserId) {
       const target = locations.find((l) => l.userId === selectedUserId);
       if (target) {
+        hasAutoFramedRef.current = true;
         map.flyTo({ center: [target.longitude, target.latitude], zoom: 13.5, duration: 700 });
       }
-    } else if (locations.length === 1) {
-      map.flyTo({ center: [locations[0].longitude, locations[0].latitude], zoom: 12.5, duration: 600 });
-    } else if (locations.length > 1) {
-      map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 600 });
+    } else if (locations.length === 0) {
+      hasAutoFramedRef.current = false;
+    } else if (!hasAutoFramedRef.current) {
+      hasAutoFramedRef.current = true;
+      if (locations.length === 1) {
+        map.flyTo({ center: [locations[0].longitude, locations[0].latitude], zoom: 13.5, duration: 600 });
+      } else {
+        map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 600 });
+      }
     }
   }, [locations, selectedUserId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!selfLocation) {
+      selfMarkerRef.current?.remove();
+      selfMarkerRef.current = null;
+      return;
+    }
+
+    const hasExactServerMarker = Boolean(
+      currentUserId && locations.some((l) => l.userId === currentUserId && !l.isFuzzed),
+    );
+    const accLabel =
+      typeof selfLocation.accuracy === 'number' && Number.isFinite(selfLocation.accuracy)
+        ? `±${Math.round(selfLocation.accuracy)} m`
+        : 'Live browser fix';
+    const popupHtml = `
+      <div class="text-xs space-y-1">
+        <div class="font-semibold text-zinc-900">You (Live GPS)</div>
+        <div class="text-zinc-600">${escapeHtml(accLabel)}</div>
+        <div class="font-mono text-[11px] text-zinc-500">${selfLocation.latitude.toFixed(4)}, ${selfLocation.longitude.toFixed(4)}</div>
+        <div class="text-[11px] text-zinc-400">${new Date(selfLocation.recordedAt).toLocaleTimeString()}</div>
+      </div>
+    `;
+
+    // Rebuild cleanly when label visibility switches so exact server pin and self puck don't double-label
+    selfMarkerRef.current?.remove();
+    const el = document.createElement('div');
+    el.className = 'flex flex-col items-center cursor-pointer select-none z-10';
+
+    if (!hasExactServerMarker) {
+      const pill = document.createElement('div');
+      pill.className =
+        'mb-1.5 rounded-full border border-zinc-900 bg-zinc-900 px-2.5 py-0.5 text-[11px] font-semibold text-[#80f15a] shadow-md';
+      pill.textContent = 'You';
+      el.appendChild(pill);
+    }
+
+    const pulseWrap = document.createElement('div');
+    pulseWrap.className = 'relative flex h-7 w-7 items-center justify-center';
+    const halo = document.createElement('div');
+    halo.className = 'absolute inset-0 animate-ping rounded-full bg-[#80f15a]/55';
+    const puck = document.createElement('div');
+    puck.className =
+      'relative flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-[#80f15a] shadow-lg ring-4 ring-[#80f15a]/35';
+    const dot = document.createElement('div');
+    dot.className = 'h-2 w-2 rounded-full bg-zinc-950';
+    puck.appendChild(dot);
+    pulseWrap.append(halo, puck);
+    el.appendChild(pulseWrap);
+
+    selfMarkerRef.current = new maplibregl.Marker({ element: el })
+      .setLngLat([selfLocation.longitude, selfLocation.latitude])
+      .setPopup(new maplibregl.Popup({ offset: 18 }).setHTML(popupHtml))
+      .addTo(map);
+  }, [selfLocation, currentUserId, locations]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !focusCoords) return;
+    hasAutoFramedRef.current = true;
+    map.flyTo({
+      center: [focusCoords.longitude, focusCoords.latitude],
+      zoom: focusCoords.zoom ?? 15,
+      duration: 750,
+    });
+  }, [focusCoords]);
 
   useEffect(() => {
     const map = mapRef.current;

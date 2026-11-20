@@ -90,6 +90,19 @@ export default function HomePage() {
 
   const [geoSharing, setGeoSharing] = useState(false);
   const [geoStatus, setGeoStatus] = useState<string | null>(null);
+  const [selfLocation, setSelfLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    accuracy?: number | null;
+    recordedAt: string;
+  } | null>(null);
+  const [focusCoords, setFocusCoords] = useState<{
+    latitude: number;
+    longitude: number;
+    zoom?: number;
+    nonce: number;
+  } | null>(null);
+  const geoAutoZoomedRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
@@ -204,6 +217,12 @@ export default function HomePage() {
       transports: ['websocket', 'polling'],
     });
     socketRef.current = socket;
+
+    socket.on('connect', () => {
+      if (activeGroup) {
+        socket.emit('group:join', activeGroup.id);
+      }
+    });
 
     socket.on('location:update', (update: LocationBroadcast) => {
       setLocations((prev) => {
@@ -322,6 +341,8 @@ export default function HomePage() {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
+      geoAutoZoomedRef.current = false;
+      setSelfLocation(null);
       return;
     }
 
@@ -331,38 +352,92 @@ export default function HomePage() {
       return;
     }
 
-    setGeoStatus('Sharing live browser location...');
-    const id = navigator.geolocation.watchPosition(
-      (pos) => {
-        const point = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          altitude: pos.coords.altitude ?? null,
-          accuracy:
-            typeof pos.coords.accuracy === 'number' && pos.coords.accuracy >= 0
-              ? pos.coords.accuracy
-              : null,
-          speed: pos.coords.speed && pos.coords.speed >= 0 ? pos.coords.speed : null,
-          batteryLevel: null,
-          recordedAt: new Date(pos.timestamp || Date.now()).toISOString(),
-        };
-        if (socketRef.current?.connected) {
-          socketRef.current.emit('location:batch', { points: [point] });
-        } else {
-          void apiSendLocationBatch(session.accessToken, [point]);
-        }
-        setGeoStatus(
-          `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)} · ${new Date().toLocaleTimeString()}`,
+    let cancelled = false;
+    geoAutoZoomedRef.current = false;
+    setGeoStatus('Locating browser GPS...');
+
+    const handleGeoPosition = (pos: GeolocationPosition) => {
+      if (cancelled) return;
+      const point = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        altitude: pos.coords.altitude ?? null,
+        accuracy:
+          typeof pos.coords.accuracy === 'number' && pos.coords.accuracy >= 0
+            ? pos.coords.accuracy
+            : null,
+        speed: pos.coords.speed && pos.coords.speed >= 0 ? pos.coords.speed : null,
+        batteryLevel: null,
+        recordedAt: new Date(pos.timestamp || Date.now()).toISOString(),
+      };
+
+      setSelfLocation({
+        latitude: point.latitude,
+        longitude: point.longitude,
+        accuracy: point.accuracy,
+        recordedAt: point.recordedAt,
+      });
+
+      if (!geoAutoZoomedRef.current) {
+        geoAutoZoomedRef.current = true;
+        setSelectedUserId(null);
+        setSelectedPlaceId(null);
+        setMapViewMode((prev) => (prev === 'places' ? 'live' : prev));
+        setFocusCoords({
+          latitude: point.latitude,
+          longitude: point.longitude,
+          zoom: 15,
+          nonce: Date.now(),
+        });
+      }
+
+      const accText =
+        point.accuracy !== null ? ` (±${Math.round(point.accuracy)}m)` : '';
+
+      if (socketRef.current?.connected) {
+        socketRef.current.emit(
+          'location:batch',
+          { points: [point] },
+          (ack?: { ok: boolean; inserted?: number; error?: string }) => {
+            if (cancelled) return;
+            if (ack && !ack.ok) {
+              setGeoStatus(ack.error ?? 'Failed to upload GPS fix');
+            } else if (ack && ack.inserted === 0 && point.accuracy !== null && point.accuracy > 1000) {
+              setGeoStatus(
+                `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}${accText} · Local only (>1km coarse fix)`,
+              );
+            }
+          },
         );
-      },
-      (err) => {
-        setGeoStatus(`Geolocation error: ${err.message}`);
-      },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
-    );
+      } else {
+        void apiSendLocationBatch(session.accessToken, [point]).catch(() => {});
+      }
+
+      setGeoStatus(
+        `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}${accText} · ${new Date().toLocaleTimeString()}`,
+      );
+    };
+
+    const handleGeoError = (err: GeolocationPositionError) => {
+      if (cancelled) return;
+      setGeoStatus(`Geolocation error: ${err.message}`);
+    };
+
+    navigator.geolocation.getCurrentPosition(handleGeoPosition, () => {}, {
+      enableHighAccuracy: true,
+      maximumAge: 10000,
+      timeout: 10000,
+    });
+
+    const id = navigator.geolocation.watchPosition(handleGeoPosition, handleGeoError, {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 15000,
+    });
     watchIdRef.current = id;
 
     return () => {
+      cancelled = true;
       navigator.geolocation.clearWatch(id);
       watchIdRef.current = null;
     };
@@ -653,6 +728,9 @@ export default function HomePage() {
         showTrails={mapViewMode === 'trails'}
         selectedUserId={selectedUserId}
         selectedPlaceId={selectedPlaceId}
+        currentUserId={session.user.id}
+        selfLocation={selfLocation}
+        focusCoords={focusCoords}
         onMapSelectCoords={(lat, lon) => {
           setPlaceLat(String(lat));
           setPlaceLon(String(lon));
@@ -835,6 +913,26 @@ export default function HomePage() {
                   <Radio className="h-3.5 w-3.5" />
                   {geoSharing ? 'Stop Live GPS' : 'Share Live GPS'}
                 </button>
+                {selfLocation && (
+                  <button
+                    type="button"
+                    title="Zoom to my live location"
+                    onClick={() => {
+                      setSelectedUserId(null);
+                      setSelectedPlaceId(null);
+                      setMapViewMode((prev) => (prev === 'places' ? 'live' : prev));
+                      setFocusCoords({
+                        latitude: selfLocation.latitude,
+                        longitude: selfLocation.longitude,
+                        zoom: 15,
+                        nonce: Date.now(),
+                      });
+                    }}
+                    className="rounded-full border border-slate-200 bg-white p-2 text-zinc-800 hover:bg-slate-50"
+                  >
+                    <LocateFixed className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => void handleSendTestPing()}
