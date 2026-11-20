@@ -2,7 +2,8 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { CheckCircle2, ShieldAlert, UserPlus } from 'lucide-react';
+import { CheckCircle2, Loader2, ShieldAlert, UserPlus } from 'lucide-react';
+import { withMinDelay } from '@loved-ones/shared';
 import { NavBar } from '@/components/NavBar';
 import {
   apiJoinInvite,
@@ -55,7 +56,7 @@ function JoinInviteInner() {
     setSubmitting(true);
     setError(null);
     try {
-      await apiJoinInvite(session.accessToken, token);
+      await withMinDelay(apiJoinInvite(session.accessToken, token));
       router.push('/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to join group');
@@ -70,7 +71,9 @@ function JoinInviteInner() {
     setSubmitting(true);
     setError(null);
     try {
-      const created = await apiRegister({ email, username, password, inviteToken: token });
+      const created = await withMinDelay(
+        apiRegister({ email, username, password, inviteToken: token }),
+      );
       saveSession(created);
       setSession(created);
       router.push('/');
@@ -136,9 +139,16 @@ function JoinInviteInner() {
                   type="button"
                   disabled={!preview.valid || submitting}
                   onClick={() => void handleJoinExisting()}
-                  className="lo-press flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                  className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
                 >
-                  <CheckCircle2 className="h-4 w-4 text-white" />
+                  {submitting ? (
+                    <>
+                      <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                      <Loader2 className="h-4 w-4 animate-spin text-white" />
+                    </>
+                  ) : (
+                    <CheckCircle2 className="h-4 w-4 text-white" />
+                  )}
                   {submitting ? 'Joining...' : `Join as ${session.user.username}`}
                 </button>
               ) : (
@@ -178,9 +188,15 @@ function JoinInviteInner() {
                   <button
                     type="submit"
                     disabled={!preview.valid || submitting}
-                    className="lo-press w-full rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
                   >
-                    {submitting ? 'Joining...' : 'Register & Join Group'}
+                    {submitting && (
+                      <>
+                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                        <Loader2 className="h-4 w-4 animate-spin text-white" />
+                      </>
+                    )}
+                    <span>{submitting ? 'Joining...' : 'Register & Join Group'}</span>
                   </button>
                 </form>
               )}

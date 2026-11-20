@@ -36,6 +36,7 @@ import {
 import {
   isPointCoveredByRegions,
   isSafeAvatarUrl,
+  withMinDelay,
   type ChatMessage,
   type GroupPlace,
   type LocationBroadcast,
@@ -178,13 +179,20 @@ export default function HomePage() {
   const [trackerTtlSeconds, setTrackerTtlSeconds] = useState(0);
   const [trackerIssued, setTrackerIssued] = useState<TrackerTokenResponse | null>(null);
   const [trackerLoading, setTrackerLoading] = useState(false);
+  const [trackerFeedback, setTrackerFeedback] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const [privacySavingMode, setPrivacySavingMode] = useState<PrivacyMode | null>(null);
+  const [privacyFeedback, setPrivacyFeedback] = useState<PrivacyMode | null>(null);
+  const [sendingTestPing, setSendingTestPing] = useState(false);
 
   const [locationRequests, setLocationRequests] = useState<LocationRequestItem[]>([]);
   const [myPrivacyOverrideUntil, setMyPrivacyOverrideUntil] = useState<string | null>(null);
   const [checkinTargetUserId, setCheckinTargetUserId] = useState<string>('');
   const [checkinDuration, setCheckinDuration] = useState<number>(15);
   const [checkinBusy, setCheckinBusy] = useState(false);
+  const [checkinRespondingId, setCheckinRespondingId] = useState<string | null>(null);
+  const [checkinFeedback, setCheckinFeedback] = useState<string | null>(null);
   const [checkinError, setCheckinError] = useState<string | null>(null);
 
   const [places, setPlaces] = useState<GroupPlace[]>([]);
@@ -195,6 +203,8 @@ export default function HomePage() {
   const [placeLon, setPlaceLon] = useState('');
   const [placeRadius, setPlaceRadius] = useState<number>(150);
   const [placeBusy, setPlaceBusy] = useState(false);
+  const [deletingPlaceId, setDeletingPlaceId] = useState<string | null>(null);
+  const [placeFeedback, setPlaceFeedback] = useState<string | null>(null);
   const [placeError, setPlaceError] = useState<string | null>(null);
 
   const [groupPopoverOpen, setGroupPopoverOpen] = useState(false);
@@ -438,11 +448,14 @@ export default function HomePage() {
     setMapDownloadBusy(true);
     setMapDownloadError(null);
     try {
-      const res = await apiRequestMapDownload(session.accessToken, {
-        latitude: lat,
-        longitude: lon,
-        cityName,
-      });
+      const res = await withMinDelay(
+        apiRequestMapDownload(session.accessToken, {
+          latitude: lat,
+          longitude: lon,
+          cityName,
+        }),
+        500,
+      );
       if (res.alreadyCovered) {
         if (res.regions) {
           setMapRegions(res.regions);
@@ -579,11 +592,15 @@ export default function HomePage() {
   async function handleGenerateTrackerToken() {
     if (!session) return;
     setTrackerLoading(true);
+    setTrackerFeedback(null);
     try {
-      const created = await apiCreateTrackerToken(session.accessToken, trackerDays);
+      const created = await withMinDelay(
+        apiCreateTrackerToken(session.accessToken, trackerDays),
+      );
       setTrackerIssued(created);
       setTrackerActive(true);
       setTrackerTtlSeconds(created.expiresInDays * 86400);
+      setTrackerFeedback('Tracker token ready');
     } catch (err) {
       setGeoStatus(err instanceof Error ? err.message : 'Failed to generate tracker token');
     } finally {
@@ -594,11 +611,13 @@ export default function HomePage() {
   async function handleRevokeTrackerToken() {
     if (!session) return;
     setTrackerLoading(true);
+    setTrackerFeedback(null);
     try {
-      await apiRevokeTrackerToken(session.accessToken);
+      await withMinDelay(apiRevokeTrackerToken(session.accessToken));
       setTrackerIssued(null);
       setTrackerActive(false);
       setTrackerTtlSeconds(0);
+      setTrackerFeedback('Tracker token revoked');
     } catch {
       // ignore
     } finally {
@@ -976,19 +995,22 @@ export default function HomePage() {
     setAuthLoading(true);
     try {
       const boundToken = preAuthInvite?.token;
-      const nextSession =
-        authMode === 'login'
-          ? await apiLogin(email, password)
-          : await apiRegister({
-              email,
-              username,
-              password,
-              ...(boundToken ? { inviteToken: boundToken } : {}),
-            });
+      const nextSession = await withMinDelay(async () => {
+        const authed =
+          authMode === 'login'
+            ? await apiLogin(email, password)
+            : await apiRegister({
+                email,
+                username,
+                password,
+                ...(boundToken ? { inviteToken: boundToken } : {}),
+              });
 
-      if (authMode === 'login' && boundToken) {
-        await apiJoinInvite(nextSession.accessToken, boundToken).catch(() => {});
-      }
+        if (authMode === 'login' && boundToken) {
+          await apiJoinInvite(authed.accessToken, boundToken).catch(() => {});
+        }
+        return authed;
+      });
 
       setPreAuthInvite(null);
       setInvitePromptDismissed(Boolean(boundToken));
@@ -1007,10 +1029,13 @@ export default function HomePage() {
     if (!session || !newGroupName.trim()) return;
     setCreatingGroup(true);
     try {
-      const created = await apiCreateGroup(session.accessToken, newGroupName.trim());
+      const created = await withMinDelay(async () => {
+        const res = await apiCreateGroup(session.accessToken, newGroupName.trim());
+        await refreshGroups(session.accessToken);
+        return res;
+      });
       setNewGroupName('');
       setShowNewGroupForm(false);
-      await refreshGroups(session.accessToken);
       setActiveGroupId(created.id);
     } finally {
       setCreatingGroup(false);
@@ -1018,13 +1043,26 @@ export default function HomePage() {
   }
 
   async function handlePrivacyChange(mode: PrivacyMode) {
-    if (!session || !activeGroup) return;
-    await apiUpdatePrivacy(session.accessToken, activeGroup.id, mode);
-    await refreshGroups(session.accessToken);
+    if (!session || !activeGroup || privacySavingMode) return;
+    setPrivacySavingMode(mode);
+    setPrivacyFeedback(null);
+    try {
+      await withMinDelay(async () => {
+        await apiUpdatePrivacy(session.accessToken, activeGroup.id, mode);
+        await refreshGroups(session.accessToken);
+      });
+      setPrivacyFeedback(mode);
+      window.setTimeout(() => {
+        setPrivacyFeedback((prev) => (prev === mode ? null : prev));
+      }, 2400);
+    } finally {
+      setPrivacySavingMode(null);
+    }
   }
 
   async function handleSendTestPing() {
-    if (!session) return;
+    if (!session || sendingTestPing) return;
+    setSendingTestPing(true);
     const jitterLat = 52.5069 + (Math.random() - 0.5) * 0.02;
     const jitterLon = 13.4448 + (Math.random() - 0.5) * 0.02;
     const point = {
@@ -1036,12 +1074,18 @@ export default function HomePage() {
       batteryLevel: 94,
       recordedAt: new Date().toISOString(),
     };
-    if (socketRef.current?.connected) {
-      socketRef.current.emit('location:batch', { points: [point] });
-    } else {
-      await apiSendLocationBatch(session.accessToken, [point]);
+    try {
+      await withMinDelay(async () => {
+        if (socketRef.current?.connected) {
+          socketRef.current.emit('location:batch', { points: [point] });
+        } else {
+          await apiSendLocationBatch(session.accessToken, [point]);
+        }
+      }, 450);
+      setGeoStatus(`Ping ${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}`);
+    } finally {
+      setSendingTestPing(false);
     }
-    setGeoStatus(`Ping ${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}`);
   }
 
   function handleSendChat(e: React.FormEvent) {
@@ -1079,14 +1123,18 @@ export default function HomePage() {
     if (!session || !activeGroup || !checkinTargetUserId) return;
     setCheckinBusy(true);
     setCheckinError(null);
+    setCheckinFeedback(null);
     try {
-      const created = await apiCreateLocationRequest(session.accessToken, activeGroup.id, {
-        targetUserId: checkinTargetUserId,
-        suggestedDurationMinutes: checkinDuration,
-      });
+      const created = await withMinDelay(
+        apiCreateLocationRequest(session.accessToken, activeGroup.id, {
+          targetUserId: checkinTargetUserId,
+          suggestedDurationMinutes: checkinDuration,
+        }),
+      );
       setLocationRequests((prev) =>
         prev.some((r) => r.id === created.id) ? prev : [created, ...prev],
       );
+      setCheckinFeedback(`Request sent to ${created.targetUsername}`);
     } catch (err) {
       setCheckinError(err instanceof Error ? err.message : 'Failed to request check-in');
     } finally {
@@ -1097,22 +1145,23 @@ export default function HomePage() {
   async function handleRespondCheckIn(requestId: string, action: 'accept' | 'decline') {
     if (!session || !activeGroup) return;
     setCheckinBusy(true);
+    setCheckinRespondingId(requestId);
     setCheckinError(null);
+    setCheckinFeedback(null);
     try {
-      const res = await apiRespondLocationRequest(
-        session.accessToken,
-        activeGroup.id,
-        requestId,
-        action,
+      const res = await withMinDelay(
+        apiRespondLocationRequest(session.accessToken, activeGroup.id, requestId, action),
       );
       setLocationRequests((prev) => prev.map((r) => (r.id === res.request.id ? res.request : r)));
       if (res.privacyOverrideUntil) {
         setMyPrivacyOverrideUntil(res.privacyOverrideUntil);
       }
+      setCheckinFeedback(action === 'accept' ? 'Check-in accepted' : 'Check-in declined');
     } catch (err) {
       setCheckinError(err instanceof Error ? err.message : 'Failed to respond');
     } finally {
       setCheckinBusy(false);
+      setCheckinRespondingId(null);
     }
   }
 
@@ -1127,17 +1176,21 @@ export default function HomePage() {
     }
     setPlaceBusy(true);
     setPlaceError(null);
+    setPlaceFeedback(null);
     try {
-      const created = await apiCreateGroupPlace(session.accessToken, activeGroup.id, {
-        name: placeName.trim(),
-        latitude,
-        longitude,
-        radiusMeters: placeRadius,
-      });
+      const created = await withMinDelay(
+        apiCreateGroupPlace(session.accessToken, activeGroup.id, {
+          name: placeName.trim(),
+          latitude,
+          longitude,
+          radiusMeters: placeRadius,
+        }),
+      );
       setPlaceName('');
       setPlaceLat('');
       setPlaceLon('');
       setPlaces((prev) => (prev.some((p) => p.id === created.id) ? prev : [...prev, created]));
+      setPlaceFeedback(`Saved "${created.name}"`);
     } catch (err) {
       setPlaceError(err instanceof Error ? err.message : 'Failed to create place');
     } finally {
@@ -1147,11 +1200,16 @@ export default function HomePage() {
 
   async function handleDeletePlace(placeId: string) {
     if (!session || !activeGroup) return;
+    setDeletingPlaceId(placeId);
+    setPlaceFeedback(null);
     try {
-      await apiDeleteGroupPlace(session.accessToken, activeGroup.id, placeId);
+      await withMinDelay(apiDeleteGroupPlace(session.accessToken, activeGroup.id, placeId), 500);
       setPlaces((prev) => prev.filter((p) => p.id !== placeId));
+      setPlaceFeedback('Place removed');
     } catch {
       // ignore
+    } finally {
+      setDeletingPlaceId(null);
     }
   }
 
@@ -1161,7 +1219,7 @@ export default function HomePage() {
     setAuthNotice(null);
     setAuthLoading(true);
     try {
-      const res = await apiRequestPasswordReset(forgotEmail.trim());
+      const res = await withMinDelay(apiRequestPasswordReset(forgotEmail.trim()));
       setForgotStep('reset');
       setAuthNotice(res.message);
     } catch (err) {
@@ -1185,11 +1243,13 @@ export default function HomePage() {
     }
     setAuthLoading(true);
     try {
-      await apiResetPasswordWithCode({
-        email: forgotEmail.trim(),
-        code: forgotCode.trim(),
-        newPassword: forgotNewPassword,
-      });
+      await withMinDelay(
+        apiResetPasswordWithCode({
+          email: forgotEmail.trim(),
+          code: forgotCode.trim(),
+          newPassword: forgotNewPassword,
+        }),
+      );
       setEmail(forgotEmail.trim());
       setPassword('');
       setForgotCode('');
@@ -1255,9 +1315,15 @@ export default function HomePage() {
                   <button
                     type="submit"
                     disabled={authLoading}
-                    className="lo-press w-full rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
+                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80"
                   >
-                    {authLoading ? 'Sending code...' : 'Send Reset Code'}
+                    {authLoading && (
+                      <>
+                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      </>
+                    )}
+                    <span>{authLoading ? 'Sending code...' : 'Send Reset Code'}</span>
                   </button>
                 </form>
               ) : (
@@ -1318,9 +1384,15 @@ export default function HomePage() {
                   <button
                     type="submit"
                     disabled={authLoading}
-                    className="lo-press w-full rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
+                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80"
                   >
-                    {authLoading ? 'Resetting password...' : 'Reset Password'}
+                    {authLoading && (
+                      <>
+                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      </>
+                    )}
+                    <span>{authLoading ? 'Resetting password...' : 'Reset Password'}</span>
                   </button>
                 </form>
               )}
@@ -1437,13 +1509,23 @@ export default function HomePage() {
                 <button
                   type="submit"
                   disabled={authLoading}
-                  className="lo-press w-full rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
+                  className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80"
                 >
-                  {authLoading
-                    ? 'Please wait...'
-                    : authMode === 'login'
-                      ? 'Continue'
-                      : 'Create account'}
+                  {authLoading && (
+                    <>
+                      <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </>
+                  )}
+                  <span>
+                    {authLoading
+                      ? authMode === 'login'
+                        ? 'Signing in...'
+                        : 'Creating account...'
+                      : authMode === 'login'
+                        ? 'Continue'
+                        : 'Create account'}
+                  </span>
                 </button>
 
                 {authMode === 'login' && (
@@ -1859,9 +1941,10 @@ export default function HomePage() {
                 <button
                   type="submit"
                   disabled={creatingGroup || !newGroupName.trim()}
-                  className="lo-press rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  className="lo-press flex items-center justify-center gap-1 rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
                 >
-                  Add
+                  {creatingGroup && <Loader2 className="h-3 w-3 animate-spin" />}
+                  <span>{creatingGroup ? 'Adding...' : 'Add'}</span>
                 </button>
               </form>
             )}
@@ -1869,29 +1952,54 @@ export default function HomePage() {
             {activeGroup && (
               <div className="mt-3 border-t border-zinc-100 pt-3">
                 <div className="mb-1.5 flex items-center justify-between text-[11px] text-zinc-500">
-                  <span className="font-medium">Sharing mode</span>
+                  <span className="flex items-center gap-1.5 font-medium">
+                    Sharing mode
+                    {privacySavingMode && (
+                      <span className="lo-feedback-in inline-flex items-center gap-1 text-[10px] font-semibold text-zinc-600">
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                        Saving...
+                      </span>
+                    )}
+                    {!privacySavingMode && privacyFeedback && (
+                      <span className="lo-feedback-in inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                        <Check className="h-2.5 w-2.5" />
+                        Saved
+                      </span>
+                    )}
+                  </span>
                   <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600">
                     {activeGroup.myRole}
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1">
-                  {(['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => void handlePrivacyChange(mode)}
-                      className={`lo-press flex items-center justify-center gap-1 rounded-md py-1.5 text-[11px] font-semibold transition ${
-                        activeGroup.myPrivacy === mode
-                          ? 'bg-zinc-950 text-white shadow-sm'
-                          : 'text-zinc-600 hover:text-zinc-950'
-                      }`}
-                    >
-                      {mode === 'EXACT' && <LocateFixed className="h-3 w-3" />}
-                      {mode === 'FUZZED' && <Compass className="h-3 w-3" />}
-                      {mode === 'GHOST' && <EyeOff className="h-3 w-3" />}
-                      {mode}
-                    </button>
-                  ))}
+                  {(['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => {
+                    const savingThis = privacySavingMode === mode;
+                    const active = activeGroup.myPrivacy === mode || savingThis;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        disabled={Boolean(privacySavingMode)}
+                        onClick={() => void handlePrivacyChange(mode)}
+                        className={`lo-press flex items-center justify-center gap-1 rounded-md py-1.5 text-[11px] font-semibold transition disabled:cursor-wait ${
+                          active
+                            ? 'bg-zinc-950 text-white shadow-sm'
+                            : 'text-zinc-600 hover:text-zinc-950'
+                        }`}
+                      >
+                        {savingThis ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : mode === 'EXACT' ? (
+                          <LocateFixed className="h-3 w-3" />
+                        ) : mode === 'FUZZED' ? (
+                          <Compass className="h-3 w-3" />
+                        ) : (
+                          <EyeOff className="h-3 w-3" />
+                        )}
+                        {mode}
+                      </button>
+                    );
+                  })}
                 </div>
                 {myPrivacyOverrideUntil && Date.parse(myPrivacyOverrideUntil) > Date.now() && (
                   <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900">
@@ -1946,10 +2054,12 @@ export default function HomePage() {
                 )}
                 <button
                   type="button"
+                  disabled={sendingTestPing}
                   onClick={() => void handleSendTestPing()}
-                  className="lo-press rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950"
+                  className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 disabled:opacity-60"
                 >
-                  Test Ping
+                  {sendingTestPing && <Loader2 className="h-3 w-3 animate-spin" />}
+                  <span>{sendingTestPing ? 'Sending...' : 'Test Ping'}</span>
                 </button>
               </div>
               {geoStatus && (
@@ -2103,9 +2213,16 @@ export default function HomePage() {
                       type="button"
                       disabled={trackerLoading}
                       onClick={() => void handleGenerateTrackerToken()}
-                      className="lo-press flex-1 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
                     >
-                      {trackerActive ? 'Rotate' : 'Generate'}
+                      {trackerLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                      <span>
+                        {trackerLoading
+                          ? 'Saving...'
+                          : trackerActive
+                            ? 'Rotate'
+                            : 'Generate'}
+                      </span>
                     </button>
                     {trackerActive && (
                       <button
@@ -2113,12 +2230,22 @@ export default function HomePage() {
                         disabled={trackerLoading}
                         onClick={() => void handleRevokeTrackerToken()}
                         title="Revoke token"
-                        className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100"
+                        className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100 disabled:opacity-60"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        {trackerLoading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
                       </button>
                     )}
                   </div>
+                  {trackerFeedback && (
+                    <div className="lo-feedback-in flex items-center gap-1 text-[10px] font-semibold text-emerald-700">
+                      <Check className="h-3 w-3" />
+                      {trackerFeedback}
+                    </div>
+                  )}
 
                   {trackerIssued && (
                     <div className="space-y-1.5 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2.5 text-[10px]">
@@ -2496,12 +2623,19 @@ export default function HomePage() {
                       <button
                         type="submit"
                         disabled={placeBusy}
-                        className="lo-press shrink-0 rounded-lg bg-zinc-950 px-3 py-1 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                        className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
                       >
-                        Save
+                        {placeBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                        <span>{placeBusy ? 'Saving...' : 'Save'}</span>
                       </button>
                     </div>
-                    {placeError && <p className="text-[11px] text-rose-600">{placeError}</p>}
+                    {placeError && <p className="lo-feedback-in text-[11px] text-rose-600">{placeError}</p>}
+                    {placeFeedback && (
+                      <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                        <Check className="h-3 w-3" />
+                        {placeFeedback}
+                      </p>
+                    )}
                   </form>
                 )}
 
@@ -2525,11 +2659,16 @@ export default function HomePage() {
                       {activeGroup?.myRole === 'ADMIN' && (
                         <button
                           type="button"
+                          disabled={deletingPlaceId === p.id}
                           onClick={() => void handleDeletePlace(p.id)}
                           title="Delete place"
-                          className="ml-2 rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600"
+                          className="ml-2 rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          {deletingPlaceId === p.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-600" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" />
+                          )}
                         </button>
                       )}
                     </div>
@@ -2598,9 +2737,12 @@ export default function HomePage() {
                     <button
                       type="submit"
                       disabled={checkinBusy || !checkinTargetUserId}
-                      className="lo-press shrink-0 rounded-lg bg-zinc-950 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                      className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-70"
                     >
-                      Ask
+                      {checkinBusy && !checkinRespondingId && (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      )}
+                      <span>{checkinBusy && !checkinRespondingId ? 'Sending...' : 'Ask'}</span>
                     </button>
                   </form>
                 ) : (
@@ -2609,11 +2751,18 @@ export default function HomePage() {
                   </p>
                 )}
 
-                {checkinError && <p className="text-[11px] text-rose-600">{checkinError}</p>}
+                {checkinError && <p className="lo-feedback-in text-[11px] text-rose-600">{checkinError}</p>}
+                {checkinFeedback && (
+                  <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                    <Check className="h-3 w-3" />
+                    {checkinFeedback}
+                  </p>
+                )}
 
                 <div className="space-y-1.5">
                   {locationRequests.map((req) => {
                     const isIncoming = req.targetUserId === session.user.id;
+                    const respondingThis = checkinRespondingId === req.id;
                     return (
                       <div
                         key={req.id}
@@ -2635,17 +2784,27 @@ export default function HomePage() {
                               type="button"
                               disabled={checkinBusy}
                               onClick={() => void handleRespondCheckIn(req.id, 'accept')}
-                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg bg-zinc-950 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
+                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg bg-zinc-950 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
                             >
-                              <Check className="h-3 w-3" /> Accept
+                              {respondingThis ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Check className="h-3 w-3" />
+                              )}
+                              {respondingThis ? 'Saving...' : 'Accept'}
                             </button>
                             <button
                               type="button"
                               disabled={checkinBusy}
                               onClick={() => void handleRespondCheckIn(req.id, 'decline')}
-                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg border border-zinc-200 bg-white py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100"
+                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg border border-zinc-200 bg-white py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-60"
                             >
-                              <X className="h-3 w-3" /> Decline
+                              {respondingThis ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <X className="h-3 w-3" />
+                              )}
+                              Decline
                             </button>
                           </div>
                         )}

@@ -28,6 +28,7 @@ import {
   slugifyCityName,
   TrailQuerySchema,
   UpdateProfileSchema,
+  withMinDelay,
 } from '../index.js';
 import { createServiceLogger } from '../logger.js';
 import {
@@ -412,5 +413,16 @@ describe('@loved-ones/shared', () => {
       haloColor: '#0ea5e9',
       fuzzCircleColor: '#8b5cf6',
     });
+  });
+
+  it('enforces minimum UI feedback duration on fast promises and rejections', async () => {
+    const t0 = Date.now();
+    const value = await withMinDelay(Promise.resolve('saved'), 45);
+    expect(value).toBe('saved');
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(40);
+
+    const t1 = Date.now();
+    await expect(withMinDelay(Promise.reject(new Error('boom')), 45)).rejects.toThrow('boom');
+    expect(Date.now() - t1).toBeGreaterThanOrEqual(40);
   });
 });

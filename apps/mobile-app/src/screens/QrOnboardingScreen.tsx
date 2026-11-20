@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import type { QrInvitePayload } from '@loved-ones/shared';
-import { parseInviteInput } from '@loved-ones/shared';
+import { parseInviteInput, withMinDelay } from '@loved-ones/shared';
 import {
   MobileStoredConfig,
   parseAndBindQrInvite,
@@ -86,61 +86,66 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
     setError(null);
     const cleanServer = serverUrl.trim().replace(/\/$/, '');
     try {
-      const endpoint =
-        mode === 'register' ? `${cleanServer}/api/auth/register` : `${cleanServer}/api/auth/login`;
-      const body =
-        mode === 'register'
-          ? {
-              email: email.trim(),
-              username: username.trim(),
-              password,
-              ...(invite ? { inviteToken: invite.inviteToken } : {}),
-            }
-          : {
-              email: email.trim(),
-              password,
-            };
+      const nextConfig = await withMinDelay(async () => {
+        const endpoint =
+          mode === 'register'
+            ? `${cleanServer}/api/auth/register`
+            : `${cleanServer}/api/auth/login`;
+        const body =
+          mode === 'register'
+            ? {
+                email: email.trim(),
+                username: username.trim(),
+                password,
+                ...(invite ? { inviteToken: invite.inviteToken } : {}),
+              }
+            : {
+                email: email.trim(),
+                password,
+              };
 
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = (await res.json()) as {
-        error?: string;
-        accessToken?: string;
-        refreshToken?: string;
-        user?: MobileStoredConfig['user'];
-        joinedGroup?: { groupId: string };
-      };
-      if (!res.ok || !data.accessToken || !data.user) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
-
-      let activeGroupId = data.joinedGroup?.groupId ?? null;
-      if (mode === 'login' && invite) {
-        const joinRes = await fetch(`${cleanServer}/api/auth/join`, {
+        const res = await fetch(endpoint, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${data.accessToken}`,
-          },
-          body: JSON.stringify({ inviteToken: invite.inviteToken }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
         });
-        if (joinRes.ok) {
-          const joined = (await joinRes.json()) as { groupId: string };
-          activeGroupId = joined.groupId;
+        const data = (await res.json()) as {
+          error?: string;
+          accessToken?: string;
+          refreshToken?: string;
+          user?: MobileStoredConfig['user'];
+          joinedGroup?: { groupId: string };
+        };
+        if (!res.ok || !data.accessToken || !data.user) {
+          throw new Error(data.error ?? `HTTP ${res.status}`);
         }
-      }
 
-      const nextConfig: MobileStoredConfig = {
-        serverUrl: cleanServer,
-        accessToken: data.accessToken,
-        refreshToken: data.refreshToken ?? null,
-        user: data.user,
-        activeGroupId,
-      };
-      await saveStoredConfig(nextConfig);
+        let activeGroupId = data.joinedGroup?.groupId ?? null;
+        if (mode === 'login' && invite) {
+          const joinRes = await fetch(`${cleanServer}/api/auth/join`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${data.accessToken}`,
+            },
+            body: JSON.stringify({ inviteToken: invite.inviteToken }),
+          });
+          if (joinRes.ok) {
+            const joined = (await joinRes.json()) as { groupId: string };
+            activeGroupId = joined.groupId;
+          }
+        }
+
+        const builtConfig: MobileStoredConfig = {
+          serverUrl: cleanServer,
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken ?? null,
+          user: data.user,
+          activeGroupId,
+        };
+        await saveStoredConfig(builtConfig);
+        return builtConfig;
+      });
       onAuthenticated(nextConfig);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed');
@@ -155,15 +160,18 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
     setNotice(null);
     const cleanServer = serverUrl.trim().replace(/\/$/, '');
     try {
-      const res = await fetch(`${cleanServer}/api/auth/forgot-password/request`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail.trim() }),
+      const data = await withMinDelay(async () => {
+        const res = await fetch(`${cleanServer}/api/auth/forgot-password/request`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: forgotEmail.trim() }),
+        });
+        const body = (await res.json()) as { error?: string; message?: string };
+        if (!res.ok) {
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+        return body;
       });
-      const data = (await res.json()) as { error?: string; message?: string };
-      if (!res.ok) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
       setForgotStep('reset');
       setNotice(
         data.message ??
@@ -190,19 +198,21 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
     setNotice(null);
     const cleanServer = serverUrl.trim().replace(/\/$/, '');
     try {
-      const res = await fetch(`${cleanServer}/api/auth/forgot-password/reset`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: forgotEmail.trim(),
-          code: forgotCode.trim(),
-          newPassword: forgotNewPassword,
-        }),
+      await withMinDelay(async () => {
+        const res = await fetch(`${cleanServer}/api/auth/forgot-password/reset`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: forgotEmail.trim(),
+            code: forgotCode.trim(),
+            newPassword: forgotNewPassword,
+          }),
+        });
+        const data = (await res.json()) as { error?: string };
+        if (!res.ok) {
+          throw new Error(data.error ?? `HTTP ${res.status}`);
+        }
       });
-      const data = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
       setEmail(forgotEmail.trim());
       setPassword('');
       setForgotCode('');

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import jsQR from 'jsqr';
-import { Camera, CheckCircle2, ImageUp, Link2, QrCode, ShieldAlert, X } from 'lucide-react';
-import { parseInviteInput } from '@loved-ones/shared';
+import { Camera, CheckCircle2, ImageUp, Link2, Loader2, QrCode, ShieldAlert, X } from 'lucide-react';
+import { parseInviteInput, withMinDelay } from '@loved-ones/shared';
 import {
   apiJoinInvite,
   apiPreviewInvite,
@@ -97,7 +97,7 @@ export function QrJoinModal({
     setLoadingPreview(true);
     try {
       const parsed = parseInviteInput(raw);
-      const data = await apiPreviewInvite(parsed.inviteToken);
+      const data = await withMinDelay(apiPreviewInvite(parsed.inviteToken));
       setPreview(data);
     } catch (err) {
       setPreview(null);
@@ -214,7 +214,7 @@ export function QrJoinModal({
     setJoining(true);
     setError(null);
     try {
-      const res = await apiJoinInvite(accessToken, preview.token);
+      const res = await withMinDelay(apiJoinInvite(accessToken, preview.token));
       onJoinedGroup?.(res.groupId);
       onClose();
     } catch (err) {
@@ -373,9 +373,10 @@ export function QrJoinModal({
                 <button
                   type="submit"
                   disabled={loadingPreview || !pasteText.trim()}
-                  className="lo-press w-full rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                  className="lo-press flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-60"
                 >
-                  {loadingPreview ? 'Checking invite...' : 'Verify Invite'}
+                  {loadingPreview && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  <span>{loadingPreview ? 'Checking invite...' : 'Verify Invite'}</span>
                 </button>
               </form>
             )}
@@ -422,9 +423,16 @@ export function QrJoinModal({
                 type="button"
                 disabled={!preview.valid || joining}
                 onClick={() => void handleConfirm()}
-                className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                className="lo-press relative flex flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
               >
-                <CheckCircle2 className="h-3.5 w-3.5" />
+                {joining ? (
+                  <>
+                    <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  </>
+                ) : (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                )}
                 {joining
                   ? 'Joining...'
                   : mode === 'pre-auth'

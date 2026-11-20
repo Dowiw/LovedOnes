@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Check, KeyRound, Mail, ShieldCheck, Trash2, User, X } from 'lucide-react';
+import { Camera, Check, KeyRound, Loader2, Mail, ShieldCheck, Trash2, User, X } from 'lucide-react';
 import {
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
   hexToRgba,
   isSafeAvatarUrl,
   isSafeHexColor,
+  withMinDelay,
 } from '@loved-ones/shared';
 
 const COLOR_PRESETS = [
@@ -110,7 +111,8 @@ export function AccountSettingsModal({
   );
   const [recoveryCodeInput, setRecoveryCodeInput] = useState('');
   const [recoveryCodeSentTo, setRecoveryCodeSentTo] = useState<string | null>(null);
-  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryAction, setRecoveryAction] = useState<'send' | 'verify' | 'clear' | null>(null);
+  const recoveryBusy = recoveryAction !== null;
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
 
@@ -179,13 +181,15 @@ export function AccountSettingsModal({
     setProfileSaved(null);
     setProfileBusy(true);
     try {
-      const next = await apiUpdateProfile(session.accessToken, {
-        username: username.trim(),
-        email: email.trim(),
-        avatarUrl,
-        haloColor,
-        fuzzCircleColor,
-      });
+      const next = await withMinDelay(
+        apiUpdateProfile(session.accessToken, {
+          username: username.trim(),
+          email: email.trim(),
+          avatarUrl,
+          haloColor,
+          fuzzCircleColor,
+        }),
+      );
       saveSession(next);
       onSessionUpdated(next);
       setProfileSaved('Profile updated');
@@ -210,10 +214,12 @@ export function AccountSettingsModal({
     }
     setPasswordBusy(true);
     try {
-      await apiChangePassword(session.accessToken, {
-        currentPassword,
-        newPassword,
-      });
+      await withMinDelay(
+        apiChangePassword(session.accessToken, {
+          currentPassword,
+          newPassword,
+        }),
+      );
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -234,9 +240,9 @@ export function AccountSettingsModal({
     }
     setRecoveryError(null);
     setRecoveryNotice(null);
-    setRecoveryBusy(true);
+    setRecoveryAction('send');
     try {
-      const res = await apiSendRecoveryCode(session.accessToken, target);
+      const res = await withMinDelay(apiSendRecoveryCode(session.accessToken, target));
       const next: StoredSession = { ...session, user: res.user };
       saveSession(next);
       onSessionUpdated(next);
@@ -246,7 +252,7 @@ export function AccountSettingsModal({
     } catch (err) {
       setRecoveryError(err instanceof Error ? err.message : 'Failed to send verification code');
     } finally {
-      setRecoveryBusy(false);
+      setRecoveryAction(null);
     }
   }
 
@@ -256,12 +262,14 @@ export function AccountSettingsModal({
     if (!target || !recoveryCodeInput.trim()) return;
     setRecoveryError(null);
     setRecoveryNotice(null);
-    setRecoveryBusy(true);
+    setRecoveryAction('verify');
     try {
-      const res = await apiVerifyRecoveryEmail(session.accessToken, {
-        recoveryEmail: target,
-        code: recoveryCodeInput.trim(),
-      });
+      const res = await withMinDelay(
+        apiVerifyRecoveryEmail(session.accessToken, {
+          recoveryEmail: target,
+          code: recoveryCodeInput.trim(),
+        }),
+      );
       const next: StoredSession = { ...session, user: res.user };
       saveSession(next);
       onSessionUpdated(next);
@@ -271,16 +279,16 @@ export function AccountSettingsModal({
     } catch (err) {
       setRecoveryError(err instanceof Error ? err.message : 'Failed to verify code');
     } finally {
-      setRecoveryBusy(false);
+      setRecoveryAction(null);
     }
   }
 
   async function handleClearRecoveryEmail() {
     setRecoveryError(null);
     setRecoveryNotice(null);
-    setRecoveryBusy(true);
+    setRecoveryAction('clear');
     try {
-      const res = await apiClearRecoveryEmail(session.accessToken);
+      const res = await withMinDelay(apiClearRecoveryEmail(session.accessToken));
       const next: StoredSession = { ...session, user: res.user };
       saveSession(next);
       onSessionUpdated(next);
@@ -291,7 +299,7 @@ export function AccountSettingsModal({
     } catch (err) {
       setRecoveryError(err instanceof Error ? err.message : 'Failed to remove backup email');
     } finally {
-      setRecoveryBusy(false);
+      setRecoveryAction(null);
     }
   }
 
@@ -566,13 +574,13 @@ export function AccountSettingsModal({
           </div>
 
           {profileError && (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <div className="lo-feedback-in rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
               {profileError}
             </div>
           )}
           {profileSaved && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900">
-              <Check className="h-3.5 w-3.5" />
+            <div className="lo-feedback-in flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900">
+              <Check className="h-3.5 w-3.5 text-emerald-600" />
               {profileSaved}
             </div>
           )}
@@ -580,9 +588,15 @@ export function AccountSettingsModal({
           <button
             type="submit"
             disabled={profileBusy}
-            className="lo-press w-full rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+            className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80"
           >
-            {profileBusy ? 'Saving Profile...' : 'Save Profile'}
+            {profileBusy && (
+              <>
+                <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              </>
+            )}
+            <span>{profileBusy ? 'Saving Profile...' : 'Save Profile'}</span>
           </button>
         </form>
 
@@ -629,9 +643,10 @@ export function AccountSettingsModal({
               <button
                 type="submit"
                 disabled={recoveryBusy || !recoveryEmailInput.trim()}
-                className="shrink-0 rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-60"
               >
-                {recoveryBusy ? 'Sending...' : 'Send Code'}
+                {recoveryAction === 'send' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <span>{recoveryAction === 'send' ? 'Sending...' : 'Send Code'}</span>
               </button>
             </div>
             <div className="flex items-center justify-between text-[11px]">
@@ -651,9 +666,10 @@ export function AccountSettingsModal({
                   type="button"
                   disabled={recoveryBusy}
                   onClick={() => void handleClearRecoveryEmail()}
-                  className="font-medium text-zinc-500 hover:text-rose-600 disabled:opacity-50"
+                  className="inline-flex items-center gap-1 font-medium text-zinc-500 hover:text-rose-600 disabled:opacity-50"
                 >
-                  Remove backup email
+                  {recoveryAction === 'clear' && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {recoveryAction === 'clear' ? 'Removing...' : 'Remove backup email'}
                 </button>
               )}
             </div>
@@ -675,21 +691,22 @@ export function AccountSettingsModal({
               <button
                 type="submit"
                 disabled={recoveryBusy || recoveryCodeInput.trim().length !== 6}
-                className="shrink-0 rounded-lg border border-zinc-950 bg-white px-3.5 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:opacity-50"
+                className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-zinc-950 bg-white px-3.5 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:opacity-60"
               >
-                Verify Email
+                {recoveryAction === 'verify' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <span>{recoveryAction === 'verify' ? 'Verifying...' : 'Verify Email'}</span>
               </button>
             </form>
           )}
 
           {recoveryError && (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <div className="lo-feedback-in rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
               {recoveryError}
             </div>
           )}
           {recoveryNotice && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900">
-              <Check className="h-3.5 w-3.5 shrink-0" />
+            <div className="lo-feedback-in flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900">
+              <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
               <span>{recoveryNotice}</span>
             </div>
           )}
@@ -734,13 +751,13 @@ export function AccountSettingsModal({
           </div>
 
           {passwordError && (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <div className="lo-feedback-in rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
               {passwordError}
             </div>
           )}
           {passwordSaved && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900">
-              <Check className="h-3.5 w-3.5" />
+            <div className="lo-feedback-in flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900">
+              <Check className="h-3.5 w-3.5 text-emerald-600" />
               {passwordSaved}
             </div>
           )}
@@ -748,9 +765,10 @@ export function AccountSettingsModal({
           <button
             type="submit"
             disabled={passwordBusy}
-            className="lo-press w-full rounded-lg border border-zinc-950 bg-white py-2 text-xs font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:opacity-50"
+            className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg border border-zinc-950 bg-white py-2 text-xs font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:cursor-wait disabled:opacity-70"
           >
-            {passwordBusy ? 'Updating Password...' : 'Update Password'}
+            {passwordBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            <span>{passwordBusy ? 'Updating Password...' : 'Update Password'}</span>
           </button>
         </form>
       </div>

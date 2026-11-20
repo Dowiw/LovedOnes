@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Image,
   Modal,
   ScrollView,
@@ -25,6 +26,7 @@ import {
   isSafeAvatarUrl,
   isSafeHexColor,
   parseInviteInput,
+  withMinDelay,
   type ChatMessage,
   type GroupRole,
   type LocationBroadcast,
@@ -130,9 +132,14 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   );
   const [recoveryCodeInput, setRecoveryCodeInput] = useState('');
   const [recoveryCodeSentTo, setRecoveryCodeSentTo] = useState<string | null>(null);
-  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryAction, setRecoveryAction] = useState<'send' | 'verify' | 'clear' | null>(null);
+  const recoveryBusy = recoveryAction !== null;
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+
+  const [privacySavingMode, setPrivacySavingMode] = useState<PrivacyMode | null>(null);
+  const [syncingBusy, setSyncingBusy] = useState(false);
+  const [cachingOffline, setCachingOffline] = useState(false);
 
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
@@ -444,36 +451,54 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   }
 
   async function handlePingAndSync() {
+    if (syncingBusy) return;
+    setSyncingBusy(true);
     try {
       const fg = await Location.requestForegroundPermissionsAsync();
       if (fg.status !== 'granted') {
         setStatusBanner('Location permission required');
         return;
       }
-      const result = await captureFocusAndSyncPosition();
+      const result = await withMinDelay(captureFocusAndSyncPosition(), 450);
       if (result) {
         setStatusBanner(`Synced ${result.flushed} points (${result.remaining} queued)`);
       }
     } catch (err) {
       await refreshQueueCount();
       setStatusBanner(err instanceof Error ? err.message : 'Saved offline in SQLite queue');
+    } finally {
+      setSyncingBusy(false);
     }
   }
 
   async function handlePrivacyChange(mode: PrivacyMode) {
-    if (!activeGroup) return;
-    await fetch(`${serverUrl}/api/auth/groups/${activeGroup.id}/privacy`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ privacy: mode }),
-    });
-    setGroups((prev) => prev.map((g) => (g.id === activeGroup.id ? { ...g, myPrivacy: mode } : g)));
+    if (!activeGroup || privacySavingMode) return;
+    setPrivacySavingMode(mode);
+    try {
+      await withMinDelay(
+        fetch(`${serverUrl}/api/auth/groups/${activeGroup.id}/privacy`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ privacy: mode }),
+        }),
+      );
+      setGroups((prev) =>
+        prev.map((g) => (g.id === activeGroup.id ? { ...g, myPrivacy: mode } : g)),
+      );
+      setStatusBanner(`Sharing mode: ${mode}`);
+    } catch (err) {
+      setStatusBanner(err instanceof Error ? err.message : 'Failed to switch sharing mode');
+    } finally {
+      setPrivacySavingMode(null);
+    }
   }
 
   async function handleCacheOfflineMap() {
+    if (cachingOffline) return;
+    setCachingOffline(true);
     try {
       const targetLat = selfCoord?.[1] ?? locations[0]?.latitude;
       const targetLon = selfCoord?.[0] ?? locations[0]?.longitude;
@@ -481,14 +506,17 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         targetLat !== undefined && targetLon !== undefined
           ? findCoveringRegions(targetLat, targetLon, mapRegions)[0]
           : undefined;
-      const uri = await downloadOfflineRegionPmtiles(
-        serverUrl,
-        covering?.url ?? '/tiles/region.pmtiles',
+      const uri = await withMinDelay(
+        downloadOfflineRegionPmtiles(serverUrl, covering?.url ?? '/tiles/region.pmtiles'),
       );
       setLocalPmtilesUri(uri);
-      setStatusBanner(`Cached ${covering?.displayName ?? covering?.name ?? 'regional'} PMTiles offline`);
+      setStatusBanner(
+        `Cached ${covering?.displayName ?? covering?.name ?? 'regional'} PMTiles offline`,
+      );
     } catch (err) {
       setStatusBanner(err instanceof Error ? err.message : 'Tile cache failed');
+    } finally {
+      setCachingOffline(false);
     }
   }
 
@@ -588,24 +616,27 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     try {
       const parsed = parseInviteInput(raw);
       const targetServer = (parsed.serverUrl ?? serverUrl).replace(/\/$/, '');
-      const res = await fetch(
-        `${targetServer}/api/auth/invites/${encodeURIComponent(parsed.inviteToken)}`,
-      );
-      const data = (await res.json()) as {
-        error?: string;
-        token?: string;
-        groupId?: string;
-        groupName?: string;
-        assignedRole?: GroupRole;
-        valid?: boolean;
-      };
-      if (!res.ok || !data.token || !data.groupName) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
+      const data = await withMinDelay(async () => {
+        const res = await fetch(
+          `${targetServer}/api/auth/invites/${encodeURIComponent(parsed.inviteToken)}`,
+        );
+        const body = (await res.json()) as {
+          error?: string;
+          token?: string;
+          groupId?: string;
+          groupName?: string;
+          assignedRole?: GroupRole;
+          valid?: boolean;
+        };
+        if (!res.ok || !body.token || !body.groupName) {
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+        return body;
+      });
       setQrPreview({
-        token: data.token,
+        token: data.token!,
         groupId: data.groupId ?? '',
-        groupName: data.groupName,
+        groupName: data.groupName!,
         assignedRole: data.assignedRole ?? 'MEMBER',
         valid: Boolean(data.valid),
       });
@@ -628,14 +659,17 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     setQrLoading(true);
     setQrError(null);
     try {
-      const res = await authedFetch('/api/auth/join', {
-        method: 'POST',
-        body: JSON.stringify({ inviteToken: qrPreview.token }),
+      const data = await withMinDelay(async () => {
+        const res = await authedFetch('/api/auth/join', {
+          method: 'POST',
+          body: JSON.stringify({ inviteToken: qrPreview.token }),
+        });
+        const body = (await res.json()) as { error?: string; groupId?: string; groupName?: string };
+        if (!res.ok || !body.groupId) {
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+        return { groupId: body.groupId, groupName: body.groupName };
       });
-      const data = (await res.json()) as { error?: string; groupId?: string; groupName?: string };
-      if (!res.ok || !data.groupId) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
       setInvitePromptDismissed(true);
       await fetchGroups();
       setActiveGroupId(data.groupId);
@@ -722,32 +756,35 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     }
     setAccountBusy(true);
     try {
-      const res = await authedFetch('/api/auth/me', {
-        method: 'PATCH',
-        body: JSON.stringify({
-          username: editUsername.trim(),
-          email: editEmail.trim(),
-          avatarUrl: trimmedAvatar || null,
-          haloColor: editHaloColor,
-          fuzzCircleColor: editFuzzCircleColor,
-        }),
+      const data = await withMinDelay(async () => {
+        const res = await authedFetch('/api/auth/me', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            username: editUsername.trim(),
+            email: editEmail.trim(),
+            avatarUrl: trimmedAvatar || null,
+            haloColor: editHaloColor,
+            fuzzCircleColor: editFuzzCircleColor,
+          }),
+        });
+        const body = (await res.json()) as {
+          error?: string;
+          accessToken?: string;
+          refreshToken?: string;
+          user?: MobileStoredConfig['user'];
+        };
+        if (!res.ok || !body.user) {
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+        return body;
       });
-      const data = (await res.json()) as {
-        error?: string;
-        accessToken?: string;
-        refreshToken?: string;
-        user?: MobileStoredConfig['user'];
-      };
-      if (!res.ok || !data.user) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
-      setUserProfile(data.user);
+      setUserProfile(data.user!);
       if (data.accessToken) setAccessToken(data.accessToken);
       if (data.refreshToken) setRefreshToken(data.refreshToken);
       await saveStoredConfig({
         accessToken: data.accessToken ?? accessToken,
         refreshToken: data.refreshToken ?? refreshToken,
-        user: data.user,
+        user: data.user!,
       });
       setLocations((prev) =>
         prev.map((loc) =>
@@ -779,22 +816,25 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     }
     setRecoveryError(null);
     setRecoveryMessage(null);
-    setRecoveryBusy(true);
+    setRecoveryAction('send');
     try {
-      const res = await authedFetch('/api/auth/recovery-email/send-code', {
-        method: 'POST',
-        body: JSON.stringify({ recoveryEmail: target }),
+      const data = await withMinDelay(async () => {
+        const res = await authedFetch('/api/auth/recovery-email/send-code', {
+          method: 'POST',
+          body: JSON.stringify({ recoveryEmail: target }),
+        });
+        const body = (await res.json()) as {
+          error?: string;
+          recoveryEmail?: string;
+          user?: MobileStoredConfig['user'];
+        };
+        if (!res.ok || !body.user) {
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+        return body;
       });
-      const data = (await res.json()) as {
-        error?: string;
-        recoveryEmail?: string;
-        user?: MobileStoredConfig['user'];
-      };
-      if (!res.ok || !data.user) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
-      setUserProfile(data.user);
-      await saveStoredConfig({ user: data.user });
+      setUserProfile(data.user!);
+      await saveStoredConfig({ user: data.user! });
       const sentEmail = data.recoveryEmail ?? target;
       setRecoveryEmailInput(sentEmail);
       setRecoveryCodeSentTo(sentEmail);
@@ -802,7 +842,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     } catch (err) {
       setRecoveryError(err instanceof Error ? err.message : 'Failed to send code');
     } finally {
-      setRecoveryBusy(false);
+      setRecoveryAction(null);
     }
   }
 
@@ -812,31 +852,34 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     if (!target || !recoveryCodeInput.trim()) return;
     setRecoveryError(null);
     setRecoveryMessage(null);
-    setRecoveryBusy(true);
+    setRecoveryAction('verify');
     try {
-      const res = await authedFetch('/api/auth/recovery-email/verify', {
-        method: 'POST',
-        body: JSON.stringify({
-          recoveryEmail: target,
-          code: recoveryCodeInput.trim(),
-        }),
+      const data = await withMinDelay(async () => {
+        const res = await authedFetch('/api/auth/recovery-email/verify', {
+          method: 'POST',
+          body: JSON.stringify({
+            recoveryEmail: target,
+            code: recoveryCodeInput.trim(),
+          }),
+        });
+        const body = (await res.json()) as {
+          error?: string;
+          user?: MobileStoredConfig['user'];
+        };
+        if (!res.ok || !body.user) {
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+        return body;
       });
-      const data = (await res.json()) as {
-        error?: string;
-        user?: MobileStoredConfig['user'];
-      };
-      if (!res.ok || !data.user) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
-      setUserProfile(data.user);
-      await saveStoredConfig({ user: data.user });
+      setUserProfile(data.user!);
+      await saveStoredConfig({ user: data.user! });
       setRecoveryCodeInput('');
       setRecoveryCodeSentTo(null);
       setRecoveryMessage('Backup email verified!');
     } catch (err) {
       setRecoveryError(err instanceof Error ? err.message : 'Failed to verify code');
     } finally {
-      setRecoveryBusy(false);
+      setRecoveryAction(null);
     }
   }
 
@@ -844,20 +887,23 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     if (!serverUrl || !accessToken) return;
     setRecoveryError(null);
     setRecoveryMessage(null);
-    setRecoveryBusy(true);
+    setRecoveryAction('clear');
     try {
-      const res = await authedFetch('/api/auth/recovery-email', {
-        method: 'DELETE',
+      const data = await withMinDelay(async () => {
+        const res = await authedFetch('/api/auth/recovery-email', {
+          method: 'DELETE',
+        });
+        const body = (await res.json()) as {
+          error?: string;
+          user?: MobileStoredConfig['user'];
+        };
+        if (!res.ok || !body.user) {
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+        return body;
       });
-      const data = (await res.json()) as {
-        error?: string;
-        user?: MobileStoredConfig['user'];
-      };
-      if (!res.ok || !data.user) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
-      setUserProfile(data.user);
-      await saveStoredConfig({ user: data.user });
+      setUserProfile(data.user!);
+      await saveStoredConfig({ user: data.user! });
       setRecoveryEmailInput('');
       setRecoveryCodeInput('');
       setRecoveryCodeSentTo(null);
@@ -865,7 +911,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     } catch (err) {
       setRecoveryError(err instanceof Error ? err.message : 'Unable to remove backup email');
     } finally {
-      setRecoveryBusy(false);
+      setRecoveryAction(null);
     }
   }
 
@@ -883,14 +929,16 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     }
     setPasswordBusy(true);
     try {
-      const res = await authedFetch('/api/auth/password', {
-        method: 'POST',
-        body: JSON.stringify({ currentPassword, newPassword }),
+      await withMinDelay(async () => {
+        const res = await authedFetch('/api/auth/password', {
+          method: 'POST',
+          body: JSON.stringify({ currentPassword, newPassword }),
+        });
+        const body = (await res.json()) as { error?: string; updated?: boolean };
+        if (!res.ok) {
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
       });
-      const data = (await res.json()) as { error?: string; updated?: boolean };
-      if (!res.ok) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -1064,13 +1112,22 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         >
           {activeGroup &&
             (['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => {
-              const selected = activeGroup.myPrivacy === mode;
+              const savingThis = privacySavingMode === mode;
+              const selected = activeGroup.myPrivacy === mode || savingThis;
               return (
                 <TouchableOpacity
                   key={mode}
+                  disabled={Boolean(privacySavingMode)}
                   onPress={() => void handlePrivacyChange(mode)}
-                  style={[styles.chipPill, selected && styles.chipPillActive]}
+                  style={[
+                    styles.chipPill,
+                    selected && styles.chipPillActive,
+                    { flexDirection: 'row', alignItems: 'center', gap: 5 },
+                  ]}
                 >
+                  {savingThis && (
+                    <ActivityIndicator size="small" color={selected ? '#ffffff' : '#18181b'} />
+                  )}
                   <Text style={[styles.chipText, selected && styles.chipTextActive]}>
                     {mode}
                   </Text>
@@ -1166,11 +1223,16 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       <View style={styles.rightStack}>
         <TouchableOpacity
           style={styles.stackBtn}
+          disabled={cachingOffline}
           onPress={() => void handleCacheOfflineMap()}
         >
-          <Text style={styles.stackBtnText}>
-            {localPmtilesUri ? 'Cached' : 'Cache'}
-          </Text>
+          {cachingOffline ? (
+            <ActivityIndicator size="small" color="#18181b" />
+          ) : (
+            <Text style={styles.stackBtnText}>
+              {localPmtilesUri ? 'Cached' : 'Cache'}
+            </Text>
+          )}
         </TouchableOpacity>
         <View style={styles.stackDivider} />
         <TouchableOpacity style={styles.stackBtn} onPress={() => void handleCheckOta()}>
@@ -1182,10 +1244,14 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       <View style={styles.bottomWrap} pointerEvents="box-none">
         <View style={styles.floatingCtaRow} pointerEvents="box-none">
           <TouchableOpacity
-            style={styles.floatingCirclePill}
+            style={[styles.floatingCirclePill, { flexDirection: 'row', alignItems: 'center', gap: 5 }]}
+            disabled={syncingBusy}
             onPress={() => void handlePingAndSync()}
           >
-            <Text style={styles.floatingCircleText}>Sync ({queuedCount})</Text>
+            {syncingBusy && <ActivityIndicator size="small" color="#18181b" />}
+            <Text style={styles.floatingCircleText}>
+              {syncingBusy ? 'Syncing...' : `Sync (${queuedCount})`}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1442,12 +1508,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               {accountMessage && <Text style={styles.successText}>{accountMessage}</Text>}
 
               <TouchableOpacity
-                style={styles.primaryBlackBtn}
+                style={[styles.primaryBlackBtn, accountBusy && styles.btnBusy]}
                 disabled={accountBusy}
                 onPress={() => void handleSaveProfile()}
               >
+                {accountBusy && <ActivityIndicator size="small" color="#ffffff" />}
                 <Text style={styles.primaryBlackText}>
-                  {accountBusy ? 'Saving...' : 'Save Profile'}
+                  {accountBusy ? 'Saving Profile...' : 'Save Profile'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1477,12 +1544,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               />
 
               <TouchableOpacity
-                style={styles.primaryBlackBtn}
+                style={[styles.primaryBlackBtn, recoveryBusy && styles.btnBusy]}
                 disabled={recoveryBusy}
                 onPress={() => void handleSendRecoveryCode()}
               >
+                {recoveryAction === 'send' && <ActivityIndicator size="small" color="#ffffff" />}
                 <Text style={styles.primaryBlackText}>
-                  {recoveryBusy ? 'Sending...' : 'Send Verification Code'}
+                  {recoveryAction === 'send' ? 'Sending...' : 'Send Verification Code'}
                 </Text>
               </TouchableOpacity>
 
@@ -1500,22 +1568,32 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                     placeholderTextColor="#94a3b8"
                   />
                   <TouchableOpacity
-                    style={styles.outlineBlackBtn}
+                    style={[styles.outlineBlackBtn, recoveryBusy && styles.btnBusy]}
                     disabled={recoveryBusy || recoveryCodeInput.trim().length !== 6}
                     onPress={() => void handleVerifyRecoveryEmail()}
                   >
-                    <Text style={styles.outlineBlackText}>Verify Email</Text>
+                    {recoveryAction === 'verify' && (
+                      <ActivityIndicator size="small" color="#18181b" />
+                    )}
+                    <Text style={styles.outlineBlackText}>
+                      {recoveryAction === 'verify' ? 'Verifying...' : 'Verify Email'}
+                    </Text>
                   </TouchableOpacity>
                 </>
               )}
 
               {Boolean(userProfile?.recoveryEmail) && (
                 <TouchableOpacity
-                  style={styles.removePhotoBtn}
+                  style={[styles.removePhotoBtn, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
                   disabled={recoveryBusy}
                   onPress={() => void handleClearRecoveryEmail()}
                 >
-                  <Text style={styles.removePhotoText}>Remove Backup Email</Text>
+                  {recoveryAction === 'clear' && (
+                    <ActivityIndicator size="small" color="#18181b" />
+                  )}
+                  <Text style={styles.removePhotoText}>
+                    {recoveryAction === 'clear' ? 'Removing...' : 'Remove Backup Email'}
+                  </Text>
                 </TouchableOpacity>
               )}
 
@@ -1560,12 +1638,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               {passwordMessage && <Text style={styles.successText}>{passwordMessage}</Text>}
 
               <TouchableOpacity
-                style={styles.outlineBlackBtn}
+                style={[styles.outlineBlackBtn, passwordBusy && styles.btnBusy]}
                 disabled={passwordBusy}
                 onPress={() => void handleChangePassword()}
               >
+                {passwordBusy && <ActivityIndicator size="small" color="#18181b" />}
                 <Text style={styles.outlineBlackText}>
-                  {passwordBusy ? 'Updating...' : 'Update Password'}
+                  {passwordBusy ? 'Updating Password...' : 'Update Password'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1632,10 +1711,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                     </Text>
                     {qrError && <Text style={styles.errorText}>{qrError}</Text>}
                     <TouchableOpacity
-                      style={styles.primaryBlackBtn}
+                      style={[styles.primaryBlackBtn, qrLoading && styles.btnBusy]}
                       disabled={!qrPreview.valid || qrLoading}
                       onPress={() => void handleConfirmJoinInvite()}
                     >
+                      {qrLoading && <ActivityIndicator size="small" color="#ffffff" />}
                       <Text style={styles.primaryBlackText}>
                         {qrLoading ? 'Joining...' : `Join ${qrPreview.groupName}`}
                       </Text>
@@ -1683,10 +1763,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                       />
                       {qrError && <Text style={styles.errorText}>{qrError}</Text>}
                       <TouchableOpacity
-                        style={styles.outlineBlackBtn}
+                        style={[styles.outlineBlackBtn, qrLoading && styles.btnBusy]}
                         disabled={qrLoading || !qrPasteInput.trim()}
                         onPress={() => void resolveMobileInvite(qrPasteInput)}
                       >
+                        {qrLoading && <ActivityIndicator size="small" color="#18181b" />}
                         <Text style={styles.outlineBlackText}>
                           {qrLoading ? 'Checking...' : 'Verify Invite'}
                         </Text>
@@ -2258,23 +2339,30 @@ const styles = StyleSheet.create({
   errorText: { color: '#be123c', fontSize: 12, fontWeight: '600' },
   successText: { color: '#18181b', fontSize: 12, fontWeight: '600' },
   primaryBlackBtn: {
+    flexDirection: 'row',
     backgroundColor: '#18181b',
     borderRadius: 999,
     paddingVertical: 12,
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     marginTop: 4,
   },
   primaryBlackText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
   outlineBlackBtn: {
+    flexDirection: 'row',
     backgroundColor: '#ffffff',
     borderColor: '#18181b',
     borderWidth: 1.5,
     borderRadius: 999,
     paddingVertical: 11,
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     marginTop: 4,
   },
   outlineBlackText: { color: '#18181b', fontSize: 13, fontWeight: '700' },
+  btnBusy: { opacity: 0.72 },
   signOutFullBtn: {
     backgroundColor: '#ffffff',
     borderColor: '#fecdd3',
