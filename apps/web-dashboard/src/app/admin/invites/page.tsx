@@ -11,6 +11,7 @@ import {
   GroupItem,
   loadSession,
   saveSession,
+  SESSION_UPDATED_EVENT,
   StoredSession,
 } from '@/lib/api';
 
@@ -31,6 +32,12 @@ export default function AdminInvitesPage() {
 
   useEffect(() => {
     setSession(loadSession());
+    const onSessionSync = (event: Event) => {
+      const custom = event as CustomEvent<StoredSession | null>;
+      setSession(custom.detail ?? null);
+    };
+    window.addEventListener(SESSION_UPDATED_EVENT, onSessionSync);
+    return () => window.removeEventListener(SESSION_UPDATED_EVENT, onSessionSync);
   }, []);
 
   const refresh = useCallback(async (token: string) => {
@@ -46,7 +53,7 @@ export default function AdminInvitesPage() {
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-[#eef3f6]">
+      <div className="min-h-screen bg-[#f4f4f5]">
         <NavBar user={null} onSignOut={() => {}} />
         <main className="mx-auto max-w-md px-4 py-16 text-center">
           <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-8 shadow-sm backdrop-blur-xl">
@@ -60,7 +67,7 @@ export default function AdminInvitesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#eef3f6]">
+    <div className="min-h-screen bg-[#f4f4f5]">
       <NavBar
         user={session.user}
         onSignOut={() => {

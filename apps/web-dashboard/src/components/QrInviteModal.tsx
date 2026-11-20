@@ -15,6 +15,7 @@ interface QrInvitePanelProps {
 
 export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInvitePanelProps) {
   const [groupId, setGroupId] = useState(groups[0]?.id ?? '');
+  const selectedGroupId = groups.some((g) => g.id === groupId) ? groupId : (groups[0]?.id ?? '');
   const [assignedRole, setAssignedRole] = useState<GroupRole>('MEMBER');
   const [maxUses, setMaxUses] = useState(1);
   const [expiresInHours, setExpiresInHours] = useState(24);
@@ -26,7 +27,7 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!groupId) {
+    if (!selectedGroupId) {
       setError('Select a group first');
       return;
     }
@@ -34,7 +35,7 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
     setError(null);
     try {
       const created = await apiCreateInvite(accessToken, {
-        groupId,
+        groupId: selectedGroupId,
         assignedRole,
         maxUses,
         expiresInHours,
@@ -91,7 +92,7 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
         <label className="block text-xs font-medium text-zinc-600">
           Group
           <select
-            value={groupId}
+            value={selectedGroupId}
             onChange={(e) => setGroupId(e.target.value)}
             className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:outline-none"
           >
