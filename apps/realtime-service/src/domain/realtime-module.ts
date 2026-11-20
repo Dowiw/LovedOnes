@@ -32,7 +32,12 @@ import { DomainError } from '@loved-ones/shared/auth';
 
 export interface RealtimeStore {
   isGroupMember(userId: string, groupId: string): Promise<boolean>;
-  getUserProfile?(userId: string): Promise<{ username: string; avatarUrl: string | null } | null>;
+  getUserProfile?(userId: string): Promise<{
+    username: string;
+    avatarUrl: string | null;
+    haloColor?: string | null;
+    fuzzCircleColor?: string | null;
+  } | null>;
   listUserGroupIds(userId: string): Promise<string[]>;
   insertLocationBatch(userId: string, points: LocationPoint[]): Promise<number>;
   listMembershipsForUser(
@@ -251,6 +256,8 @@ function toPrivacySafeBroadcast(
     userId: row.userId,
     username: row.username,
     avatarUrl: row.avatarUrl ?? null,
+    haloColor: row.haloColor ?? null,
+    fuzzCircleColor: row.fuzzCircleColor ?? null,
     groupId,
     latitude: fuzzed.latitude,
     longitude: fuzzed.longitude,
@@ -342,6 +349,8 @@ export class RealtimeModule {
     ]);
     const displayName = profile?.username ?? user.username;
     const avatarUrl = profile?.avatarUrl ?? null;
+    const haloColor = profile?.haloColor ?? null;
+    const fuzzCircleColor = profile?.fuzzCircleColor ?? null;
 
     for (const m of memberships) {
       if (m.role === 'SPECTATOR') continue;
@@ -376,6 +385,8 @@ export class RealtimeModule {
         userId: user.id,
         username: displayName,
         avatarUrl,
+        haloColor,
+        fuzzCircleColor,
         groupId: m.groupId,
         latitude: fuzzed.latitude,
         longitude: fuzzed.longitude,
@@ -669,6 +680,8 @@ export class RealtimeModule {
           userId: user.id,
           username: profile?.username ?? user.username,
           avatarUrl: profile?.avatarUrl ?? null,
+          haloColor: profile?.haloColor ?? null,
+          fuzzCircleColor: profile?.fuzzCircleColor ?? null,
           groupId,
           latitude: latest.latitude,
           longitude: latest.longitude,

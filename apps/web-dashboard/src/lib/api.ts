@@ -20,6 +20,8 @@ export interface AuthUser {
   username: string;
   role: SystemRole;
   avatarUrl?: string | null;
+  haloColor?: string | null;
+  fuzzCircleColor?: string | null;
   recoveryEmail?: string | null;
   recoveryEmailVerified?: boolean;
   createdAt?: string;
@@ -35,6 +37,8 @@ export interface GroupMember {
   userId: string;
   username: string;
   avatarUrl?: string | null;
+  haloColor?: string | null;
+  fuzzCircleColor?: string | null;
   role: GroupRole;
   privacy: PrivacyMode;
   joinedAt: string;
@@ -293,7 +297,13 @@ export async function apiGetMe(accessToken: string): Promise<{ user: AuthUser }>
 
 export async function apiUpdateProfile(
   accessToken: string,
-  input: { username?: string; email?: string; avatarUrl?: string | null },
+  input: {
+    username?: string;
+    email?: string;
+    avatarUrl?: string | null;
+    haloColor?: string | null;
+    fuzzCircleColor?: string | null;
+  },
 ): Promise<StoredSession> {
   const { authBase } = getServiceBaseUrls();
   return requestAuthedJson<StoredSession>(`${authBase}/api/auth/me`, accessToken, {

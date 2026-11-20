@@ -4,13 +4,16 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   applyPrivacyFuzzing,
+  buildGeodesicCircleRing,
   ChangePasswordSchema,
   computeCityFallbackBbox,
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
   findCoveringRegions,
+  hexToRgba,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
+  isSafeHexColor,
   LocationBatchSchema,
   LocationSnapshotQuerySchema,
   type MapRegion,
@@ -396,5 +399,18 @@ describe('@loved-ones/shared', () => {
     expect(clamped[2] - clamped[0]).toBeLessThanOrEqual(2.5);
     expect(clamped[3] - clamped[1]).toBeLessThanOrEqual(1.7);
     expect(slugifyCityName('München', 48.1351, 11.582)).toContain('munchen-48_14n-11_58e');
+
+    expect(isSafeHexColor('#0EA5E9')).toBe(true);
+    expect(isSafeHexColor('red')).toBe(false);
+    expect(hexToRgba('#0ea5e9', 0.25)).toBe('rgba(14, 165, 233, 0.25)');
+    const ring = buildGeodesicCircleRing(13.405, 52.52, 1420, 32);
+    expect(ring).toHaveLength(33);
+    expect(ring[0]).toEqual(ring[32]);
+    expect(
+      UpdateProfileSchema.parse({ haloColor: '#0EA5E9', fuzzCircleColor: '#8B5CF6' }),
+    ).toEqual({
+      haloColor: '#0ea5e9',
+      fuzzCircleColor: '#8b5cf6',
+    });
   });
 });

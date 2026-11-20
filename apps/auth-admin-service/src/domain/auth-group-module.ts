@@ -33,6 +33,8 @@ export interface AccountRecord {
   passwordHash: string;
   role: SystemRole;
   avatarUrl: string | null;
+  haloColor?: string | null;
+  fuzzCircleColor?: string | null;
   recoveryEmail: string | null;
   recoveryEmailVerified: boolean;
   createdAt: Date;
@@ -58,6 +60,8 @@ export interface GroupMemberEntry {
   userId: string;
   username: string;
   avatarUrl: string | null;
+  haloColor?: string | null;
+  fuzzCircleColor?: string | null;
   role: GroupRole;
   privacy: PrivacyMode;
   joinedAt: string;
@@ -117,7 +121,13 @@ export interface AuthGroupStore {
   findAccountWithPasswordById?(id: string): Promise<AccountRecord | null>;
   updateAccountProfile?(
     userId: string,
-    patch: { email?: string; username?: string; avatarUrl?: string | null },
+    patch: {
+      email?: string;
+      username?: string;
+      avatarUrl?: string | null;
+      haloColor?: string | null;
+      fuzzCircleColor?: string | null;
+    },
   ): Promise<{ status: 'ok'; account: PublicAccountRecord } | { status: 'email_conflict' } | { status: 'not_found' }>;
   updateRecoveryEmail?(
     userId: string,
@@ -190,6 +200,8 @@ export interface SessionStore {
     userId: string;
     username: string;
     avatarUrl: string | null;
+    haloColor?: string | null;
+    fuzzCircleColor?: string | null;
     groupIds: string[];
   }): Promise<void>;
   saveEmailChallenge?(
@@ -245,6 +257,8 @@ export interface AuthSuccessResult extends TokenPair {
     username: string;
     role: SystemRole;
     avatarUrl: string | null;
+    haloColor: string | null;
+    fuzzCircleColor: string | null;
     recoveryEmail: string | null;
     recoveryEmailVerified: boolean;
     createdAt: string;
@@ -305,6 +319,8 @@ export class AuthGroupModule {
       username: account.username,
       role: account.role,
       avatarUrl: account.avatarUrl,
+      haloColor: account.haloColor ?? null,
+      fuzzCircleColor: account.fuzzCircleColor ?? null,
       recoveryEmail: account.recoveryEmail ?? null,
       recoveryEmailVerified: Boolean(account.recoveryEmailVerified),
       createdAt: account.createdAt.toISOString(),
@@ -520,10 +536,18 @@ export class AuthGroupModule {
       throw new DomainError(501, 'Profile updates not supported by store');
     }
 
-    const patch: { email?: string; username?: string; avatarUrl?: string | null } = {};
+    const patch: {
+      email?: string;
+      username?: string;
+      avatarUrl?: string | null;
+      haloColor?: string | null;
+      fuzzCircleColor?: string | null;
+    } = {};
     if (parsed.data.username !== undefined) patch.username = parsed.data.username;
     if (parsed.data.email !== undefined) patch.email = parsed.data.email.toLowerCase();
     if (parsed.data.avatarUrl !== undefined) patch.avatarUrl = parsed.data.avatarUrl;
+    if (parsed.data.haloColor !== undefined) patch.haloColor = parsed.data.haloColor;
+    if (parsed.data.fuzzCircleColor !== undefined) patch.fuzzCircleColor = parsed.data.fuzzCircleColor;
 
     const res = await this.store.updateAccountProfile(userId, patch);
     if (res.status === 'not_found') {
@@ -545,6 +569,8 @@ export class AuthGroupModule {
           userId: updated.id,
           username: updated.username,
           avatarUrl: updated.avatarUrl,
+          haloColor: updated.haloColor ?? null,
+          fuzzCircleColor: updated.fuzzCircleColor ?? null,
           groupIds: memberships.map((m) => m.groupId),
         })
         .catch(() => {});

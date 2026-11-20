@@ -238,6 +238,8 @@ describe('@loved-ones/auth-admin-service integration', () => {
         username: 'FamilyRenamed',
         email: 'member.new@lovedones.test',
         avatarUrl: avatarPng,
+        haloColor: '#0ea5e9',
+        fuzzCircleColor: '#8b5cf6',
       },
     });
     expect(patchRes.statusCode).toBe(200);
@@ -245,6 +247,8 @@ describe('@loved-ones/auth-admin-service integration', () => {
     expect(patched.user.username).toBe('FamilyRenamed');
     expect(patched.user.email).toBe('member.new@lovedones.test');
     expect(patched.user.avatarUrl).toBe(avatarPng);
+    expect(patched.user.haloColor).toBe('#0ea5e9');
+    expect(patched.user.fuzzCircleColor).toBe('#8b5cf6');
     expect(patched.accessToken).toBeTypeOf('string');
 
     const badPwRes = await app.inject({

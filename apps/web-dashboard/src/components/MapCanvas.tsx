@@ -4,7 +4,14 @@ import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import { PMTiles, Protocol } from 'pmtiles';
 import {
+  buildGeodesicCircleRing,
+  DEFAULT_EXACT_HALO_COLOR,
+  DEFAULT_FUZZ_CIRCLE_COLOR,
+  DEFAULT_FUZZED_HALO_COLOR,
+  FUZZED_AREA_RADIUS_METERS,
+  hexToRgba,
   isSafeAvatarUrl,
+  isSafeHexColor,
   type GroupPlace,
   type LocationBroadcast,
   type MapRegion,
@@ -15,6 +22,10 @@ let pmtilesProtocolRegistered = false;
 const archiveInstanceCache = new Map<string, PMTiles>();
 let activeCompositeEntries: Array<{ region: MapRegion; pmtiles: PMTiles }> = [];
 let hasSyncedRegions = false;
+
+const FUZZED_ZONES_SOURCE_ID = 'lovedones-fuzzed-zones-src';
+const FUZZED_ZONES_FILL_LAYER_ID = 'lovedones-fuzzed-zones-fill';
+const FUZZED_ZONES_OUTLINE_LAYER_ID = 'lovedones-fuzzed-zones-outline';
 
 function getOrCreateArchive(url: string): PMTiles {
   let instance = archiveInstanceCache.get(url);
@@ -390,6 +401,8 @@ interface MapCanvasProps {
   selectedPlaceId?: string | null;
   currentUserId?: string | null;
   currentUserAvatarUrl?: string | null;
+  currentUserHaloColor?: string | null;
+  currentUserFuzzCircleColor?: string | null;
   selfLocation?: SelfLocationFix | null;
   focusCoords?: FocusCoordsRequest | null;
   draftPlace?: DraftPlaceCoords | null;
@@ -411,6 +424,8 @@ export function MapCanvas({
   selectedPlaceId,
   currentUserId = null,
   currentUserAvatarUrl = null,
+  currentUserHaloColor = null,
+  currentUserFuzzCircleColor = null,
   selfLocation = null,
   focusCoords = null,
   draftPlace = null,
@@ -682,7 +697,15 @@ export function MapCanvas({
       const resolvedAvatar =
         loc.avatarUrl ?? (loc.userId === currentUserId ? currentUserAvatarUrl : null) ?? null;
       const safeAvatar = isSafeAvatarUrl(resolvedAvatar) ? resolvedAvatar : null;
-      const signature = `${loc.username}|${safeAvatar ?? ''}|${loc.isFuzzed ? '1' : '0'}`;
+      const rawHalo =
+        loc.haloColor ?? (loc.userId === currentUserId ? currentUserHaloColor : null) ?? null;
+      const resolvedHaloColor = isSafeHexColor(rawHalo)
+        ? rawHalo
+        : loc.isFuzzed
+          ? DEFAULT_FUZZED_HALO_COLOR
+          : DEFAULT_EXACT_HALO_COLOR;
+      const hasCustomHalo = isSafeHexColor(rawHalo);
+      const signature = `${loc.username}|${safeAvatar ?? ''}|${loc.isFuzzed ? '1' : '0'}|${resolvedHaloColor}`;
       const existing = markersRef.current.get(loc.userId);
 
       if (existing && existing.signature === signature) {
@@ -707,11 +730,15 @@ export function MapCanvas({
           'mb-1.5 rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-950 shadow-md backdrop-blur';
         pill.textContent = loc.username;
 
+        const haloShadow = `0 0 0 4px ${hexToRgba(
+          resolvedHaloColor,
+          hasCustomHalo || loc.isFuzzed ? 0.42 : 0.24,
+        )}, 0 10px 18px rgba(9, 9, 11, 0.16)`;
+
         if (safeAvatar) {
           const avatarWrap = document.createElement('div');
-          avatarWrap.className = `relative h-10 w-10 rounded-full border-2 border-white bg-white shadow-lg ring-4 ${
-            loc.isFuzzed ? 'ring-amber-400/50' : 'ring-zinc-900/25'
-          }`;
+          avatarWrap.className = 'relative h-10 w-10 rounded-full border-2 border-white bg-white';
+          avatarWrap.style.boxShadow = haloShadow;
 
           const clip = document.createElement('div');
           clip.className =
@@ -728,22 +755,19 @@ export function MapCanvas({
           clip.appendChild(img);
 
           const statusDot = document.createElement('span');
-          statusDot.className = `absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white ${
-            loc.isFuzzed ? 'bg-amber-500' : 'bg-zinc-950'
-          }`;
+          statusDot.className = 'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white';
+          statusDot.style.backgroundColor = resolvedHaloColor;
 
           avatarWrap.append(clip, statusDot);
           innerWrap.append(pill, avatarWrap);
         } else {
           const ring = document.createElement('div');
-          ring.className = `flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg ring-4 ${
-            loc.isFuzzed ? 'ring-amber-400/35' : 'ring-zinc-900/20'
-          }`;
+          ring.className = 'flex h-6 w-6 items-center justify-center rounded-full bg-white';
+          ring.style.boxShadow = haloShadow;
 
           const core = document.createElement('div');
-          core.className = `h-3 w-3 rounded-full ${
-            loc.isFuzzed ? 'bg-amber-500' : 'bg-zinc-900'
-          }`;
+          core.className = 'h-3 w-3 rounded-full';
+          core.style.backgroundColor = resolvedHaloColor;
           ring.appendChild(core);
           innerWrap.append(pill, ring);
         }
@@ -804,7 +828,75 @@ export function MapCanvas({
         map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 800, essential: true });
       }
     }
-  }, [locations, selectedUserId, currentUserId, currentUserAvatarUrl]);
+  }, [locations, selectedUserId, currentUserId, currentUserAvatarUrl, currentUserHaloColor]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const applyFuzzedZonesLayer = () => {
+      const features = locations
+        .filter((loc) => loc.isFuzzed)
+        .map((loc) => {
+          const rawFuzzColor =
+            loc.fuzzCircleColor ??
+            (loc.userId === currentUserId ? currentUserFuzzCircleColor : null) ??
+            null;
+          const color = isSafeHexColor(rawFuzzColor) ? rawFuzzColor : DEFAULT_FUZZ_CIRCLE_COLOR;
+          return {
+            type: 'Feature' as const,
+            geometry: {
+              type: 'Polygon' as const,
+              coordinates: [
+                buildGeodesicCircleRing(loc.longitude, loc.latitude, FUZZED_AREA_RADIUS_METERS),
+              ],
+            },
+            properties: {
+              userId: loc.userId,
+              username: loc.username,
+              color,
+            },
+          };
+        });
+
+      const geojson = { type: 'FeatureCollection' as const, features };
+      const existingSource = map.getSource(FUZZED_ZONES_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (existingSource) {
+        existingSource.setData(geojson);
+        return;
+      }
+
+      map.addSource(FUZZED_ZONES_SOURCE_ID, { type: 'geojson', data: geojson });
+      map.addLayer({
+        id: FUZZED_ZONES_FILL_LAYER_ID,
+        type: 'fill',
+        source: FUZZED_ZONES_SOURCE_ID,
+        paint: {
+          'fill-color': ['get', 'color'],
+          'fill-opacity': 0.14,
+        },
+      });
+      map.addLayer({
+        id: FUZZED_ZONES_OUTLINE_LAYER_ID,
+        type: 'line',
+        source: FUZZED_ZONES_SOURCE_ID,
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 1.75,
+          'line-dasharray': [3, 2],
+          'line-opacity': 0.65,
+        },
+      });
+    };
+
+    if (styleReadyRef.current || map.isStyleLoaded()) {
+      applyFuzzedZonesLayer();
+    } else {
+      map.once('load', applyFuzzedZonesLayer);
+    }
+  }, [locations, currentUserId, currentUserFuzzCircleColor]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -839,17 +931,24 @@ export function MapCanvas({
 
     const safeSelfAvatar =
       !hasExactServerMarker && isSafeAvatarUrl(currentUserAvatarUrl) ? currentUserAvatarUrl : null;
+    const selfHaloColor = isSafeHexColor(currentUserHaloColor)
+      ? currentUserHaloColor
+      : DEFAULT_EXACT_HALO_COLOR;
     const pulseWrap = document.createElement('div');
     pulseWrap.className = safeSelfAvatar
       ? 'relative flex h-10 w-10 items-center justify-center'
       : 'relative flex h-7 w-7 items-center justify-center';
     const halo = document.createElement('div');
-    halo.className = 'absolute inset-0 animate-ping rounded-full bg-zinc-900/35';
+    halo.className = 'absolute inset-0 animate-ping rounded-full';
+    halo.style.backgroundColor = hexToRgba(selfHaloColor, 0.38);
+
+    const selfShadow = `0 0 0 4px ${hexToRgba(selfHaloColor, 0.28)}, 0 10px 18px rgba(9, 9, 11, 0.18)`;
 
     if (safeSelfAvatar) {
       const puck = document.createElement('div');
       puck.className =
-        'relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border-2 border-white bg-zinc-950 shadow-lg ring-4 ring-zinc-900/25';
+        'relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border-2 border-white bg-zinc-950';
+      puck.style.boxShadow = selfShadow;
       const img = document.createElement('img');
       img.src = safeSelfAvatar;
       img.alt = 'You';
@@ -859,7 +958,9 @@ export function MapCanvas({
     } else {
       const puck = document.createElement('div');
       puck.className =
-        'relative flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-zinc-950 shadow-lg ring-4 ring-zinc-900/20';
+        'relative flex h-5 w-5 items-center justify-center rounded-full border-2 border-white';
+      puck.style.backgroundColor = selfHaloColor;
+      puck.style.boxShadow = selfShadow;
       const dot = document.createElement('div');
       dot.className = 'h-2 w-2 rounded-full bg-white';
       puck.appendChild(dot);
@@ -879,7 +980,7 @@ export function MapCanvas({
       .setLngLat([selfLocation.longitude, selfLocation.latitude])
       .setPopup(selfPopup)
       .addTo(map);
-  }, [selfLocation, currentUserId, currentUserAvatarUrl, locations]);
+  }, [selfLocation, currentUserId, currentUserAvatarUrl, currentUserHaloColor, locations]);
 
   useEffect(() => {
     const map = mapRef.current;

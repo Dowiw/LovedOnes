@@ -170,3 +170,7 @@ ALTER TABLE users
 
 CREATE INDEX IF NOT EXISTS idx_users_recovery_email_lower
     ON users (LOWER(recovery_email));
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS halo_color VARCHAR(7) NULL,
+    ADD COLUMN IF NOT EXISTS fuzz_circle_color VARCHAR(7) NULL;

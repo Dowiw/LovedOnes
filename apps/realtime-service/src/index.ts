@@ -192,6 +192,8 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
             userId: parsed.userId,
             username: parsed.username,
             avatarUrl: parsed.avatarUrl,
+            haloColor: parsed.haloColor ?? null,
+            fuzzCircleColor: parsed.fuzzCircleColor ?? null,
           });
         }
       } catch {

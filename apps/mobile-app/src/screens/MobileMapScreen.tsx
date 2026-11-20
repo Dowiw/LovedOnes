@@ -9,14 +9,21 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Camera, type CameraRef, Map, Marker } from '@maplibre/maplibre-react-native';
+import { Camera, type CameraRef, GeoJSONSource, Layer, Map, Marker } from '@maplibre/maplibre-react-native';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
 import {
+  buildGeodesicCircleRing,
+  DEFAULT_EXACT_HALO_COLOR,
+  DEFAULT_FUZZ_CIRCLE_COLOR,
+  DEFAULT_FUZZED_HALO_COLOR,
   findCoveringRegions,
+  FUZZED_AREA_RADIUS_METERS,
+  hexToRgba,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
+  isSafeHexColor,
   parseInviteInput,
   type ChatMessage,
   type GroupRole,
@@ -25,6 +32,8 @@ import {
   type MapRegion,
   type PrivacyMode,
 } from '@loved-ones/shared';
+
+const MOBILE_COLOR_PRESETS = ['#f59e0b', '#0ea5e9', '#10b981', '#8b5cf6', '#f43f5e', '#18181b'];
 import {
   isBackgroundTrackingActive,
   startBackgroundTracking,
@@ -99,6 +108,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [editUsername, setEditUsername] = useState(config.user?.username ?? '');
   const [editEmail, setEditEmail] = useState(config.user?.email ?? '');
   const [editAvatarUrl, setEditAvatarUrl] = useState(config.user?.avatarUrl ?? '');
+  const [editHaloColor, setEditHaloColor] = useState<string | null>(
+    config.user?.haloColor ?? null,
+  );
+  const [editFuzzCircleColor, setEditFuzzCircleColor] = useState<string | null>(
+    config.user?.fuzzCircleColor ?? null,
+  );
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
@@ -202,6 +217,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         setEditUsername(data.user.username);
         setEditEmail(data.user.email);
         setEditAvatarUrl(data.user.avatarUrl ?? '');
+        setEditHaloColor(data.user.haloColor ?? null);
+        setEditFuzzCircleColor(data.user.fuzzCircleColor ?? null);
         void saveStoredConfig({ user: data.user });
       })
       .catch(() => {});
@@ -312,11 +329,23 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
     socket.on(
       'member:profile:updated',
-      (evt: { userId: string; username: string; avatarUrl: string | null }) => {
+      (evt: {
+        userId: string;
+        username: string;
+        avatarUrl: string | null;
+        haloColor?: string | null;
+        fuzzCircleColor?: string | null;
+      }) => {
         setLocations((prev) =>
           prev.map((loc) =>
             loc.userId === evt.userId
-              ? { ...loc, username: evt.username, avatarUrl: evt.avatarUrl }
+              ? {
+                  ...loc,
+                  username: evt.username,
+                  avatarUrl: evt.avatarUrl,
+                  haloColor: evt.haloColor ?? null,
+                  fuzzCircleColor: evt.fuzzCircleColor ?? null,
+                }
               : loc,
           ),
         );
@@ -626,6 +655,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     setEditUsername(userProfile?.username ?? '');
     setEditEmail(userProfile?.email ?? '');
     setEditAvatarUrl(userProfile?.avatarUrl ?? '');
+    setEditHaloColor(userProfile?.haloColor ?? null);
+    setEditFuzzCircleColor(userProfile?.fuzzCircleColor ?? null);
     setAccountError(null);
     setAccountMessage(null);
     setPasswordError(null);
@@ -697,6 +728,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           username: editUsername.trim(),
           email: editEmail.trim(),
           avatarUrl: trimmedAvatar || null,
+          haloColor: editHaloColor,
+          fuzzCircleColor: editFuzzCircleColor,
         }),
       });
       const data = (await res.json()) as {
@@ -719,7 +752,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       setLocations((prev) =>
         prev.map((loc) =>
           loc.userId === data.user!.id
-            ? { ...loc, username: data.user!.username, avatarUrl: data.user!.avatarUrl ?? null }
+            ? {
+                ...loc,
+                username: data.user!.username,
+                avatarUrl: data.user!.avatarUrl ?? null,
+                haloColor: data.user!.haloColor ?? null,
+                fuzzCircleColor: data.user!.fuzzCircleColor ?? null,
+              }
             : loc,
         ),
       );
@@ -874,6 +913,35 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     selfCoord && !locations.some((loc) => loc.userId === myUserId && !loc.isFuzzed),
   );
   const selfAvatarUrl = isSafeAvatarUrl(userProfile?.avatarUrl) ? userProfile!.avatarUrl : null;
+  const selfHaloColor = isSafeHexColor(userProfile?.haloColor)
+    ? userProfile!.haloColor!
+    : DEFAULT_EXACT_HALO_COLOR;
+
+  const fuzzedZonesGeoJson = useMemo(
+    () => ({
+      type: 'FeatureCollection' as const,
+      features: locations
+        .filter((loc) => loc.isFuzzed)
+        .map((loc) => {
+          const rawFuzz =
+            loc.fuzzCircleColor ??
+            (loc.userId === myUserId ? userProfile?.fuzzCircleColor : null) ??
+            null;
+          const color = isSafeHexColor(rawFuzz) ? rawFuzz : DEFAULT_FUZZ_CIRCLE_COLOR;
+          return {
+            type: 'Feature' as const,
+            geometry: {
+              type: 'Polygon' as const,
+              coordinates: [
+                buildGeodesicCircleRing(loc.longitude, loc.latitude, FUZZED_AREA_RADIUS_METERS),
+              ],
+            },
+            properties: { userId: loc.userId, color },
+          };
+        }),
+    }),
+    [locations, myUserId, userProfile?.fuzzCircleColor],
+  );
 
   return (
     <View style={styles.root}>
@@ -885,17 +953,42 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             zoom: 11,
           }}
         />
+        <GeoJSONSource id="fuzzed-zones-src" data={fuzzedZonesGeoJson}>
+          <Layer
+            id="fuzzed-zones-fill"
+            type="fill"
+            paint={{
+              'fill-color': ['get', 'color'],
+              'fill-opacity': 0.14,
+            }}
+          />
+          <Layer
+            id="fuzzed-zones-outline"
+            type="line"
+            paint={{
+              'line-color': ['get', 'color'],
+              'line-width': 1.75,
+              'line-opacity': 0.65,
+              'line-dasharray': [3, 2],
+            }}
+          />
+        </GeoJSONSource>
         {showSelfMarker && selfCoord && (
           <Marker id="self-live" lngLat={selfCoord}>
             <View style={styles.marker}>
               <Text style={styles.selfMarkerLabel}>You</Text>
               {selfAvatarUrl ? (
-                <View style={styles.avatarRingSelf}>
+                <View style={[styles.avatarRingSelf, { borderColor: selfHaloColor }]}>
                   <Image source={{ uri: selfAvatarUrl }} style={styles.markerAvatarImg} />
                 </View>
               ) : (
-                <View style={styles.selfMarkerHalo}>
-                  <View style={styles.selfMarkerDot} />
+                <View
+                  style={[
+                    styles.selfMarkerHalo,
+                    { backgroundColor: hexToRgba(selfHaloColor, 0.25) },
+                  ]}
+                >
+                  <View style={[styles.selfMarkerDot, { backgroundColor: selfHaloColor }]} />
                 </View>
               )}
             </View>
@@ -905,6 +998,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           const pinAvatar =
             loc.avatarUrl ?? (loc.userId === myUserId ? userProfile?.avatarUrl : null) ?? null;
           const safePinAvatar = isSafeAvatarUrl(pinAvatar) ? pinAvatar : null;
+          const rawHalo =
+            loc.haloColor ?? (loc.userId === myUserId ? userProfile?.haloColor : null) ?? null;
+          const resolvedHalo = isSafeHexColor(rawHalo)
+            ? rawHalo
+            : loc.isFuzzed
+              ? DEFAULT_FUZZED_HALO_COLOR
+              : DEFAULT_EXACT_HALO_COLOR;
           return (
             <Marker key={loc.userId} id={loc.userId} lngLat={[loc.longitude, loc.latitude]}>
               <View style={styles.marker}>
@@ -913,14 +1013,14 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   {loc.isFuzzed ? ' (~1km)' : ''}
                 </Text>
                 {safePinAvatar ? (
-                  <View style={[styles.avatarRing, loc.isFuzzed && styles.avatarRingFuzzed]}>
+                  <View style={[styles.avatarRing, { borderColor: resolvedHalo }]}>
                     <Image source={{ uri: safePinAvatar }} style={styles.markerAvatarImg} />
                   </View>
                 ) : (
-                  <View style={styles.markerHalo}>
-                    <View
-                      style={[styles.markerDot, loc.isFuzzed ? styles.dotFuzzed : styles.dotExact]}
-                    />
+                  <View
+                    style={[styles.markerHalo, { backgroundColor: hexToRgba(resolvedHalo, 0.24) }]}
+                  >
+                    <View style={[styles.markerDot, { backgroundColor: resolvedHalo }]} />
                   </View>
                 )}
               </View>
@@ -1291,6 +1391,52 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                 placeholder="you@example.com"
                 placeholderTextColor="#94a3b8"
               />
+
+              <Text style={styles.fieldLabel}>User Halo Color</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                {MOBILE_COLOR_PRESETS.map((hex) => (
+                  <TouchableOpacity
+                    key={`mob-halo-${hex}`}
+                    onPress={() => setEditHaloColor(hex)}
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: 999,
+                      backgroundColor: hex,
+                      borderWidth: editHaloColor?.toLowerCase() === hex ? 3 : 1.5,
+                      borderColor: editHaloColor?.toLowerCase() === hex ? '#18181b' : '#ffffff',
+                    }}
+                  />
+                ))}
+                {editHaloColor && (
+                  <TouchableOpacity onPress={() => setEditHaloColor(null)}>
+                    <Text style={styles.removePhotoText}>Reset</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <Text style={styles.fieldLabel}>Fuzzed Circle Color</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                {MOBILE_COLOR_PRESETS.map((hex) => (
+                  <TouchableOpacity
+                    key={`mob-fuzz-${hex}`}
+                    onPress={() => setEditFuzzCircleColor(hex)}
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: 999,
+                      backgroundColor: hex,
+                      borderWidth: editFuzzCircleColor?.toLowerCase() === hex ? 3 : 1.5,
+                      borderColor: editFuzzCircleColor?.toLowerCase() === hex ? '#18181b' : '#ffffff',
+                    }}
+                  />
+                ))}
+                {editFuzzCircleColor && (
+                  <TouchableOpacity onPress={() => setEditFuzzCircleColor(null)}>
+                    <Text style={styles.removePhotoText}>Reset</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
 
               {accountError && <Text style={styles.errorText}>{accountError}</Text>}
               {accountMessage && <Text style={styles.successText}>{accountMessage}</Text>}

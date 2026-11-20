@@ -55,6 +55,60 @@ export const AvatarUrlSchema = z
     message: 'Avatar must be a PNG, JPEG, WebP, or GIF image under 256 KB or an HTTP(S) URL',
   });
 
+const SAFE_HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+export const DEFAULT_FUZZ_CIRCLE_COLOR = '#f59e0b';
+export const DEFAULT_FUZZED_HALO_COLOR = '#f59e0b';
+export const DEFAULT_EXACT_HALO_COLOR = '#18181b';
+/** Max diagonal distance from real coords to the ~1 km fuzzed grid snap (sqrt(1000^2 + 1000^2) ≈ 1414m). */
+export const FUZZED_AREA_RADIUS_METERS = 1420;
+
+export function isSafeHexColor(raw: unknown): raw is string {
+  return typeof raw === 'string' && SAFE_HEX_COLOR_REGEX.test(raw.trim());
+}
+
+export function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) {
+    return `rgba(24, 24, 27, ${alpha})`;
+  }
+  const r = Number.parseInt(clean.slice(0, 2), 16);
+  const g = Number.parseInt(clean.slice(2, 4), 16);
+  const b = Number.parseInt(clean.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
+ * Generates a closed [lon, lat][] polygon ring approximating a geodesic circle
+ * of radiusMeters around (lon, lat) for MapLibre GeoJSON Fill/Line layers.
+ */
+export function buildGeodesicCircleRing(
+  longitude: number,
+  latitude: number,
+  radiusMeters = FUZZED_AREA_RADIUS_METERS,
+  steps = 64,
+): [number, number][] {
+  const earthRadius = 6_371_000;
+  const latRad = (latitude * Math.PI) / 180;
+  const dLat = (radiusMeters / earthRadius) * (180 / Math.PI);
+  const cosLat = Math.max(0.15, Math.cos(latRad));
+  const dLon = dLat / cosLat;
+  const coords: [number, number][] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const theta = (i / steps) * 2 * Math.PI;
+    coords.push([
+      longitude + dLon * Math.cos(theta),
+      Math.max(-85, Math.min(85, latitude + dLat * Math.sin(theta))),
+    ]);
+  }
+  return coords;
+}
+
+export const HexColorSchema = z
+  .string()
+  .trim()
+  .regex(SAFE_HEX_COLOR_REGEX, 'Color must be a #RRGGBB hex value')
+  .transform((v) => v.toLowerCase());
+
 export const RegisterSchema = z.object({
   email: z.string().email().max(255),
   username: z.string().min(2).max(64).trim(),
@@ -68,11 +122,17 @@ export const UpdateProfileSchema = z
     username: z.string().min(2).max(64).trim().optional(),
     email: z.string().email().max(255).trim().optional(),
     avatarUrl: AvatarUrlSchema.nullable().optional(),
+    haloColor: HexColorSchema.nullable().optional(),
+    fuzzCircleColor: HexColorSchema.nullable().optional(),
   })
   .refine(
     (data) =>
-      data.username !== undefined || data.email !== undefined || data.avatarUrl !== undefined,
-    { message: 'Provide username, email, or avatarUrl to update' },
+      data.username !== undefined ||
+      data.email !== undefined ||
+      data.avatarUrl !== undefined ||
+      data.haloColor !== undefined ||
+      data.fuzzCircleColor !== undefined,
+    { message: 'Provide username, email, avatarUrl, haloColor, or fuzzCircleColor to update' },
   );
 export type UpdateProfileInput = z.infer<typeof UpdateProfileSchema>;
 
@@ -119,6 +179,8 @@ export const MemberProfileUpdatedSchema = z.object({
   userId: z.string().uuid(),
   username: z.string(),
   avatarUrl: z.string().nullable(),
+  haloColor: z.string().nullable().optional(),
+  fuzzCircleColor: z.string().nullable().optional(),
   groupIds: z.array(z.string().uuid()),
 });
 export type MemberProfileUpdatedEvent = z.infer<typeof MemberProfileUpdatedSchema>;
@@ -257,6 +319,8 @@ export const LocationBroadcastSchema = z.object({
   userId: z.string().uuid(),
   username: z.string(),
   avatarUrl: z.string().nullable().optional(),
+  haloColor: z.string().nullable().optional(),
+  fuzzCircleColor: z.string().nullable().optional(),
   groupId: z.string().uuid(),
   latitude: z.number(),
   longitude: z.number(),

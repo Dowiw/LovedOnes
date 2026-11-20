@@ -2,7 +2,22 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Camera, Check, KeyRound, Mail, ShieldCheck, Trash2, User, X } from 'lucide-react';
-import { isSafeAvatarUrl } from '@loved-ones/shared';
+import {
+  DEFAULT_EXACT_HALO_COLOR,
+  DEFAULT_FUZZ_CIRCLE_COLOR,
+  hexToRgba,
+  isSafeAvatarUrl,
+  isSafeHexColor,
+} from '@loved-ones/shared';
+
+const COLOR_PRESETS = [
+  { label: 'Amber', hex: '#f59e0b' },
+  { label: 'Sky', hex: '#0ea5e9' },
+  { label: 'Emerald', hex: '#10b981' },
+  { label: 'Violet', hex: '#8b5cf6' },
+  { label: 'Rose', hex: '#f43f5e' },
+  { label: 'Ink', hex: '#18181b' },
+] as const;
 import {
   apiChangePassword,
   apiClearRecoveryEmail,
@@ -72,6 +87,10 @@ export function AccountSettingsModal({
   const [username, setUsername] = useState(session.user.username);
   const [email, setEmail] = useState(session.user.email);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(session.user.avatarUrl ?? null);
+  const [haloColor, setHaloColor] = useState<string | null>(session.user.haloColor ?? null);
+  const [fuzzCircleColor, setFuzzCircleColor] = useState<string | null>(
+    session.user.fuzzCircleColor ?? null,
+  );
   const [imageUrlInput, setImageUrlInput] = useState('');
   const [showUrlField, setShowUrlField] = useState(false);
 
@@ -100,6 +119,8 @@ export function AccountSettingsModal({
     setUsername(session.user.username);
     setEmail(session.user.email);
     setAvatarUrl(session.user.avatarUrl ?? null);
+    setHaloColor(session.user.haloColor ?? null);
+    setFuzzCircleColor(session.user.fuzzCircleColor ?? null);
     setImageUrlInput(
       session.user.avatarUrl && !session.user.avatarUrl.startsWith('data:')
         ? session.user.avatarUrl
@@ -162,6 +183,8 @@ export function AccountSettingsModal({
         username: username.trim(),
         email: email.trim(),
         avatarUrl,
+        haloColor,
+        fuzzCircleColor,
       });
       saveSession(next);
       onSessionUpdated(next);
@@ -408,6 +431,138 @@ export function AccountSettingsModal({
               onChange={(e) => setEmail(e.target.value)}
               className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
             />
+          </div>
+
+          {/* Map Marker Halo & Fuzzed Area Circle Colors */}
+          <div className="space-y-3 rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-700">
+                  Map Pin Appearance
+                </div>
+                <p className="text-[11px] text-zinc-500">
+                  Customize your marker halo and transparent fuzzed area ring.
+                </p>
+              </div>
+              <div
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-dashed"
+                style={{
+                  backgroundColor: hexToRgba(
+                    isSafeHexColor(fuzzCircleColor)
+                      ? fuzzCircleColor
+                      : DEFAULT_FUZZ_CIRCLE_COLOR,
+                    0.18,
+                  ),
+                  borderColor: hexToRgba(
+                    isSafeHexColor(fuzzCircleColor)
+                      ? fuzzCircleColor
+                      : DEFAULT_FUZZ_CIRCLE_COLOR,
+                    0.7,
+                  ),
+                }}
+                title="Live fuzzed area & halo preview"
+              >
+                <div
+                  className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-[9px] font-bold text-white"
+                  style={{
+                    boxShadow: `0 0 0 3px ${hexToRgba(
+                      isSafeHexColor(haloColor) ? haloColor : DEFAULT_EXACT_HALO_COLOR,
+                      0.45,
+                    )}`,
+                  }}
+                >
+                  {(username || session.user.username).slice(0, 1).toUpperCase()}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium text-zinc-700">
+                <span>User Halo Color</span>
+                {haloColor && (
+                  <button
+                    type="button"
+                    onClick={() => setHaloColor(null)}
+                    className="text-[10px] text-zinc-500 underline hover:text-zinc-900"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {COLOR_PRESETS.map((preset) => {
+                  const selected = haloColor?.toLowerCase() === preset.hex;
+                  return (
+                    <button
+                      key={`halo-${preset.hex}`}
+                      type="button"
+                      title={preset.label}
+                      onClick={() => setHaloColor(preset.hex)}
+                      className={`h-6 w-6 rounded-full border-2 transition ${
+                        selected ? 'scale-110 border-zinc-950 ring-2 ring-zinc-900/20' : 'border-white shadow-sm'
+                      }`}
+                      style={{ backgroundColor: preset.hex }}
+                    />
+                  );
+                })}
+                <label className="ml-1 inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-100">
+                  <input
+                    type="color"
+                    aria-label="Custom halo color"
+                    value={isSafeHexColor(haloColor) ? haloColor : DEFAULT_EXACT_HALO_COLOR}
+                    onChange={(e) => setHaloColor(e.target.value.toLowerCase())}
+                    className="h-3.5 w-3.5 cursor-pointer border-0 bg-transparent p-0"
+                  />
+                  Custom
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium text-zinc-700">
+                <span>Fuzzed Circle Color</span>
+                {fuzzCircleColor && (
+                  <button
+                    type="button"
+                    onClick={() => setFuzzCircleColor(null)}
+                    className="text-[10px] text-zinc-500 underline hover:text-zinc-900"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {COLOR_PRESETS.map((preset) => {
+                  const selected = fuzzCircleColor?.toLowerCase() === preset.hex;
+                  return (
+                    <button
+                      key={`fuzz-${preset.hex}`}
+                      type="button"
+                      title={preset.label}
+                      onClick={() => setFuzzCircleColor(preset.hex)}
+                      className={`h-6 w-6 rounded-full border-2 transition ${
+                        selected ? 'scale-110 border-zinc-950 ring-2 ring-zinc-900/20' : 'border-white shadow-sm'
+                      }`}
+                      style={{ backgroundColor: preset.hex }}
+                    />
+                  );
+                })}
+                <label className="ml-1 inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-100">
+                  <input
+                    type="color"
+                    aria-label="Custom fuzzed circle color"
+                    value={
+                      isSafeHexColor(fuzzCircleColor)
+                        ? fuzzCircleColor
+                        : DEFAULT_FUZZ_CIRCLE_COLOR
+                    }
+                    onChange={(e) => setFuzzCircleColor(e.target.value.toLowerCase())}
+                    className="h-3.5 w-3.5 cursor-pointer border-0 bg-transparent p-0"
+                  />
+                  Custom
+                </label>
+              </div>
+            </div>
           </div>
 
           {profileError && (

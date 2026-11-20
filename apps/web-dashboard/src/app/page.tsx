@@ -722,11 +722,23 @@ export default function HomePage() {
 
     socket.on(
       'member:profile:updated',
-      (evt: { userId: string; username: string; avatarUrl: string | null }) => {
+      (evt: {
+        userId: string;
+        username: string;
+        avatarUrl: string | null;
+        haloColor?: string | null;
+        fuzzCircleColor?: string | null;
+      }) => {
         setLocations((prev) =>
           prev.map((loc) =>
             loc.userId === evt.userId
-              ? { ...loc, username: evt.username, avatarUrl: evt.avatarUrl }
+              ? {
+                  ...loc,
+                  username: evt.username,
+                  avatarUrl: evt.avatarUrl,
+                  haloColor: evt.haloColor ?? null,
+                  fuzzCircleColor: evt.fuzzCircleColor ?? null,
+                }
               : loc,
           ),
         );
@@ -735,7 +747,13 @@ export default function HomePage() {
             ...grp,
             members: grp.members.map((m) =>
               m.userId === evt.userId
-                ? { ...m, username: evt.username, avatarUrl: evt.avatarUrl }
+                ? {
+                    ...m,
+                    username: evt.username,
+                    avatarUrl: evt.avatarUrl,
+                    haloColor: evt.haloColor ?? null,
+                    fuzzCircleColor: evt.fuzzCircleColor ?? null,
+                  }
                 : m,
             ),
           })),
@@ -751,7 +769,13 @@ export default function HomePage() {
           if (!prev || prev.user.id !== evt.userId) return prev;
           const next: StoredSession = {
             ...prev,
-            user: { ...prev.user, username: evt.username, avatarUrl: evt.avatarUrl },
+            user: {
+              ...prev.user,
+              username: evt.username,
+              avatarUrl: evt.avatarUrl,
+              haloColor: evt.haloColor ?? null,
+              fuzzCircleColor: evt.fuzzCircleColor ?? null,
+            },
           };
           saveSession(next);
           return next;
@@ -1504,6 +1528,8 @@ export default function HomePage() {
         selectedPlaceId={selectedPlaceId}
         currentUserId={session.user.id}
         currentUserAvatarUrl={session.user.avatarUrl ?? null}
+        currentUserHaloColor={session.user.haloColor ?? null}
+        currentUserFuzzCircleColor={session.user.fuzzCircleColor ?? null}
         selfLocation={selfLocation}
         focusCoords={focusCoords}
         draftPlace={draftPlace}

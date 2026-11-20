@@ -33,6 +33,8 @@ interface PgUserRow {
   password_hash: string;
   role: SystemRole;
   avatar_url: string | null;
+  halo_color: string | null;
+  fuzz_circle_color: string | null;
   recovery_email: string | null;
   recovery_email_verified: boolean;
   created_at: Date;
@@ -50,9 +52,9 @@ interface PgInviteRow {
 
 const REGISTRATION_ADVISORY_LOCK_KEY = 948271;
 const USER_SELECT_COLUMNS =
-  'id, email, username, role, avatar_url, recovery_email, recovery_email_verified, created_at';
+  'id, email, username, role, avatar_url, halo_color, fuzz_circle_color, recovery_email, recovery_email_verified, created_at';
 const USER_AUTH_SELECT_COLUMNS =
-  'id, email, username, password_hash, role, avatar_url, recovery_email, recovery_email_verified, created_at';
+  'id, email, username, password_hash, role, avatar_url, halo_color, fuzz_circle_color, recovery_email, recovery_email_verified, created_at';
 
 function mapPublicAccount(row: Omit<PgUserRow, 'password_hash'>): PublicAccountRecord {
   return {
@@ -61,6 +63,8 @@ function mapPublicAccount(row: Omit<PgUserRow, 'password_hash'>): PublicAccountR
     username: row.username,
     role: row.role,
     avatarUrl: row.avatar_url ?? null,
+    haloColor: row.halo_color ?? null,
+    fuzzCircleColor: row.fuzz_circle_color ?? null,
     recoveryEmail: row.recovery_email ?? null,
     recoveryEmailVerified: Boolean(row.recovery_email_verified),
     createdAt: row.created_at,
@@ -221,7 +225,13 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
 
   async updateAccountProfile(
     userId: string,
-    patch: { email?: string; username?: string; avatarUrl?: string | null },
+    patch: {
+      email?: string;
+      username?: string;
+      avatarUrl?: string | null;
+      haloColor?: string | null;
+      fuzzCircleColor?: string | null;
+    },
   ): Promise<
     { status: 'ok'; account: PublicAccountRecord } | { status: 'email_conflict' } | { status: 'not_found' }
   > {
@@ -239,6 +249,14 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
     if (patch.avatarUrl !== undefined) {
       params.push(patch.avatarUrl);
       sets.push(`avatar_url = $${params.length}`);
+    }
+    if (patch.haloColor !== undefined) {
+      params.push(patch.haloColor);
+      sets.push(`halo_color = $${params.length}`);
+    }
+    if (patch.fuzzCircleColor !== undefined) {
+      params.push(patch.fuzzCircleColor);
+      sets.push(`fuzz_circle_color = $${params.length}`);
     }
 
     if (sets.length === 0) {
@@ -346,11 +364,14 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
         user_id: string;
         username: string;
         avatar_url: string | null;
+        halo_color: string | null;
+        fuzz_circle_color: string | null;
         role: GroupRole;
         privacy: PrivacyMode;
         joined_at: Date;
       }>(
-        `SELECT gm.group_id, gm.user_id, u.username, u.avatar_url, gm.role, gm.privacy, gm.joined_at
+        `SELECT gm.group_id, gm.user_id, u.username, u.avatar_url, u.halo_color, u.fuzz_circle_color,
+                gm.role, gm.privacy, gm.joined_at
          FROM group_memberships gm
          JOIN users u ON u.id = gm.user_id
          WHERE gm.group_id = ANY($1::uuid[])
@@ -364,6 +385,8 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
           userId: row.user_id,
           username: row.username,
           avatarUrl: row.avatar_url ?? null,
+          haloColor: row.halo_color ?? null,
+          fuzzCircleColor: row.fuzz_circle_color ?? null,
           role: row.role,
           privacy: row.privacy,
           joinedAt: row.joined_at.toISOString(),

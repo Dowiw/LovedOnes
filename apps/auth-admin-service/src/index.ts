@@ -219,7 +219,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   app.patch('/api/auth/me', { preHandler: [requireAuth] }, async (request: AuthenticatedRequest) => {
     const actor = request.authUser!;
     const rawBody = (request.body ?? {}) as Record<string, unknown>;
-    const changedFields = ['username', 'email', 'avatarUrl'].filter(
+    const changedFields = ['username', 'email', 'avatarUrl', 'haloColor', 'fuzzCircleColor'].filter(
       (k) => rawBody[k] !== undefined,
     );
     const result = await authGroup.updateProfile(actor.id, request.body);
