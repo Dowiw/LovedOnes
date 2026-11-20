@@ -163,41 +163,55 @@ function main() {
     return;
   }
 
-  for (const relPath of VERSION_JSON_FILES) {
-    const pkg = readJson(relPath);
-    pkg.version = nextVersion;
-    writeJson(relPath, pkg);
+  const filesToUpdate = [...VERSION_JSON_FILES, 'apps/mobile-app/app.json'];
+  let committed = false;
+  try {
+    for (const relPath of VERSION_JSON_FILES) {
+      const pkg = readJson(relPath);
+      pkg.version = nextVersion;
+      writeJson(relPath, pkg);
+    }
+
+    appJson.expo = appJson.expo ?? {};
+    appJson.expo.version = nextVersion;
+    appJson.expo.android = appJson.expo.android ?? {};
+    appJson.expo.android.versionCode = nextVersionCode;
+    appJson.expo.ios = appJson.expo.ios ?? {};
+    appJson.expo.ios.buildNumber = nextBuildNum;
+    writeJson('apps/mobile-app/app.json', appJson);
+
+    if (!opts.skipChecks) {
+      console.log('\nRunning workspace typecheck, build, and unit tests...');
+      run('pnpm', ['typecheck']);
+      run('pnpm', ['build']);
+      run('pnpm', [
+        '--filter',
+        '@loved-ones/shared',
+        '--filter',
+        '@loved-ones/mobile-app',
+        '--filter',
+        '@loved-ones/web-dashboard',
+        '--filter',
+        '@loved-ones/map-service',
+        'test',
+      ]);
+    }
+
+    run('git', ['add', ...filesToUpdate]);
+    run('git', ['commit', '-m', `chore(release): ${tagName}`]);
+    committed = true;
+    run('git', ['tag', '-a', tagName, '-m', `LovedOnes ${tagName}`]);
+  } catch (err) {
+    if (!committed) {
+      try {
+        run('git', ['checkout', '--', ...filesToUpdate], { capture: true });
+        console.error('Restored version files after failed release check.');
+      } catch {
+        // best effort rollback
+      }
+    }
+    throw err;
   }
-
-  appJson.expo = appJson.expo ?? {};
-  appJson.expo.version = nextVersion;
-  appJson.expo.android = appJson.expo.android ?? {};
-  appJson.expo.android.versionCode = nextVersionCode;
-  appJson.expo.ios = appJson.expo.ios ?? {};
-  appJson.expo.ios.buildNumber = nextBuildNum;
-  writeJson('apps/mobile-app/app.json', appJson);
-
-  if (!opts.skipChecks) {
-    console.log('\nRunning workspace typecheck, build, and unit tests...');
-    run('pnpm', ['typecheck']);
-    run('pnpm', ['build']);
-    run('pnpm', [
-      '--filter',
-      '@loved-ones/shared',
-      '--filter',
-      '@loved-ones/mobile-app',
-      '--filter',
-      '@loved-ones/web-dashboard',
-      '--filter',
-      '@loved-ones/map-service',
-      'test',
-    ]);
-  }
-
-  const filesToStage = [...VERSION_JSON_FILES, 'apps/mobile-app/app.json'];
-  run('git', ['add', ...filesToStage]);
-  run('git', ['commit', '-m', `chore(release): ${tagName}`]);
-  run('git', ['tag', '-a', tagName, '-m', `LovedOnes ${tagName}`]);
 
   console.log(`\nCreated release commit and tag ${tagName}.`);
 

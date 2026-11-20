@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import appConfig from '../../app.json';
 import {
   createInMemoryQueueStorage,
   enqueueLocationPoints,
@@ -170,7 +171,8 @@ describe('@loved-ones/mobile-app', () => {
   });
 
   it('detects outdated APK/IPA installs when server reports a newer mobile release', async () => {
-    expect(INSTALLED_APP_VERSION).toBe('0.1.0');
+    expect(INSTALLED_APP_VERSION).toBe(appConfig.expo.version);
+    expect(INSTALLED_APP_VERSION).toMatch(/^\d+\.\d+\.\d+/);
     const mockFetch = vi.fn(async (url: string | URL) => {
       expect(String(url)).toContain('/api/auth/app-version?platform=android&version=0.1.0');
       return new Response(
