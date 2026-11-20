@@ -8,23 +8,43 @@ import { getServiceBaseUrls } from '@/lib/api';
 
 let pmtilesProtocolRegistered = false;
 
+const TRAIL_SOURCE_ID = 'lovedones-trails-src';
+const TRAIL_LINE_LAYER_ID = 'lovedones-trails-line';
+const TRAIL_POINT_LAYER_ID = 'lovedones-trails-pts';
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 interface MapCanvasProps {
   locations: LocationBroadcast[];
   places?: GroupPlace[];
+  trails?: LocationBroadcast[];
+  showTrails?: boolean;
   selectedUserId?: string | null;
   selectedPlaceId?: string | null;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
+  className?: string;
 }
 
 export function MapCanvas({
   locations,
   places = [],
+  trails = [],
+  showTrails = false,
   selectedUserId,
   selectedPlaceId,
   onMapSelectCoords,
+  className = 'relative h-full w-full overflow-hidden bg-[#cfe3ee]',
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const styleReadyRef = useRef(false);
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const onSelectCoordsRef = useRef(onMapSelectCoords);
@@ -45,13 +65,16 @@ export function MapCanvas({
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: styleUrl,
-      center: [2.3522, 48.8566],
-      zoom: 3,
+      center: [13.4448, 52.5069],
+      zoom: 11,
+      attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+    map.on('load', () => {
+      styleReadyRef.current = true;
+    });
     map.on('error', () => {
-      // Fall back to a minimal blank style if tile server style.json is unreachable
       if (!map.isStyleLoaded()) {
         map.setStyle({
           version: 8,
@@ -60,14 +83,13 @@ export function MapCanvas({
             {
               id: 'fallback-bg',
               type: 'background',
-              paint: { 'background-color': '#0f172a' },
+              paint: { 'background-color': '#e9eff3' },
             },
           ],
         });
       }
     });
 
-    mapRef.current = map;
     map.on('click', (e) => {
       onSelectCoordsRef.current?.(
         Number(e.lngLat.lat.toFixed(6)),
@@ -75,7 +97,10 @@ export function MapCanvas({
       );
     });
 
+    mapRef.current = map;
+
     return () => {
+      styleReadyRef.current = false;
       for (const marker of markersRef.current.values()) {
         marker.remove();
       }
@@ -100,14 +125,15 @@ export function MapCanvas({
       activeIds.add(loc.userId);
       bounds.extend([loc.longitude, loc.latitude]);
 
+      const safeUser = escapeHtml(loc.username);
       const existing = markersRef.current.get(loc.userId);
       const popupHtml = `
         <div class="text-xs space-y-1">
-          <div class="font-semibold text-white">${loc.username}</div>
-          <div class="text-slate-300">Mode: ${loc.privacyMode}${loc.isFuzzed ? ' (~1km)' : ''}</div>
-          ${loc.batteryLevel !== null && loc.batteryLevel !== undefined ? `<div class="text-slate-400">Battery: ${loc.batteryLevel}%</div>` : ''}
-          <div class="text-slate-400">Lat: ${loc.latitude.toFixed(4)}, Lon: ${loc.longitude.toFixed(4)}</div>
-          <div class="text-slate-500">${new Date(loc.recordedAt).toLocaleTimeString()}</div>
+          <div class="font-semibold text-zinc-900">${safeUser}</div>
+          <div class="text-zinc-600">${loc.privacyMode}${loc.isFuzzed ? ' · ~1 km area' : ' · Exact'}</div>
+          ${loc.batteryLevel !== null && loc.batteryLevel !== undefined ? `<div class="text-zinc-500">Battery ${loc.batteryLevel}%</div>` : ''}
+          <div class="font-mono text-[11px] text-zinc-500">${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}</div>
+          <div class="text-[11px] text-zinc-400">${new Date(loc.recordedAt).toLocaleTimeString()}</div>
         </div>
       `;
 
@@ -116,17 +142,25 @@ export function MapCanvas({
         existing.getPopup()?.setHTML(popupHtml);
       } else {
         const el = document.createElement('div');
-        el.className = 'flex flex-col items-center cursor-pointer';
-        el.innerHTML = `
-          <div class="px-2 py-0.5 mb-1 rounded-full text-[11px] font-semibold shadow ${
-            loc.isFuzzed
-              ? 'bg-amber-500/90 text-slate-950'
-              : 'bg-emerald-500/90 text-slate-950'
-          }">${loc.username}</div>
-          <div class="h-4 w-4 rounded-full border-2 border-white shadow-lg ${
-            loc.isFuzzed ? 'bg-amber-400 ring-8 ring-amber-400/25' : 'bg-emerald-400'
-          }"></div>
-        `;
+        el.className = 'flex flex-col items-center cursor-pointer select-none';
+
+        const pill = document.createElement('div');
+        pill.className =
+          'mb-1.5 rounded-full border border-slate-200/90 bg-white/95 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-900 shadow-md backdrop-blur';
+        pill.textContent = loc.username;
+
+        const ring = document.createElement('div');
+        ring.className = `flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg ring-4 ${
+          loc.isFuzzed ? 'ring-amber-400/35' : 'ring-[#80f15a]/45'
+        }`;
+
+        const core = document.createElement('div');
+        core.className = `h-3 w-3 rounded-full ${
+          loc.isFuzzed ? 'bg-amber-500' : 'bg-zinc-900'
+        }`;
+        ring.appendChild(core);
+        el.append(pill, ring);
+
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([loc.longitude, loc.latitude])
           .setPopup(new maplibregl.Popup({ offset: 18 }).setHTML(popupHtml))
@@ -145,12 +179,12 @@ export function MapCanvas({
     if (selectedUserId) {
       const target = locations.find((l) => l.userId === selectedUserId);
       if (target) {
-        map.flyTo({ center: [target.longitude, target.latitude], zoom: 13, duration: 700 });
+        map.flyTo({ center: [target.longitude, target.latitude], zoom: 13.5, duration: 700 });
       }
     } else if (locations.length === 1) {
-      map.flyTo({ center: [locations[0].longitude, locations[0].latitude], zoom: 12, duration: 600 });
+      map.flyTo({ center: [locations[0].longitude, locations[0].latitude], zoom: 12.5, duration: 600 });
     } else if (locations.length > 1) {
-      map.fitBounds(bounds, { padding: 70, maxZoom: 14, duration: 600 });
+      map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 600 });
     }
   }, [locations, selectedUserId]);
 
@@ -159,23 +193,14 @@ export function MapCanvas({
     if (!map) return;
 
     const activePlaceIds = new Set<string>();
-function escapeHtml(raw: string): string {
-  return raw
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
     for (const place of places) {
       activePlaceIds.add(place.id);
       const existing = placeMarkersRef.current.get(place.id);
       const safeName = escapeHtml(place.name);
       const popupHtml = `
         <div class="text-xs space-y-0.5">
-          <div class="font-semibold text-sky-300">${safeName}</div>
-          <div class="text-slate-400">Radius: ${Math.round(place.radiusMeters)} m</div>
+          <div class="font-semibold text-zinc-900">${safeName}</div>
+          <div class="text-zinc-500">Geofence radius: ${Math.round(place.radiusMeters)} m</div>
         </div>
       `;
       if (existing) {
@@ -183,15 +208,19 @@ function escapeHtml(raw: string): string {
         existing.getPopup()?.setHTML(popupHtml);
       } else {
         const el = document.createElement('div');
-        el.className = 'flex flex-col items-center cursor-pointer';
+        el.className = 'flex flex-col items-center cursor-pointer select-none';
         const label = document.createElement('div');
         label.className =
-          'rounded border border-sky-400/70 bg-slate-900/90 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 shadow';
-        label.textContent = `${place.name} (${Math.round(place.radiusMeters)}m)`;
+          'rounded-full border border-slate-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-800 shadow-sm backdrop-blur';
+        label.textContent = `${place.name} · ${Math.round(place.radiusMeters)}m`;
         const dot = document.createElement('div');
         dot.className =
-          'mt-0.5 h-3 w-3 rounded-full border-2 border-dashed border-sky-400 bg-sky-400/30';
+          'mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-dashed border-zinc-800 bg-white/80 shadow';
+        const inner = document.createElement('div');
+        inner.className = 'h-1.5 w-1.5 rounded-full bg-zinc-900';
+        dot.appendChild(inner);
         el.append(label, dot);
+
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([place.longitude, place.latitude])
           .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(popupHtml))
@@ -215,12 +244,79 @@ function escapeHtml(raw: string): string {
     }
   }, [places, selectedPlaceId]);
 
-  return (
-    <div className="relative h-full w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-      <div ref={containerRef} className="h-full w-full" />
-      <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-xs text-slate-300 backdrop-blur">
-        PMTiles Vector Renderer · {locations.length} active marker{locations.length === 1 ? '' : 's'}
-      </div>
-    </div>
-  );
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const applyTrailsLayer = () => {
+      const byUser = new Map<string, [number, number][]>();
+      const features: Array<{
+        type: 'Feature';
+        geometry: { type: 'LineString'; coordinates: [number, number][] } | { type: 'Point'; coordinates: [number, number] };
+        properties: { username: string };
+      }> = [];
+
+      if (showTrails && trails.length > 0) {
+        for (const pt of trails) {
+          const arr = byUser.get(pt.userId) ?? [];
+          arr.push([pt.longitude, pt.latitude]);
+          byUser.set(pt.userId, arr);
+          features.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [pt.longitude, pt.latitude] },
+            properties: { username: pt.username },
+          });
+        }
+        for (const [userId, coords] of byUser.entries()) {
+          if (coords.length < 2) continue;
+          const uname = trails.find((t) => t.userId === userId)?.username ?? 'Member';
+          features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: coords },
+            properties: { username: uname },
+          });
+        }
+      }
+
+      const geojson = { type: 'FeatureCollection' as const, features };
+      const existingSource = map.getSource(TRAIL_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+      if (existingSource) {
+        existingSource.setData(geojson);
+        return;
+      }
+      map.addSource(TRAIL_SOURCE_ID, { type: 'geojson', data: geojson });
+      map.addLayer({
+        id: TRAIL_LINE_LAYER_ID,
+        type: 'line',
+        source: TRAIL_SOURCE_ID,
+        filter: ['==', ['geometry-type'], 'LineString'],
+        paint: {
+          'line-color': '#18181b',
+          'line-width': 2.5,
+          'line-dasharray': [2, 1.5],
+          'line-opacity': 0.75,
+        },
+      });
+      map.addLayer({
+        id: TRAIL_POINT_LAYER_ID,
+        type: 'circle',
+        source: TRAIL_SOURCE_ID,
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: {
+          'circle-radius': 4,
+          'circle-color': '#80f15a',
+          'circle-stroke-color': '#18181b',
+          'circle-stroke-width': 1.5,
+        },
+      });
+    };
+
+    if (styleReadyRef.current || map.isStyleLoaded()) {
+      applyTrailsLayer();
+    } else {
+      map.once('load', applyTrailsLayer);
+    }
+  }, [trails, showTrails]);
+
+  return <div ref={containerRef} className={className} />;
 }

@@ -46,19 +46,21 @@ export default function AdminInvitesPage() {
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-slate-950">
+      <div className="min-h-screen bg-[#eef3f6]">
         <NavBar user={null} onSignOut={() => {}} />
         <main className="mx-auto max-w-md px-4 py-16 text-center">
-          <Link href="/" className="text-sm text-sky-400 hover:underline">
-            Sign in on the main portal to manage QR invites
-          </Link>
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-8 shadow-sm backdrop-blur-xl">
+            <Link href="/" className="text-sm font-medium text-zinc-900 hover:underline">
+              Sign in on the main map to manage invites
+            </Link>
+          </div>
         </main>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-[#eef3f6]">
       <NavBar
         user={session.user}
         onSignOut={() => {
@@ -69,9 +71,9 @@ export default function AdminInvitesPage() {
 
       <main className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
         <div>
-          <h1 className="text-xl font-bold text-white">Zero-Config QR Onboarding Invites</h1>
-          <p className="text-xs text-slate-400">
-            Generate single-use or multi-use QR tokens for mobile and web onboarding.
+          <h1 className="text-xl font-bold tracking-tight text-zinc-900">Group Invites</h1>
+          <p className="text-xs text-zinc-500">
+            Generate single-use or multi-use QR codes and links for mobile and web onboarding.
           </p>
         </div>
 
@@ -81,35 +83,42 @@ export default function AdminInvitesPage() {
           onCreated={() => void refresh(session.accessToken)}
         />
 
-        <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-          <div className="border-b border-slate-800 px-4 py-3 text-sm font-semibold text-white">
-            Generated Invites ({invites.length})
+        <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
+          <div className="border-b border-slate-100 px-5 py-3.5 text-sm font-semibold text-zinc-900">
+            Active &amp; Recent Invites ({invites.length})
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-950/60 text-slate-400">
+              <thead className="bg-slate-50/80 text-zinc-500">
                 <tr>
-                  <th className="px-4 py-2.5 font-medium">Token</th>
-                  <th className="px-4 py-2.5 font-medium">Group</th>
-                  <th className="px-4 py-2.5 font-medium">Role</th>
-                  <th className="px-4 py-2.5 font-medium">Uses</th>
-                  <th className="px-4 py-2.5 font-medium">Expires</th>
+                  <th className="px-5 py-3 font-medium">Token</th>
+                  <th className="px-5 py-3 font-medium">Group</th>
+                  <th className="px-5 py-3 font-medium">Role</th>
+                  <th className="px-5 py-3 font-medium">Uses</th>
+                  <th className="px-5 py-3 font-medium">Expires</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/80">
+              <tbody className="divide-y divide-slate-100">
                 {invites.map((inv) => (
-                  <tr key={inv.token}>
-                    <td className="px-4 py-2.5 font-mono text-sky-300">{inv.token}</td>
-                    <td className="px-4 py-2.5 text-white">{inv.groupName}</td>
-                    <td className="px-4 py-2.5 text-slate-300">{inv.assignedRole}</td>
-                    <td className="px-4 py-2.5 font-mono text-slate-300">
+                  <tr key={inv.token} className="hover:bg-slate-50/70">
+                    <td className="px-5 py-3 font-mono text-zinc-700">{inv.token}</td>
+                    <td className="px-5 py-3 font-medium text-zinc-900">{inv.groupName}</td>
+                    <td className="px-5 py-3 text-zinc-600">{inv.assignedRole}</td>
+                    <td className="px-5 py-3 font-mono text-zinc-600">
                       {inv.uses} / {inv.maxUses}
                     </td>
-                    <td className="px-4 py-2.5 text-slate-400">
+                    <td className="px-5 py-3 text-zinc-500">
                       {new Date(inv.expiresAt).toLocaleString()}
                     </td>
                   </tr>
                 ))}
+                {invites.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-5 py-6 text-center text-zinc-400">
+                      No invites created yet.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

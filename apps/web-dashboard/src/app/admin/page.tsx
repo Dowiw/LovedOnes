@@ -61,7 +61,7 @@ export default function AdminDashboardPage() {
 
   if (!session || session.user.role !== 'HOST_ADMIN') {
     return (
-      <div className="min-h-screen bg-slate-950">
+      <div className="min-h-screen bg-[#eef3f6]">
         <NavBar
           user={session?.user ?? null}
           onSignOut={() => {
@@ -69,18 +69,19 @@ export default function AdminDashboardPage() {
             setSession(null);
           }}
         />
-        <main className="mx-auto max-w-xl px-4 py-16 text-center">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
-            <h1 className="text-lg font-bold text-white">HOST_ADMIN Access Required</h1>
-            <p className="mt-2 text-xs text-slate-400">
-              Sign in as the Host Admin on the main portal to inspect storage, Redis/PostGIS
-              telemetry, and live service logs.
+        <main className="mx-auto max-w-md px-4 py-16 text-center">
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-8 shadow-sm backdrop-blur-xl">
+            <h1 className="text-lg font-bold tracking-tight text-zinc-900">
+              Host Admin Access Required
+            </h1>
+            <p className="mt-2 text-xs text-zinc-500">
+              Sign in as the Host Admin on the main map to inspect storage, telemetry, and live logs.
             </p>
             <Link
               href="/"
-              className="mt-5 inline-block rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950"
+              className="mt-5 inline-block rounded-full bg-zinc-900 px-5 py-2 text-xs font-semibold text-white hover:bg-zinc-800"
             >
-              Return to Portal
+              Back to Map
             </Link>
           </div>
         </main>
@@ -89,7 +90,7 @@ export default function AdminDashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-[#eef3f6]">
       <NavBar
         user={session.user}
         onSignOut={() => {
@@ -101,9 +102,9 @@ export default function AdminDashboardPage() {
       <main className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-white">Host Admin Telemetry & Operations</h1>
-            <p className="text-xs text-slate-400">
-              Live 5s polling · PostGIS per-user storage · Redis compute/RAM attribution
+            <h1 className="text-xl font-bold tracking-tight text-zinc-900">System Telemetry</h1>
+            <p className="text-xs text-zinc-500">
+              Live 5s updates · Storage footprint · Per-account compute &amp; sockets
             </p>
           </div>
 
@@ -111,7 +112,7 @@ export default function AdminDashboardPage() {
             <button
               type="button"
               onClick={() => void refreshData(session.accessToken)}
-              className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800"
+              className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-slate-50"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Refresh
@@ -119,26 +120,26 @@ export default function AdminDashboardPage() {
             <button
               type="button"
               onClick={() => setShowInviteModal((v) => !v)}
-              className="flex items-center gap-1.5 rounded-lg bg-sky-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-sky-400"
+              className="flex items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800"
             >
-              <QrCode className="h-3.5 w-3.5" />
-              QR Invite Generator
+              <QrCode className="h-3.5 w-3.5 text-[#80f15a]" />
+              New Invite
             </button>
           </div>
         </div>
 
         {error && (
-          <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-xs text-rose-300">
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
             {error}
           </div>
         )}
 
         {telemetry?.logStorageAlert && (
-          <div className="flex items-center gap-3 rounded-xl border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-400" />
+          <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
             <span>
-              Rotating log folder ({telemetry.logDir}) is at {telemetry.logStoragePercent}% of
-              configured MAX_LOG_STORAGE_MB!
+              Log directory ({telemetry.logDir}) is at {telemetry.logStoragePercent}% of configured
+              storage limit.
             </span>
           </div>
         )}
@@ -151,103 +152,99 @@ export default function AdminDashboardPage() {
           />
         )}
 
-        {/* Top Telemetry Cards */}
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <div className="flex items-center justify-between text-xs text-slate-400">
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
+            <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
               <span>Log Disk Usage</span>
-              <HardDrive className="h-4 w-4 text-amber-400" />
+              <HardDrive className="h-4 w-4 text-amber-500" />
             </div>
-            <div className="mt-2 text-xl font-bold text-white">
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900">
               {telemetry ? formatBytes(telemetry.logStorageBytes) : '—'}
             </div>
-            <div className="mt-1 text-[11px] text-slate-500">
+            <div className="mt-1 text-[11px] text-zinc-400">
               Limit: {telemetry ? formatBytes(telemetry.maxLogStorageBytes) : '—'} (
               {telemetry?.logStoragePercent ?? 0}%)
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>PostGIS Database Size</span>
-              <Database className="h-4 w-4 text-emerald-400" />
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
+            <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
+              <span>Spatial Database</span>
+              <Database className="h-4 w-4 text-emerald-600" />
             </div>
-            <div className="mt-2 text-xl font-bold text-white">
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900">
               {telemetry ? formatBytes(telemetry.databaseBytes) : '—'}
             </div>
-            <div className="mt-1 text-[11px] text-slate-500">
-              {telemetry?.totalLocationPoints.toLocaleString() ?? 0} total GPS rows
+            <div className="mt-1 text-[11px] text-zinc-400">
+              {telemetry?.totalLocationPoints.toLocaleString() ?? 0} stored pings
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>Active Socket.io Clients</span>
-              <Radio className="h-4 w-4 text-sky-400" />
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
+            <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
+              <span>Active Connections</span>
+              <Radio className="h-4 w-4 text-sky-600" />
             </div>
-            <div className="mt-2 text-xl font-bold text-white">
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900">
               {telemetry?.totalActiveSockets ?? 0}
             </div>
-            <div className="mt-1 text-[11px] text-slate-500">Tracked via Redis sockets:user:*</div>
+            <div className="mt-1 text-[11px] text-zinc-400">Open live WebSocket clients</div>
           </div>
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>Tracked Users</span>
-              <Cpu className="h-4 w-4 text-purple-400" />
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
+            <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
+              <span>Accounts</span>
+              <Cpu className="h-4 w-4 text-zinc-900" />
             </div>
-            <div className="mt-2 text-xl font-bold text-white">
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900">
               {telemetry?.users.length ?? 0}
             </div>
-            <div className="mt-1 text-[11px] text-slate-500">
-              Ranked by cpu_ms/min & events/min
-            </div>
+            <div className="mt-1 text-[11px] text-zinc-400">Sorted by recent compute</div>
           </div>
         </section>
 
-        {/* Per-User Compute, Memory & Storage Table */}
-        <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-          <div className="border-b border-slate-800 px-4 py-3 text-sm font-semibold text-white">
-            Per-User Compute, RAM & PostGIS Storage Attribution
+        <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
+          <div className="border-b border-slate-100 px-5 py-3.5 text-sm font-semibold text-zinc-900">
+            Account Resource Usage
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-950/60 text-slate-400">
+              <thead className="bg-slate-50/80 text-zinc-500">
                 <tr>
-                  <th className="px-4 py-2.5 font-medium">User</th>
-                  <th className="px-4 py-2.5 font-medium">CPU / min</th>
-                  <th className="px-4 py-2.5 font-medium">Pings / min</th>
-                  <th className="px-4 py-2.5 font-medium">Total CPU</th>
-                  <th className="px-4 py-2.5 font-medium">Total Events</th>
-                  <th className="px-4 py-2.5 font-medium">Sockets</th>
-                  <th className="px-4 py-2.5 font-medium">Redis RAM</th>
-                  <th className="px-4 py-2.5 font-medium">PostGIS Bytes</th>
-                  <th className="px-4 py-2.5 font-medium">Points</th>
+                  <th className="px-5 py-3 font-medium">Account</th>
+                  <th className="px-5 py-3 font-medium">CPU / min</th>
+                  <th className="px-5 py-3 font-medium">Pings / min</th>
+                  <th className="px-5 py-3 font-medium">Total CPU</th>
+                  <th className="px-5 py-3 font-medium">Events</th>
+                  <th className="px-5 py-3 font-medium">Sockets</th>
+                  <th className="px-5 py-3 font-medium">Cache RAM</th>
+                  <th className="px-5 py-3 font-medium">DB Storage</th>
+                  <th className="px-5 py-3 font-medium">Points</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/80">
+              <tbody className="divide-y divide-slate-100">
                 {telemetry?.users.map((u) => (
-                  <tr key={u.userId} className="hover:bg-slate-800/30">
-                    <td className="px-4 py-2.5">
-                      <div className="font-medium text-white">{u.username}</div>
-                      <div className="text-[11px] text-slate-500">{u.email}</div>
+                  <tr key={u.userId} className="hover:bg-slate-50/70">
+                    <td className="px-5 py-3">
+                      <div className="font-medium text-zinc-900">{u.username}</div>
+                      <div className="text-[11px] text-zinc-400">{u.email}</div>
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-emerald-300">
+                    <td className="px-5 py-3 font-mono text-emerald-700">
                       {u.cpuMsPerMin.toFixed(2)} ms
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-sky-300">{u.pingsPerMin}</td>
-                    <td className="px-4 py-2.5 font-mono text-slate-300">
+                    <td className="px-5 py-3 font-mono text-sky-700">{u.pingsPerMin}</td>
+                    <td className="px-5 py-3 font-mono text-zinc-600">
                       {u.cpuMsTotal.toFixed(2)} ms
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-slate-300">{u.eventsCount}</td>
-                    <td className="px-4 py-2.5 font-mono text-slate-300">{u.activeSockets}</td>
-                    <td className="px-4 py-2.5 font-mono text-purple-300">
+                    <td className="px-5 py-3 font-mono text-zinc-600">{u.eventsCount}</td>
+                    <td className="px-5 py-3 font-mono text-zinc-600">{u.activeSockets}</td>
+                    <td className="px-5 py-3 font-mono text-zinc-600">
                       {formatBytes(u.redisMemoryBytes)}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-amber-300">
+                    <td className="px-5 py-3 font-mono text-amber-700">
                       {formatBytes(u.locationBytes)}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-slate-300">{u.locationPoints}</td>
+                    <td className="px-5 py-3 font-mono text-zinc-600">{u.locationPoints}</td>
                   </tr>
                 ))}
               </tbody>
@@ -255,7 +252,6 @@ export default function AdminDashboardPage() {
           </div>
         </section>
 
-        {/* Live Scrolling STDOUT Log Terminal */}
         <LiveLogTerminal accessToken={session.accessToken} />
       </main>
     </div>

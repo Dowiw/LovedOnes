@@ -30,7 +30,7 @@ export function buildMobileMapStyle(
         id: 'background',
         type: 'background',
         paint: {
-          'background-color': '#0b1120',
+          'background-color': '#cfe3ee',
         },
       },
       {
@@ -39,16 +39,7 @@ export function buildMobileMapStyle(
         source: 'openmaptiles',
         'source-layer': 'earth',
         paint: {
-          'fill-color': '#0f172a',
-        },
-      },
-      {
-        id: 'water',
-        type: 'fill',
-        source: 'openmaptiles',
-        'source-layer': 'water',
-        paint: {
-          'fill-color': '#1e3a5f',
+          'fill-color': '#f3f2ed',
         },
       },
       {
@@ -57,7 +48,16 @@ export function buildMobileMapStyle(
         source: 'openmaptiles',
         'source-layer': 'landuse',
         paint: {
-          'fill-color': '#132238',
+          'fill-color': '#d5e8ce',
+        },
+      },
+      {
+        id: 'water',
+        type: 'fill',
+        source: 'openmaptiles',
+        'source-layer': 'water',
+        paint: {
+          'fill-color': '#bfe0f0',
         },
       },
       {
@@ -66,8 +66,8 @@ export function buildMobileMapStyle(
         source: 'openmaptiles',
         'source-layer': 'roads',
         paint: {
-          'line-color': '#475569',
-          'line-width': 1.2,
+          'line-color': '#ffffff',
+          'line-width': 1.6,
         },
       },
       {
@@ -76,7 +76,7 @@ export function buildMobileMapStyle(
         source: 'openmaptiles',
         'source-layer': 'buildings',
         paint: {
-          'fill-color': '#1e293b',
+          'fill-color': '#e6e4dd',
         },
       },
     ],

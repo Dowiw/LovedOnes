@@ -28,8 +28,8 @@ function parseLogLine(raw: string): ParsedLogLine {
 }
 
 function getLevelMeta(level?: number): { label: string; color: string } {
-  if (!level || level < 30) return { label: 'DEBUG', color: 'text-slate-400' };
-  if (level < 40) return { label: 'INFO ', color: 'text-emerald-400' };
+  if (!level || level < 30) return { label: 'DEBUG', color: 'text-zinc-400' };
+  if (level < 40) return { label: 'INFO ', color: 'text-[#80f15a]' };
   if (level < 50) return { label: 'WARN ', color: 'text-amber-400' };
   return { label: 'ERROR', color: 'text-rose-400' };
 }
@@ -89,24 +89,24 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
   }, [lines, filter]);
 
   return (
-    <div className="flex flex-col rounded-xl border border-slate-800 bg-slate-900">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Terminal className="h-4 w-4 text-emerald-400" />
-          <span className="text-sm font-semibold text-white">Live STDOUT & Redis Stream</span>
+    <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3.5">
+        <div className="flex items-center gap-2.5">
+          <Terminal className="h-4 w-4 text-zinc-900" />
+          <span className="text-sm font-semibold text-zinc-900">Live Service Logs</span>
           <span
-            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
               connected
-                ? 'bg-emerald-500/15 text-emerald-300'
-                : 'bg-slate-800 text-slate-400'
+                ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                : 'bg-slate-100 text-zinc-500'
             }`}
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                connected ? 'bg-emerald-400' : 'bg-slate-500'
+                connected ? 'bg-emerald-500' : 'bg-zinc-400'
               }`}
             />
-            {connected ? 'Streaming' : 'Disconnected'}
+            {connected ? 'Live' : 'Disconnected'}
           </span>
         </div>
 
@@ -116,12 +116,12 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter logs..."
-            className="rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs text-slate-200 placeholder:text-slate-500"
+            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none"
           />
           <button
             type="button"
             onClick={() => setPaused((p) => !p)}
-            className="flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700"
+            className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-slate-50"
           >
             {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
             {paused ? 'Resume' : 'Pause'}
@@ -129,7 +129,7 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
           <button
             type="button"
             onClick={() => setLines([])}
-            className="flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700"
+            className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-slate-50"
           >
             <Trash2 className="h-3.5 w-3.5" />
             Clear
@@ -137,20 +137,20 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
         </div>
       </div>
 
-      <div className="h-80 overflow-y-auto bg-slate-950 p-3 font-mono text-xs leading-5">
+      <div className="h-80 overflow-y-auto bg-zinc-950 p-4 font-mono text-xs leading-5">
         {filtered.length === 0 ? (
-          <div className="text-slate-500">Waiting for structured log events on logs:stream...</div>
+          <div className="text-zinc-500">Waiting for structured log events on logs:stream...</div>
         ) : (
           filtered.map((item, idx) => {
             const meta = getLevelMeta(item.level);
             return (
               <div key={`${idx}-${item.time ?? ''}`} className="whitespace-pre-wrap break-all py-0.5">
-                <span className="text-slate-500">
+                <span className="text-zinc-500">
                   {item.time ? new Date(item.time).toLocaleTimeString() : '--:--:--'}
                 </span>{' '}
                 <span className={meta.color}>[{meta.label}]</span>{' '}
                 {item.service && <span className="text-sky-400">[{item.service}]</span>}{' '}
-                <span className="text-slate-200">{item.raw}</span>
+                <span className="text-zinc-200">{item.raw}</span>
               </div>
             );
           })

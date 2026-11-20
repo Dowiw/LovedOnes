@@ -82,7 +82,7 @@ function JoinInviteInner() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-[#eef3f6]">
       <NavBar
         user={session?.user ?? null}
         onSignOut={() => {
@@ -91,36 +91,42 @@ function JoinInviteInner() {
         }}
       />
       <main className="mx-auto max-w-md px-4 py-14">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
+        <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-7 shadow-[0_12px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl">
           {loading ? (
-            <div className="text-sm text-slate-400">Verifying invite token...</div>
+            <div className="text-sm text-zinc-500">Verifying invite token...</div>
           ) : error && !preview ? (
-            <div className="flex items-center gap-2 text-sm text-rose-400">
+            <div className="flex items-center gap-2 text-sm text-rose-600">
               <ShieldAlert className="h-5 w-5" />
               <span>{error}</span>
             </div>
           ) : preview ? (
             <div className="space-y-4">
-              <div className="flex items-center gap-2 text-emerald-400">
-                <UserPlus className="h-5 w-5" />
-                <h1 className="text-lg font-bold text-white">Group Invite</h1>
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-[#80f15a]">
+                  <UserPlus className="h-4 w-4" />
+                </span>
+                <h1 className="text-lg font-bold tracking-tight text-zinc-900">Group Invite</h1>
               </div>
 
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs space-y-1.5">
-                <div className="text-sm font-semibold text-white">{preview.groupName}</div>
-                <div className="text-slate-400">
-                  Role: <span className="font-medium text-sky-300">{preview.assignedRole}</span>
+              <div className="space-y-1.5 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 text-xs">
+                <div className="text-sm font-semibold text-zinc-900">{preview.groupName}</div>
+                <div className="text-zinc-500">
+                  Role: <span className="font-medium text-zinc-900">{preview.assignedRole}</span>
                 </div>
-                <div className="text-slate-400">
+                <div className="text-zinc-500">
                   Status:{' '}
-                  <span className={preview.valid ? 'text-emerald-400' : 'text-rose-400'}>
+                  <span
+                    className={
+                      preview.valid ? 'font-medium text-emerald-700' : 'font-medium text-rose-600'
+                    }
+                  >
                     {preview.valid ? 'Active' : 'Expired / Exhausted'}
                   </span>
                 </div>
               </div>
 
               {error && (
-                <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                   {error}
                 </div>
               )}
@@ -130,24 +136,24 @@ function JoinInviteInner() {
                   type="button"
                   disabled={!preview.valid || submitting}
                   onClick={() => void handleJoinExisting()}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+                  className="flex w-full items-center justify-center gap-2 rounded-full bg-zinc-900 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
+                  <CheckCircle2 className="h-4 w-4 text-[#80f15a]" />
                   {submitting ? 'Joining...' : `Join as ${session.user.username}`}
                 </button>
               ) : (
                 <form onSubmit={handleRegisterAndJoin} className="space-y-3">
-                  <label className="block text-xs text-slate-300">
+                  <label className="block text-xs font-medium text-zinc-600">
                     Email
                     <input
                       type="email"
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:outline-none"
                     />
                   </label>
-                  <label className="block text-xs text-slate-300">
+                  <label className="block text-xs font-medium text-zinc-600">
                     Username
                     <input
                       type="text"
@@ -155,10 +161,10 @@ function JoinInviteInner() {
                       minLength={2}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:outline-none"
                     />
                   </label>
-                  <label className="block text-xs text-slate-300">
+                  <label className="block text-xs font-medium text-zinc-600">
                     Password
                     <input
                       type="password"
@@ -166,13 +172,13 @@ function JoinInviteInner() {
                       minLength={8}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:outline-none"
                     />
                   </label>
                   <button
                     type="submit"
                     disabled={!preview.valid || submitting}
-                    className="w-full rounded-lg bg-emerald-500 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+                    className="w-full rounded-full bg-zinc-900 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
                   >
                     {submitting ? 'Joining...' : 'Register & Join Group'}
                   </button>
@@ -189,7 +195,9 @@ function JoinInviteInner() {
 export default function JoinPage() {
   return (
     <Suspense
-      fallback={<div className="min-h-screen bg-slate-950 p-8 text-sm text-slate-400">Loading...</div>}
+      fallback={
+        <div className="min-h-screen bg-[#eef3f6] p-8 text-sm text-zinc-500">Loading...</div>
+      }
     >
       <JoinInviteInner />
     </Suspense>

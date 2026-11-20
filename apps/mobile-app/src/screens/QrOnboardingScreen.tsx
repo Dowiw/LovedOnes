@@ -145,14 +145,20 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>LovedOnes Mobile</Text>
-      <Text style={styles.subtitle}>
-        Scan the Host Admin QR code to bind your self-hosted backend URL automatically.
-      </Text>
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <View style={styles.header}>
+        <View style={styles.brandBadge}>
+          <View style={styles.brandDot} />
+          <Text style={styles.brandBadgeText}>LovedOnes</Text>
+        </View>
+        <Text style={styles.title}>Connect your device</Text>
+        <Text style={styles.subtitle}>
+          Scan an invite QR code or sign in to your private self-hosted instance.
+        </Text>
+      </View>
 
       <TouchableOpacity
-        style={styles.primaryBtn}
+        style={styles.mintCtaBtn}
         onPress={async () => {
           if (!permission?.granted) {
             const next = await requestPermission();
@@ -164,26 +170,12 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
           setScanning(true);
         }}
       >
-        <Text style={styles.primaryBtnText}>Scan Onboarding QR Code</Text>
+        <Text style={styles.mintCtaBtnText}>Scan Onboarding QR Code</Text>
       </TouchableOpacity>
-
-      <View style={styles.card}>
-        <Text style={styles.label}>Or paste QR JSON / Invite URL</Text>
-        <TextInput
-          style={styles.input}
-          value={manualInput}
-          onChangeText={setManualInput}
-          placeholder='{"v":1,"serverUrl":"https://...","inviteToken":"inv_..."}'
-          placeholderTextColor="#64748b"
-          autoCapitalize="none"
-        />
-        <TouchableOpacity style={styles.secondaryBtn} onPress={() => void handleBindManual()}>
-          <Text style={styles.secondaryBtnText}>Bind Invite Payload</Text>
-        </TouchableOpacity>
-      </View>
 
       {invite && (
         <View style={styles.badge}>
+          <View style={styles.badgeDot} />
           <Text style={styles.badgeText}>
             Bound to {invite.groupName} ({invite.serverUrl})
           </Text>
@@ -191,6 +183,25 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
       )}
 
       <View style={styles.card}>
+        <View style={styles.segmentWrap}>
+          <TouchableOpacity
+            style={[styles.segmentBtn, mode === 'login' && styles.segmentBtnActive]}
+            onPress={() => setMode('login')}
+          >
+            <Text style={[styles.segmentText, mode === 'login' && styles.segmentTextActive]}>
+              Sign In
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.segmentBtn, mode === 'register' && styles.segmentBtnActive]}
+            onPress={() => setMode('register')}
+          >
+            <Text style={[styles.segmentText, mode === 'register' && styles.segmentTextActive]}>
+              Create Account
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         <Text style={styles.label}>Server Base URL</Text>
         <TextInput
           style={styles.input}
@@ -198,6 +209,8 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
           onChangeText={setServerUrl}
           autoCapitalize="none"
           keyboardType="url"
+          placeholder="https://track.example.com"
+          placeholderTextColor="#94a3b8"
         />
 
         <Text style={styles.label}>Email</Text>
@@ -208,18 +221,18 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
           autoCapitalize="none"
           keyboardType="email-address"
           placeholder="member@example.com"
-          placeholderTextColor="#64748b"
+          placeholderTextColor="#94a3b8"
         />
 
         {mode === 'register' && (
           <>
-            <Text style={styles.label}>Username</Text>
+            <Text style={styles.label}>Display Name</Text>
             <TextInput
               style={styles.input}
               value={username}
               onChangeText={setUsername}
               placeholder="Sam"
-              placeholderTextColor="#64748b"
+              placeholderTextColor="#94a3b8"
             />
           </>
         )}
@@ -231,7 +244,7 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
           onChangeText={setPassword}
           secureTextEntry
           placeholder="••••••••"
-          placeholderTextColor="#64748b"
+          placeholderTextColor="#94a3b8"
         />
 
         {error && <Text style={styles.errorText}>{error}</Text>}
@@ -242,23 +255,27 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
           onPress={() => void handleSubmitAuth()}
         >
           {loading ? (
-            <ActivityIndicator color="#020617" />
+            <ActivityIndicator color="#ffffff" />
           ) : (
             <Text style={styles.primaryBtnText}>
               {mode === 'register' ? 'Register & Connect' : 'Sign In & Connect'}
             </Text>
           )}
         </TouchableOpacity>
+      </View>
 
-        <TouchableOpacity
-          onPress={() => setMode((m) => (m === 'register' ? 'login' : 'register'))}
-          style={styles.switchBtn}
-        >
-          <Text style={styles.switchText}>
-            {mode === 'register'
-              ? 'Already have an account? Switch to Sign In'
-              : 'New user? Switch to Register'}
-          </Text>
+      <View style={styles.card}>
+        <Text style={styles.label}>Manual QR JSON / Invite URL</Text>
+        <TextInput
+          style={styles.input}
+          value={manualInput}
+          onChangeText={setManualInput}
+          placeholder='{"v":1,"serverUrl":"https://...","inviteToken":"inv_..."}'
+          placeholderTextColor="#94a3b8"
+          autoCapitalize="none"
+        />
+        <TouchableOpacity style={styles.secondaryBtn} onPress={() => void handleBindManual()}>
+          <Text style={styles.secondaryBtnText}>Bind Invite Payload</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
@@ -268,102 +285,197 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
-    backgroundColor: '#020617',
-    padding: 20,
+    backgroundColor: '#eef3f6',
+    paddingHorizontal: 20,
+    paddingTop: 52,
+    paddingBottom: 32,
     gap: 14,
   },
-  title: {
-    marginTop: 28,
-    fontSize: 26,
+  header: {
+    gap: 6,
+    marginBottom: 4,
+  },
+  brandBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 7,
+    backgroundColor: '#ffffff',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  brandDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#80f15a',
+  },
+  brandBadgeText: {
+    color: '#18181b',
+    fontSize: 12,
     fontWeight: '700',
-    color: '#f8fafc',
+  },
+  title: {
+    marginTop: 6,
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+    color: '#18181b',
   },
   subtitle: {
-    fontSize: 13,
-    color: '#94a3b8',
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#64748b',
+  },
+  mintCtaBtn: {
+    backgroundColor: '#80f15a',
+    borderRadius: 999,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  mintCtaBtnText: {
+    color: '#09090b',
+    fontWeight: '700',
+    fontSize: 14,
   },
   card: {
-    backgroundColor: '#0f172a',
-    borderColor: '#1e293b',
+    backgroundColor: '#ffffff',
+    borderColor: '#e2e8f0',
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 14,
-    gap: 8,
+    borderRadius: 24,
+    padding: 18,
+    gap: 10,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.05,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
+  },
+  segmentWrap: {
+    flexDirection: 'row',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 999,
+    padding: 4,
+    marginBottom: 4,
+  },
+  segmentBtn: {
+    flex: 1,
+    borderRadius: 999,
+    paddingVertical: 9,
+    alignItems: 'center',
+  },
+  segmentBtnActive: {
+    backgroundColor: '#18181b',
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  segmentTextActive: {
+    color: '#ffffff',
   },
   label: {
     fontSize: 12,
-    color: '#cbd5e1',
+    color: '#475569',
     fontWeight: '600',
+    marginTop: 2,
   },
   input: {
-    backgroundColor: '#020617',
-    borderColor: '#334155',
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
     borderWidth: 1,
-    borderRadius: 8,
-    color: '#f8fafc',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 14,
+    color: '#18181b',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     fontSize: 14,
   },
   primaryBtn: {
-    backgroundColor: '#10b981',
-    borderRadius: 10,
-    paddingVertical: 13,
+    marginTop: 4,
+    backgroundColor: '#18181b',
+    borderRadius: 999,
+    paddingVertical: 14,
     alignItems: 'center',
   },
   primaryBtnText: {
-    color: '#020617',
+    color: '#ffffff',
     fontWeight: '700',
     fontSize: 14,
   },
   secondaryBtn: {
-    backgroundColor: '#1e293b',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    backgroundColor: '#f1f5f9',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
     alignItems: 'center',
   },
   secondaryBtnText: {
-    color: '#e2e8f0',
+    color: '#18181b',
     fontWeight: '600',
     fontSize: 13,
   },
   badge: {
-    backgroundColor: '#064e3b',
-    borderRadius: 8,
-    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  badgeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#22c55e',
   },
   badgeText: {
-    color: '#6ee7b7',
+    flex: 1,
+    color: '#166534',
     fontSize: 12,
     fontWeight: '600',
   },
   errorText: {
-    color: '#fda4af',
+    color: '#be123c',
+    backgroundColor: '#fff1f2',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     fontSize: 12,
-  },
-  switchBtn: {
-    paddingVertical: 6,
-    alignItems: 'center',
-  },
-  switchText: {
-    color: '#38bdf8',
-    fontSize: 12,
+    fontWeight: '500',
   },
   scannerWrap: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     justifyContent: 'flex-end',
   },
   scannerOverlay: {
-    padding: 24,
-    backgroundColor: 'rgba(2, 6, 23, 0.85)',
+    paddingHorizontal: 24,
+    paddingTop: 22,
+    paddingBottom: 34,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     alignItems: 'center',
     gap: 12,
   },
   scannerPrompt: {
-    color: '#f8fafc',
+    color: '#18181b',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });

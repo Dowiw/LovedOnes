@@ -264,7 +264,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
   const centerCoord: [number, number] = locations[0]
     ? [locations[0].longitude, locations[0].latitude]
-    : [2.3522, 48.8566];
+    : [13.4448, 52.5069];
 
   return (
     <View style={styles.root}>
@@ -272,107 +272,190 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         <Camera
           initialViewState={{
             center: centerCoord,
-            zoom: locations.length > 0 ? 11 : 3,
+            zoom: 11,
           }}
         />
         {locations.map((loc) => (
           <Marker key={loc.userId} id={loc.userId} lngLat={[loc.longitude, loc.latitude]}>
             <View style={styles.marker}>
               <Text style={styles.markerLabel}>
-                {loc.username} {loc.isFuzzed ? '(~1km)' : ''}
+                {loc.username}
+                {loc.isFuzzed ? ' (~1km)' : ''}
               </Text>
-              <View
-                style={[styles.markerDot, loc.isFuzzed ? styles.dotFuzzed : styles.dotExact]}
-              />
+              <View style={styles.markerHalo}>
+                <View
+                  style={[styles.markerDot, loc.isFuzzed ? styles.dotFuzzed : styles.dotExact]}
+                />
+              </View>
             </View>
           </Marker>
         ))}
       </Map>
 
-      {/* Top HUD */}
-      <View style={styles.topHud}>
-        <View style={styles.hudRow}>
-          <Text style={styles.hudTitle}>{activeGroup?.name ?? 'LovedOnes'}</Text>
+      {/* Top Floating Search / Group Capsule & Filter Chips */}
+      <View style={styles.topOverlay} pointerEvents="box-none">
+        <View style={styles.topCapsule}>
+          <View style={styles.topBrandDot} />
+          <View style={styles.topTitleWrap}>
+            <Text style={styles.topTitle} numberOfLines={1}>
+              {activeGroup?.name ?? 'LovedOnes'}
+            </Text>
+            <Text style={styles.topSubtitle} numberOfLines={1}>
+              {activeGroup ? `${activeGroup.myPrivacy} mode` : 'Live group map'}
+            </Text>
+          </View>
           <TouchableOpacity
-            style={styles.smallBtn}
+            style={styles.signOutPill}
             onPress={async () => {
               await stopBackgroundTracking().catch(() => {});
               await clearStoredConfig();
               onSignedOut();
             }}
           >
-            <Text style={styles.smallBtnText}>Sign Out</Text>
+            <Text style={styles.signOutText}>Sign Out</Text>
           </TouchableOpacity>
         </View>
-        {permissionInfo && (
-          <TouchableOpacity
-            onPress={() => void handleRequestPermissions()}
-            style={styles.permBannerBtn}
-          >
-            <Text style={styles.permBannerText}>{permissionInfo.label}</Text>
-          </TouchableOpacity>
-        )}
-        {statusBanner && <Text style={styles.statusText}>{statusBanner}</Text>}
-      </View>
 
-      {/* Bottom Controls */}
-      <View style={styles.bottomHud}>
-        {activeGroup && (
-          <View style={styles.privacyRow}>
-            {(['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => (
-              <TouchableOpacity
-                key={mode}
-                onPress={() => void handlePrivacyChange(mode)}
-                style={[
-                  styles.pillBtn,
-                  activeGroup.myPrivacy === mode && styles.pillBtnActive,
-                ]}
-              >
-                <Text style={styles.pillText}>{mode}</Text>
-              </TouchableOpacity>
-            ))}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipScroll}
+        >
+          {activeGroup &&
+            (['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => {
+              const selected = activeGroup.myPrivacy === mode;
+              return (
+                <TouchableOpacity
+                  key={mode}
+                  onPress={() => void handlePrivacyChange(mode)}
+                  style={[styles.chipPill, selected && styles.chipPillActive]}
+                >
+                  <Text style={[styles.chipText, selected && styles.chipTextActive]}>
+                    {mode}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+
+          {permissionInfo && (
+            <TouchableOpacity
+              onPress={() => void handleRequestPermissions()}
+              style={styles.chipPill}
+            >
+              <Text style={styles.chipPermText}>{permissionInfo.label}</Text>
+            </TouchableOpacity>
+          )}
+        </ScrollView>
+
+        {statusBanner && (
+          <View style={styles.statusToast}>
+            <Text style={styles.statusToastText} numberOfLines={1}>
+              {statusBanner}
+            </Text>
           </View>
         )}
+      </View>
 
-        <View style={styles.actionRow}>
+      {/* Right-Side Floating Stacked Map Controls */}
+      <View style={styles.rightStack}>
+        <TouchableOpacity
+          style={styles.stackBtn}
+          onPress={() => void handleCacheOfflineMap()}
+        >
+          <Text style={styles.stackBtnText}>
+            {localPmtilesUri ? 'Cached' : 'Cache'}
+          </Text>
+        </TouchableOpacity>
+        <View style={styles.stackDivider} />
+        <TouchableOpacity style={styles.stackBtn} onPress={() => void handleCheckOta()}>
+          <Text style={styles.stackBtnText}>OTA</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Bottom Floating Mint CTA + White Rounded Sheet */}
+      <View style={styles.bottomWrap} pointerEvents="box-none">
+        <View style={styles.floatingCtaRow} pointerEvents="box-none">
           <TouchableOpacity
-            style={[styles.actionBtn, tracking ? styles.stopBtn : styles.startBtn]}
+            style={styles.floatingCirclePill}
+            onPress={() => void handlePingAndSync()}
+          >
+            <Text style={styles.floatingCircleText}>Sync ({queuedCount})</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.mintCta, tracking && styles.mintCtaTracking]}
             onPress={() => void handleToggleTracking()}
           >
-            <Text style={styles.actionBtnText}>
-              {tracking ? 'Stop Background GPS' : 'Start Background GPS'}
+            <View style={[styles.mintCtaDot, tracking && styles.mintCtaDotActive]} />
+            <Text style={[styles.mintCtaText, tracking && styles.mintCtaTextActive]}>
+              {tracking ? 'Live GPS On' : 'Start GPS'}
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.secondaryBtn} onPress={() => void handlePingAndSync()}>
-            <Text style={styles.secondaryText}>Sync Queue ({queuedCount})</Text>
-          </TouchableOpacity>
+          <View style={styles.floatingSpacer} />
         </View>
 
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={() => setChatOpen(true)}>
-            <Text style={styles.secondaryText}>Group Chat ({messages.length})</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={() => void handleCacheOfflineMap()}>
-            <Text style={styles.secondaryText}>
-              {localPmtilesUri ? 'PMTiles Cached' : 'Cache PMTiles'}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={() => void handleCheckOta()}>
-            <Text style={styles.secondaryText}>OTA Check</Text>
-          </TouchableOpacity>
+        <View style={styles.bottomSheet}>
+          <View style={styles.sheetHandle} />
+          <Text style={styles.sheetSummary}>
+            {locations.length} {locations.length === 1 ? 'member' : 'members'} visible
+          </Text>
+
+          {locations.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.memberStrip}
+            >
+              {locations.map((loc) => (
+                <View key={loc.userId} style={styles.memberChip}>
+                  <View
+                    style={[
+                      styles.memberChipDot,
+                      loc.isFuzzed ? styles.dotFuzzed : styles.dotExact,
+                    ]}
+                  />
+                  <Text style={styles.memberChipText}>
+                    {loc.username}
+                    {loc.isFuzzed ? ' ~1km' : ''}
+                  </Text>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+
+          <View style={styles.tabBar}>
+            <TouchableOpacity style={[styles.tabItem, styles.tabItemActive]}>
+              <Text style={[styles.tabLabel, styles.tabLabelActive]}>Map</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.tabItem}
+              onPress={() => void handlePingAndSync()}
+            >
+              <Text style={styles.tabLabel}>Sync ({queuedCount})</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.tabItem} onPress={() => setChatOpen(true)}>
+              <Text style={styles.tabLabel}>Chat ({messages.length})</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
+      {/* Minimalist White Chat Sheet Modal */}
       <Modal visible={chatOpen} animationType="slide" onRequestClose={() => setChatOpen(false)}>
         <View style={styles.modalWrap}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>{activeGroup?.name ?? 'Group'} Chat</Text>
-            <TouchableOpacity onPress={() => setChatOpen(false)}>
-              <Text style={styles.closeText}>Close</Text>
+            <View>
+              <Text style={styles.modalTitle}>{activeGroup?.name ?? 'Group'} Chat</Text>
+              <Text style={styles.modalSubtitle}>{messages.length} messages</Text>
+            </View>
+            <TouchableOpacity style={styles.closePill} onPress={() => setChatOpen(false)}>
+              <Text style={styles.closeText}>Done</Text>
             </TouchableOpacity>
           </View>
-          <ScrollView style={styles.chatList}>
+          <ScrollView style={styles.chatList} contentContainerStyle={styles.chatListContent}>
             {messages.map((m) => (
               <View key={m.id} style={styles.chatBubble}>
                 <Text style={styles.chatSender}>{m.senderUsername}</Text>
@@ -385,8 +468,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               style={styles.chatInput}
               value={chatText}
               onChangeText={setChatText}
-              placeholder="Send message..."
-              placeholderTextColor="#64748b"
+              placeholder="Write a message..."
+              placeholderTextColor="#94a3b8"
             />
             <TouchableOpacity style={styles.sendBtn} onPress={handleSendChat}>
               <Text style={styles.sendBtnText}>Send</Text>
@@ -399,123 +482,370 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#020617' },
+  root: { flex: 1, backgroundColor: '#cfe3ee' },
   map: { flex: 1 },
   marker: { alignItems: 'center' },
   markerLabel: {
-    backgroundColor: 'rgba(15, 23, 42, 0.9)',
-    color: '#f8fafc',
-    fontSize: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    color: '#18181b',
+    fontSize: 11,
     fontWeight: '700',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginBottom: 2,
-  },
-  markerDot: { width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#fff' },
-  dotExact: { backgroundColor: '#10b981' },
-  dotFuzzed: { backgroundColor: '#f59e0b' },
-  topHud: {
-    position: 'absolute',
-    top: 46,
-    left: 12,
-    right: 12,
-    backgroundColor: 'rgba(15, 23, 42, 0.92)',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#1e293b',
-  },
-  hudRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  hudTitle: { color: '#f8fafc', fontWeight: '700', fontSize: 15 },
-  permBannerBtn: {
-    marginTop: 6,
-    backgroundColor: '#1e293b',
-    borderRadius: 6,
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    alignSelf: 'flex-start',
-  },
-  permBannerText: { color: '#38bdf8', fontSize: 11, fontWeight: '600' },
-  statusText: { color: '#94a3b8', fontSize: 11, marginTop: 4 },
-  smallBtn: { backgroundColor: '#1e293b', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
-  smallBtnText: { color: '#cbd5e1', fontSize: 11, fontWeight: '600' },
-  bottomHud: {
-    position: 'absolute',
-    bottom: 24,
-    left: 12,
-    right: 12,
-    backgroundColor: 'rgba(15, 23, 42, 0.94)',
-    borderRadius: 14,
-    padding: 12,
-    gap: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    marginBottom: 4,
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: '#e2e8f0',
+    overflow: 'hidden',
   },
-  privacyRow: { flexDirection: 'row', gap: 6 },
-  pillBtn: {
-    flex: 1,
-    borderRadius: 8,
-    paddingVertical: 7,
+  markerHalo: {
+    width: 24,
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
     alignItems: 'center',
-    backgroundColor: '#020617',
-    borderWidth: 1,
-    borderColor: '#334155',
+    justifyContent: 'center',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
   },
-  pillBtnActive: { backgroundColor: '#0284c7', borderColor: '#38bdf8' },
-  pillText: { color: '#f8fafc', fontSize: 11, fontWeight: '700' },
-  actionRow: { flexDirection: 'row', gap: 6 },
-  actionBtn: { flex: 1, borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
-  startBtn: { backgroundColor: '#10b981' },
-  stopBtn: { backgroundColor: '#f43f5e' },
-  actionBtnText: { color: '#020617', fontWeight: '700', fontSize: 12 },
-  secondaryBtn: {
+  markerDot: { width: 12, height: 12, borderRadius: 999 },
+  dotExact: { backgroundColor: '#16a34a' },
+  dotFuzzed: { backgroundColor: '#d97706' },
+  topOverlay: {
+    position: 'absolute',
+    top: 48,
+    left: 14,
+    right: 14,
+    gap: 10,
+  },
+  topCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingLeft: 14,
+    paddingRight: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.9)',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+  },
+  topBrandDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: '#80f15a',
+  },
+  topTitleWrap: {
     flex: 1,
-    backgroundColor: '#1e293b',
-    borderRadius: 8,
+  },
+  topTitle: {
+    color: '#18181b',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  topSubtitle: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  signOutPill: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  signOutText: {
+    color: '#18181b',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  chipScroll: {
+    gap: 8,
+    paddingRight: 12,
+  },
+  chipPill: {
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.95)',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  chipPillActive: {
+    borderColor: '#18181b',
+    backgroundColor: '#ffffff',
+  },
+  chipText: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  chipTextActive: {
+    color: '#18181b',
+    fontWeight: '700',
+  },
+  chipPermText: {
+    color: '#18181b',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  statusToast: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(24, 24, 27, 0.88)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  statusToastText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  rightStack: {
+    position: 'absolute',
+    right: 14,
+    top: 168,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+    overflow: 'hidden',
+  },
+  stackBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  stackBtnText: {
+    color: '#18181b',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  stackDivider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+  },
+  bottomWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    gap: 12,
+  },
+  floatingCtaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+  },
+  floatingCirclePill: {
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  floatingCircleText: {
+    color: '#18181b',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  floatingSpacer: {
+    width: 72,
+  },
+  mintCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#80f15a',
+    borderRadius: 999,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
+  },
+  mintCtaTracking: {
+    backgroundColor: '#18181b',
+  },
+  mintCtaDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#09090b',
+  },
+  mintCtaDotActive: {
+    backgroundColor: '#80f15a',
+  },
+  mintCtaText: {
+    color: '#09090b',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  mintCtaTextActive: {
+    color: '#ffffff',
+  },
+  bottomSheet: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingTop: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+    gap: 10,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 10,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 38,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
+  },
+  sheetSummary: {
+    textAlign: 'center',
+    color: '#18181b',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  memberStrip: {
+    gap: 8,
+    paddingVertical: 2,
+  },
+  memberChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  memberChipDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+  },
+  memberChipText: {
+    color: '#18181b',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  tabBar: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingTop: 4,
+  },
+  tabItem: {
+    flex: 1,
+    borderRadius: 999,
     paddingVertical: 10,
     alignItems: 'center',
   },
-  secondaryText: { color: '#e2e8f0', fontSize: 11, fontWeight: '600' },
-  modalWrap: { flex: 1, backgroundColor: '#020617', paddingTop: 48 },
+  tabItemActive: {
+    backgroundColor: '#f1f5f9',
+  },
+  tabLabel: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  tabLabelActive: {
+    color: '#18181b',
+    fontWeight: '700',
+  },
+  modalWrap: { flex: 1, backgroundColor: '#eef3f6', paddingTop: 52 },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    padding: 16,
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#1e293b',
+    borderBottomColor: '#e2e8f0',
   },
-  modalTitle: { color: '#f8fafc', fontSize: 16, fontWeight: '700' },
-  closeText: { color: '#38bdf8', fontSize: 14, fontWeight: '600' },
-  chatList: { flex: 1, padding: 14 },
+  modalTitle: { color: '#18181b', fontSize: 18, fontWeight: '700' },
+  modalSubtitle: { color: '#64748b', fontSize: 12 },
+  closePill: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  closeText: { color: '#18181b', fontSize: 13, fontWeight: '700' },
+  chatList: { flex: 1 },
+  chatListContent: { padding: 16, gap: 10 },
   chatBubble: {
-    backgroundColor: '#0f172a',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 8,
+    backgroundColor: '#ffffff',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
-  chatSender: { color: '#38bdf8', fontSize: 11, fontWeight: '700', marginBottom: 2 },
-  chatBody: { color: '#f8fafc', fontSize: 13 },
+  chatSender: { color: '#16a34a', fontSize: 11, fontWeight: '700', marginBottom: 3 },
+  chatBody: { color: '#18181b', fontSize: 14 },
   chatComposer: {
     flexDirection: 'row',
-    padding: 12,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 28,
     gap: 8,
+    backgroundColor: '#ffffff',
     borderTopWidth: 1,
-    borderTopColor: '#1e293b',
+    borderTopColor: '#e2e8f0',
   },
   chatInput: {
     flex: 1,
-    backgroundColor: '#0f172a',
-    borderRadius: 8,
-    paddingHorizontal: 12,
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 16,
     paddingVertical: 10,
-    color: '#f8fafc',
+    color: '#18181b',
+    fontSize: 14,
   },
   sendBtn: {
-    backgroundColor: '#38bdf8',
-    borderRadius: 8,
-    paddingHorizontal: 16,
+    backgroundColor: '#18181b',
+    borderRadius: 999,
+    paddingHorizontal: 18,
     justifyContent: 'center',
   },
-  sendBtnText: { color: '#020617', fontWeight: '700' },
+  sendBtnText: { color: '#ffffff', fontWeight: '700', fontSize: 13 },
 });

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Activity, LogOut, MapPin, QrCode, Shield } from 'lucide-react';
+import { Activity, LogOut, MapPin, QrCode } from 'lucide-react';
 import { AuthUser } from '@/lib/api';
 
 interface NavBarProps {
@@ -14,50 +14,50 @@ export function NavBar({ user, onSignOut }: NavBarProps) {
   const pathname = usePathname();
 
   return (
-    <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
-        <div className="flex items-center gap-6">
-          <Link href="/" className="flex items-center gap-2 text-lg font-semibold text-white">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
+    <header className="sticky top-0 z-30 px-4 pt-3 sm:px-6">
+      <div className="mx-auto flex max-w-7xl items-center justify-between rounded-full border border-slate-200/80 bg-white/85 px-4 py-2 shadow-[0_8px_28px_rgba(15,23,42,0.06)] backdrop-blur-xl">
+        <div className="flex items-center gap-4">
+          <Link href="/" className="flex items-center gap-2 text-sm font-semibold tracking-tight text-zinc-900">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-[#80f15a]">
               <MapPin className="h-4 w-4" />
             </span>
             <span>LovedOnes</span>
           </Link>
 
-          <nav className="flex items-center gap-2 text-sm">
+          <nav className="flex items-center gap-1 rounded-full bg-slate-100/90 p-1 text-xs font-medium">
             <Link
               href="/"
-              className={`rounded-md px-3 py-1.5 transition ${
+              className={`rounded-full px-3 py-1.5 transition ${
                 pathname === '/'
-                  ? 'bg-slate-800 text-white'
-                  : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+                  ? 'bg-zinc-900 text-white shadow-sm'
+                  : 'text-zinc-600 hover:text-zinc-900'
               }`}
             >
-              Live Map & Chat
+              Live Map
             </Link>
             {user?.role === 'HOST_ADMIN' && (
               <>
                 <Link
                   href="/admin"
-                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 transition ${
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 transition ${
                     pathname === '/admin'
-                      ? 'bg-slate-800 text-white'
-                      : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+                      ? 'bg-zinc-900 text-white shadow-sm'
+                      : 'text-zinc-600 hover:text-zinc-900'
                   }`}
                 >
-                  <Activity className="h-3.5 w-3.5 text-emerald-400" />
-                  Admin Telemetry
+                  <Activity className="h-3.5 w-3.5" />
+                  Telemetry
                 </Link>
                 <Link
                   href="/admin/invites"
-                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 transition ${
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 transition ${
                     pathname === '/admin/invites'
-                      ? 'bg-slate-800 text-white'
-                      : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+                      ? 'bg-zinc-900 text-white shadow-sm'
+                      : 'text-zinc-600 hover:text-zinc-900'
                   }`}
                 >
-                  <QrCode className="h-3.5 w-3.5 text-sky-400" />
-                  QR Invites
+                  <QrCode className="h-3.5 w-3.5" />
+                  Invites
                 </Link>
               </>
             )}
@@ -65,21 +65,24 @@ export function NavBar({ user, onSignOut }: NavBarProps) {
         </div>
 
         {user && (
-          <div className="flex items-center gap-3">
-            <div className="hidden items-center gap-2 rounded-full border border-slate-700 bg-slate-800/80 px-3 py-1 text-xs sm:flex">
-              <Shield className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="font-medium text-slate-200">{user.username}</span>
-              <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300">
-                {user.role}
+          <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs sm:flex">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-bold text-white">
+                {user.username.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="font-medium text-zinc-900">{user.username}</span>
+              <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-500">
+                {user.role === 'HOST_ADMIN' ? 'Admin' : 'Member'}
               </span>
             </div>
             <button
               type="button"
               onClick={onSignOut}
-              className="flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 transition hover:bg-slate-800 hover:text-white"
+              title="Sign out"
+              className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-slate-50 hover:text-zinc-950"
             >
               <LogOut className="h-3.5 w-3.5" />
-              Sign out
+              <span className="hidden sm:inline">Sign out</span>
             </button>
           </div>
         )}

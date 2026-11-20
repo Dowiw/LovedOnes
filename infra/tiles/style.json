@@ -12,7 +12,7 @@
       "id": "background",
       "type": "background",
       "paint": {
-        "background-color": "#0b1120"
+        "background-color": "#cfe3ee"
       }
     },
     {
@@ -21,16 +21,7 @@
       "source": "openmaptiles",
       "source-layer": "earth",
       "paint": {
-        "fill-color": "#0f172a"
-      }
-    },
-    {
-      "id": "water",
-      "type": "fill",
-      "source": "openmaptiles",
-      "source-layer": "water",
-      "paint": {
-        "fill-color": "#1e3a5f"
+        "fill-color": "#f3f2ed"
       }
     },
     {
@@ -39,8 +30,17 @@
       "source": "openmaptiles",
       "source-layer": "landuse",
       "paint": {
-        "fill-color": "#132238",
-        "fill-opacity": 0.7
+        "fill-color": "#d5e8ce",
+        "fill-opacity": 0.75
+      }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#bfe0f0"
       }
     },
     {
@@ -49,8 +49,26 @@
       "source": "openmaptiles",
       "source-layer": "buildings",
       "paint": {
-        "fill-color": "#1e293b",
-        "fill-outline-color": "#334155"
+        "fill-color": "#e6e4dd",
+        "fill-outline-color": "#d6d3cb"
+      }
+    },
+    {
+      "id": "roads-casing",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "roads",
+      "paint": {
+        "line-color": "#d4d8dd",
+        "line-width": [
+          "match",
+          ["get", "kind"],
+          "highway",
+          4.2,
+          "major_road",
+          3.0,
+          1.8
+        ]
       }
     },
     {
@@ -63,18 +81,18 @@
           "match",
           ["get", "kind"],
           "highway",
-          "#64748b",
+          "#ffffff",
           "major_road",
-          "#475569",
-          "#334155"
+          "#ffffff",
+          "#f8fafc"
         ],
         "line-width": [
           "match",
           ["get", "kind"],
           "highway",
-          2.2,
+          2.6,
           "major_road",
-          1.5,
+          1.8,
           1.0
         ]
       }
@@ -85,7 +103,7 @@
       "source": "openmaptiles",
       "source-layer": "boundaries",
       "paint": {
-        "line-color": "#475569",
+        "line-color": "#94a3b8",
         "line-dasharray": [2, 2],
         "line-width": 1
       }

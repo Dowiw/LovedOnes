@@ -439,3 +439,21 @@ export async function apiDeleteGroupPlace(
     },
   );
 }
+
+export async function apiFetchGroupTrails(
+  accessToken: string,
+  groupId: string,
+  options: { from?: string; to?: string; limit?: number } = {},
+): Promise<LocationBroadcast[]> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const params = new URLSearchParams();
+  if (options.from) params.set('from', options.from);
+  if (options.to) params.set('to', options.to);
+  if (options.limit) params.set('limit', String(options.limit));
+  const qs = params.toString();
+  const res = await requestJson<{ trails: LocationBroadcast[] }>(
+    `${realtimeBase}/api/realtime/groups/${groupId}/trails${qs ? `?${qs}` : ''}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  return res.trails;
+}
