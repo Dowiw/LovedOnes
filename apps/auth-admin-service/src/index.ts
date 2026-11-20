@@ -291,6 +291,20 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     return authGroup.listInvites(request.authUser!);
   });
 
+  app.delete(
+    '/api/admin/invites/:token',
+    { preHandler: [requireAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const { token } = request.params as { token: string };
+      const res = await authGroup.deleteInvite(request.authUser!, token);
+      loggerHandle.logger.info(
+        { userId: request.authUser!.id, token },
+        'admin deleted invite token',
+      );
+      return res;
+    },
+  );
+
   app.get('/api/admin/telemetry', { preHandler: [requireHostAdmin] }, async () => {
     return telemetryQuery.getSystemTelemetry();
   });

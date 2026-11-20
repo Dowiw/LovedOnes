@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { Trash2 } from 'lucide-react';
 import type { GroupRole } from '@loved-ones/shared';
 import { NavBar } from '@/components/NavBar';
 import { QrInvitePanel } from '@/components/QrInviteModal';
 import {
+  apiDeleteInvite,
   apiFetchGroups,
   apiListInvites,
   GroupItem,
@@ -29,6 +31,8 @@ export default function AdminInvitesPage() {
   const [session, setSession] = useState<StoredSession | null>(null);
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [invites, setInvites] = useState<InviteRow[]>([]);
+  const [deletingToken, setDeletingToken] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     setSession(loadSession());
@@ -50,6 +54,20 @@ export default function AdminInvitesPage() {
     if (!session) return;
     void refresh(session.accessToken).catch(() => {});
   }, [session, refresh]);
+
+  async function handleDeleteInvite(token: string) {
+    if (!session) return;
+    setDeletingToken(token);
+    setDeleteError(null);
+    try {
+      await apiDeleteInvite(session.accessToken, token);
+      setInvites((prev) => prev.filter((inv) => inv.token !== token));
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete invite');
+    } finally {
+      setDeletingToken((prev) => (prev === token ? null : prev));
+    }
+  }
 
   if (!session) {
     return (
@@ -91,8 +109,11 @@ export default function AdminInvitesPage() {
         />
 
         <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
-          <div className="border-b border-slate-100 px-5 py-3.5 text-sm font-semibold text-zinc-900">
-            Active &amp; Recent Invites ({invites.length})
+          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
+            <span className="text-sm font-semibold text-zinc-900">
+              Active &amp; Recent Invites ({invites.length})
+            </span>
+            {deleteError && <span className="text-xs font-medium text-rose-600">{deleteError}</span>}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
@@ -103,6 +124,7 @@ export default function AdminInvitesPage() {
                   <th className="px-5 py-3 font-medium">Role</th>
                   <th className="px-5 py-3 font-medium">Uses</th>
                   <th className="px-5 py-3 font-medium">Expires</th>
+                  <th className="px-5 py-3 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -117,11 +139,23 @@ export default function AdminInvitesPage() {
                     <td className="px-5 py-3 text-zinc-500">
                       {new Date(inv.expiresAt).toLocaleString()}
                     </td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        type="button"
+                        disabled={deletingToken === inv.token}
+                        onClick={() => void handleDeleteInvite(inv.token)}
+                        title="Delete invite"
+                        className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-600 transition hover:border-rose-200 hover:bg-rose-50 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        {deletingToken === inv.token ? 'Deleting...' : 'Delete'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {invites.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-5 py-6 text-center text-zinc-400">
+                    <td colSpan={6} className="px-5 py-6 text-center text-zinc-400">
                       No invites created yet.
                     </td>
                   </tr>

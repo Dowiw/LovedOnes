@@ -396,6 +396,18 @@ export async function apiListInvites(accessToken: string): Promise<
   return res.invites;
 }
 
+export async function apiDeleteInvite(
+  accessToken: string,
+  token: string,
+): Promise<{ deleted: boolean; token: string }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ deleted: boolean; token: string }>(
+    `${authBase}/api/admin/invites/${encodeURIComponent(token)}`,
+    accessToken,
+    { method: 'DELETE' },
+  );
+}
+
 export async function apiFetchTelemetry(accessToken: string): Promise<SystemTelemetry> {
   const { authBase } = getServiceBaseUrls();
   return requestAuthedJson<SystemTelemetry>(`${authBase}/api/admin/telemetry`, accessToken);

@@ -229,6 +229,9 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
       if (caller.systemRole === 'HOST_ADMIN') return all;
       return all.filter((inv) => memberships.get(mKey(caller.userId, inv.groupId))?.role === 'ADMIN');
     },
+    async deleteInvite(token) {
+      return invites.delete(token);
+    },
   };
 }
 
@@ -438,6 +441,21 @@ describe('AuthGroupModule domain interface', () => {
     await expect(
       mod.updateMemberRole(memberClaims, group.id, member.user.id, { role: 'ADMIN' }),
     ).rejects.toMatchObject({ statusCode: 403 });
+
+    // Non-admin cannot delete invite (403); missing invite returns 404; admin can delete
+    await expect(mod.deleteInvite(memberClaims, expInvite.inviteToken)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await expect(mod.deleteInvite(adminClaims, 'inv_missing')).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(mod.deleteInvite(adminClaims, expInvite.inviteToken)).resolves.toEqual({
+      deleted: true,
+      token: expInvite.inviteToken,
+    });
+    await expect(mod.previewInvite(expInvite.inviteToken)).rejects.toMatchObject({
+      statusCode: 404,
+    });
   });
 
   it('falls back to LAN Origin when PUBLIC_SERVER_URL is localhost', async () => {

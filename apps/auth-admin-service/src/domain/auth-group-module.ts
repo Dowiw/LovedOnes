@@ -141,6 +141,7 @@ export interface AuthGroupStore {
     expiresAt: Date;
   }): Promise<void>;
   listInvites(caller: { userId: string; systemRole: SystemRole }): Promise<InviteRecord[]>;
+  deleteInvite?(token: string): Promise<boolean>;
 }
 
 export interface SessionStore {
@@ -693,6 +694,31 @@ export class AuthGroupModule {
         expiresAt: r.expiresAt.toISOString(),
       })),
     };
+  }
+
+  async deleteInvite(
+    caller: JwtUserPayload,
+    token: string,
+  ): Promise<{ deleted: true; token: string }> {
+    const trimmedToken = token.trim();
+    const inv = trimmedToken ? await this.store.findInviteByToken(trimmedToken) : null;
+    if (!inv) {
+      throw new DomainError(404, 'Invite not found');
+    }
+
+    if (caller.role !== 'HOST_ADMIN') {
+      const membership = await this.store.findMembership(caller.id, inv.groupId);
+      if (membership?.role !== 'ADMIN') {
+        throw new DomainError(403, 'Must be group ADMIN or HOST_ADMIN');
+      }
+    }
+
+    if (!this.store.deleteInvite) {
+      throw new DomainError(501, 'Invite deletion not supported by store');
+    }
+
+    await this.store.deleteInvite(trimmedToken);
+    return { deleted: true, token: trimmedToken };
   }
 
   async createTrackerToken(

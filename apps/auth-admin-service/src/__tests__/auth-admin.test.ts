@@ -255,5 +255,27 @@ describe('@loved-ones/auth-admin-service integration', () => {
     });
     expect(loginNewRes.statusCode).toBe(200);
     expect(loginNewRes.json().user.avatarUrl).toBe(avatarPng);
+
+    // 12. Admin invite deletion & RBAC check
+    const memberDeleteRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/invites/${invite.inviteToken}`,
+      headers: { Authorization: `Bearer ${memberData.accessToken}` },
+    });
+    expect(memberDeleteRes.statusCode).toBe(403);
+
+    const adminDeleteRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/invites/${invite.inviteToken}`,
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(adminDeleteRes.statusCode).toBe(200);
+    expect(adminDeleteRes.json()).toEqual({ deleted: true, token: invite.inviteToken });
+
+    const previewDeletedRes = await app.inject({
+      method: 'GET',
+      url: `/api/auth/invites/${invite.inviteToken}`,
+    });
+    expect(previewDeletedRes.statusCode).toBe(404);
   });
 });

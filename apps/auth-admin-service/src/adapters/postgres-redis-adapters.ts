@@ -456,6 +456,11 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
     const res = await this.pool.query<PgInviteRow>(query, isHostAdmin ? [] : [caller.userId]);
     return res.rows.map(mapInvite);
   }
+
+  async deleteInvite(token: string): Promise<boolean> {
+    const res = await this.pool.query('DELETE FROM group_invites WHERE token = $1', [token]);
+    return (res.rowCount ?? 0) > 0;
+  }
 }
 
 export class RedisSessionStore implements SessionStore {
