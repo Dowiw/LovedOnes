@@ -12,6 +12,37 @@ const TRAIL_SOURCE_ID = 'lovedones-trails-src';
 const TRAIL_LINE_LAYER_ID = 'lovedones-trails-line';
 const TRAIL_POINT_LAYER_ID = 'lovedones-trails-pts';
 
+export type MapLabelLanguage = 'en' | 'local';
+
+const LANGUAGE_LABEL_LAYER_IDS = [
+  'pois-food-labels',
+  'pois-retail-labels',
+  'water-labels',
+  'road-labels',
+  'pois-parks-labels',
+  'pois-health-local',
+  'pois-civic-local',
+  'pois-landmarks-labels',
+  'pois-health-major',
+  'places-neighborhoods',
+  'places-cities',
+] as const;
+
+function buildLabelTextExpression(lang: MapLabelLanguage): maplibregl.ExpressionSpecification {
+  return lang === 'local'
+    ? ['coalesce', ['get', 'name'], ['get', 'name:en']]
+    : ['coalesce', ['get', 'name:en'], ['get', 'name']];
+}
+
+function applyMapLabelLanguage(map: maplibregl.Map, lang: MapLabelLanguage): void {
+  const expr = buildLabelTextExpression(lang);
+  for (const layerId of LANGUAGE_LABEL_LAYER_IDS) {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, 'text-field', expr);
+    }
+  }
+}
+
 function escapeHtml(raw: string): string {
   return raw
     .replace(/&/g, '&amp;')
@@ -45,6 +76,7 @@ interface MapCanvasProps {
   currentUserId?: string | null;
   selfLocation?: SelfLocationFix | null;
   focusCoords?: FocusCoordsRequest | null;
+  labelLanguage?: MapLabelLanguage;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
   className?: string;
 }
@@ -59,6 +91,7 @@ export function MapCanvas({
   currentUserId = null,
   selfLocation = null,
   focusCoords = null,
+  labelLanguage = 'en',
   onMapSelectCoords,
   className = 'relative h-full w-full overflow-hidden bg-[#cfe3ee]',
 }: MapCanvasProps) {
@@ -69,6 +102,8 @@ export function MapCanvas({
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const selfMarkerRef = useRef<maplibregl.Marker | null>(null);
   const hasAutoFramedRef = useRef(false);
+  const labelLanguageRef = useRef<MapLabelLanguage>(labelLanguage);
+  labelLanguageRef.current = labelLanguage;
   const onSelectCoordsRef = useRef(onMapSelectCoords);
   onSelectCoordsRef.current = onMapSelectCoords;
 
@@ -82,7 +117,7 @@ export function MapCanvas({
     }
 
     const { tilesBase } = getServiceBaseUrls();
-    const styleUrl = `${tilesBase}/tiles/style.json?v=4`;
+    const styleUrl = `${tilesBase}/tiles/style.json?v=5`;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
@@ -104,6 +139,7 @@ export function MapCanvas({
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
     map.on('load', () => {
       styleReadyRef.current = true;
+      applyMapLabelLanguage(map, labelLanguageRef.current);
     });
     map.on('error', () => {
       if (!map.isStyleLoaded()) {
@@ -425,6 +461,14 @@ export function MapCanvas({
       map.once('load', applyTrailsLayer);
     }
   }, [trails, showTrails]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (styleReadyRef.current || map.isStyleLoaded()) {
+      applyMapLabelLanguage(map, labelLanguage);
+    }
+  }, [labelLanguage]);
 
   return <div ref={containerRef} className={className} />;
 }

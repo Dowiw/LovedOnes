@@ -31,6 +31,7 @@ import {
   checkForOtaUpdate,
   downloadOfflineRegionPmtiles,
   getCachedRegionPmtilesUri,
+  type MapLabelLanguage,
 } from '../services/pmtilesStyle';
 import { clearStoredConfig, MobileStoredConfig, saveStoredConfig } from '../services/secureConfig';
 
@@ -58,6 +59,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
+  const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
@@ -72,8 +74,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   );
 
   const mapStyle = useMemo(
-    () => buildMobileMapStyle(serverUrl, localPmtilesUri),
-    [serverUrl, localPmtilesUri],
+    () => buildMobileMapStyle(serverUrl, localPmtilesUri, labelLanguage),
+    [serverUrl, localPmtilesUri, labelLanguage],
   );
 
   const refreshQueueCount = useCallback(async () => {
@@ -428,7 +430,14 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             </Text>
           </TouchableOpacity>
 
-          <View style={styles.floatingSpacer} />
+          <TouchableOpacity
+            style={styles.floatingCirclePill}
+            onPress={() => setLabelLanguage((prev) => (prev === 'en' ? 'local' : 'en'))}
+          >
+            <Text style={styles.floatingCircleText}>
+              {labelLanguage === 'en' ? 'EN' : 'Local'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.bottomSheet}>

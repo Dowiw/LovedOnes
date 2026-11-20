@@ -92,7 +92,18 @@ describe('@loved-ones/mobile-app', () => {
     expect(style.glyphs).toBe(
       'https://track.example.com/tiles/fonts/{fontstack}/{range}.pbf',
     );
-    expect(style.layers.some((l) => l.id === 'road-labels' && l.type === 'symbol')).toBe(true);
+    const roadLabels = style.layers.find((l) => l.id === 'road-labels');
+    expect(roadLabels?.type).toBe('symbol');
+    expect((roadLabels as { layout?: { 'text-field'?: unknown } })?.layout?.['text-field']).toEqual([
+      'coalesce',
+      ['get', 'name:en'],
+      ['get', 'name'],
+    ]);
+    const localStyle = buildMobileMapStyle('https://track.example.com', null, 'local');
+    const localRoadLabels = localStyle.layers.find((l) => l.id === 'road-labels');
+    expect(
+      (localRoadLabels as { layout?: { 'text-field'?: unknown } })?.layout?.['text-field'],
+    ).toEqual(['coalesce', ['get', 'name'], ['get', 'name:en']]);
     expect(style.sources.openmaptiles).toEqual({
       type: 'vector',
       url: 'pmtiles://https://track.example.com/tiles/region.pmtiles',

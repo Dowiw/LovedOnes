@@ -1,5 +1,7 @@
 import type { StyleSpecification } from '@maplibre/maplibre-react-native';
 
+export type MapLabelLanguage = 'en' | 'local';
+
 export function buildPmtilesSourceUrl(serverUrl: string, localFileUri?: string | null): string {
   if (localFileUri && localFileUri.trim().length > 0) {
     const normalized = localFileUri.startsWith('file://')
@@ -14,9 +16,14 @@ export function buildPmtilesSourceUrl(serverUrl: string, localFileUri?: string |
 export function buildMobileMapStyle(
   serverUrl: string,
   localFileUri?: string | null,
+  labelLanguage: MapLabelLanguage = 'en',
 ): StyleSpecification {
   const cleanServer = serverUrl.replace(/\/$/, '');
   const pmtilesUrl = buildPmtilesSourceUrl(serverUrl, localFileUri);
+  const labelTextField: ['coalesce', ['get', string], ['get', string]] =
+    labelLanguage === 'local'
+      ? ['coalesce', ['get', 'name'], ['get', 'name:en']]
+      : ['coalesce', ['get', 'name:en'], ['get', 'name']];
   return {
     version: 8,
     name: 'LovedOnes Mobile PMTiles Style',
@@ -189,7 +196,7 @@ export function buildMobileMapStyle(
           ['has', 'name'],
         ],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Medium'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 14.5, 10, 17, 11.5],
           'text-max-width': 9,
@@ -242,7 +249,7 @@ export function buildMobileMapStyle(
           ['has', 'name'],
         ],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Medium'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 13.8, 10, 17, 12],
           'text-max-width': 9,
@@ -262,7 +269,7 @@ export function buildMobileMapStyle(
         filter: ['all', ['==', ['geometry-type'], 'LineString'], ['has', 'name']],
         layout: {
           'symbol-placement': 'line',
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Medium'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10, 15, 12],
           'symbol-spacing': 380,
@@ -282,7 +289,7 @@ export function buildMobileMapStyle(
         filter: ['all', ['!', ['in', ['get', 'kind'], ['literal', ['rail', 'path']]]], ['has', 'name']],
         layout: {
           'symbol-placement': 'line',
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Medium'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 14, 11.5, 17, 13.5],
           'text-max-angle': 45,
@@ -306,7 +313,7 @@ export function buildMobileMapStyle(
           ['has', 'name'],
         ],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Medium'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 12.5, 10.5, 16, 12],
           'text-max-width': 9,
@@ -329,7 +336,7 @@ export function buildMobileMapStyle(
           ['has', 'name'],
         ],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Medium'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10, 17, 11.5],
           'text-max-width': 9,
@@ -352,7 +359,7 @@ export function buildMobileMapStyle(
           ['has', 'name'],
         ],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Regular'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 14.2, 10, 17, 11.5],
           'text-max-width': 9,
@@ -397,7 +404,7 @@ export function buildMobileMapStyle(
           ['has', 'name'],
         ],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Medium'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 12.5, 10.5, 16, 12.5],
           'text-max-width': 9,
@@ -420,7 +427,7 @@ export function buildMobileMapStyle(
           ['has', 'name'],
         ],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-SemiBold'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 12.5, 10.5, 16, 12.5],
           'text-max-width': 9,
@@ -439,7 +446,7 @@ export function buildMobileMapStyle(
         minzoom: 11,
         filter: ['!', ['in', ['get', 'kind'], ['literal', ['locality', 'country', 'region']]]],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-Medium'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 11, 11, 14, 13.5],
           'text-max-width': 9,
@@ -458,7 +465,7 @@ export function buildMobileMapStyle(
         minzoom: 3,
         filter: ['in', ['get', 'kind'], ['literal', ['locality', 'country', 'region']]],
         layout: {
-          'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
+          'text-field': labelTextField,
           'text-font': ['PlusJakartaSans-SemiBold'],
           'text-size': ['interpolate', ['linear'], ['zoom'], 5, 11, 10, 15, 13, 18],
           'text-max-width': 8,

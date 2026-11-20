@@ -10,6 +10,7 @@ import {
   Compass,
   Copy,
   EyeOff,
+  Globe,
   KeyRound,
   Layers,
   LocateFixed,
@@ -35,7 +36,7 @@ import type {
   PlaceTransitionEvent,
   PrivacyMode,
 } from '@loved-ones/shared';
-import { MapCanvas } from '@/components/MapCanvas';
+import { MapCanvas, type MapLabelLanguage } from '@/components/MapCanvas';
 import {
   apiCreateGroup,
   apiCreateGroupPlace,
@@ -134,10 +135,28 @@ export default function HomePage() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('people');
+  const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
 
   useEffect(() => {
     setSession(loadSession());
+    try {
+      const savedLang = window.localStorage.getItem('lovedones_map_lang_v1');
+      if (savedLang === 'en' || savedLang === 'local') {
+        setLabelLanguage(savedLang);
+      }
+    } catch {
+      // ignore storage failures
+    }
   }, []);
+
+  function handleChangeLabelLanguage(lang: MapLabelLanguage) {
+    setLabelLanguage(lang);
+    try {
+      window.localStorage.setItem('lovedones_map_lang_v1', lang);
+    } catch {
+      // ignore storage failures
+    }
+  }
 
   const activeGroup = useMemo(
     () => groups.find((g) => g.id === activeGroupId) ?? groups[0] ?? null,
@@ -731,6 +750,7 @@ export default function HomePage() {
         currentUserId={session.user.id}
         selfLocation={selfLocation}
         focusCoords={focusCoords}
+        labelLanguage={labelLanguage}
         onMapSelectCoords={(lat, lon) => {
           setPlaceLat(String(lat));
           setPlaceLon(String(lon));
@@ -1456,6 +1476,33 @@ export default function HomePage() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Bottom-Right Map Label Language Toggle */}
+      <div
+        title="Switch map label language between English and local street/landmark names"
+        className="pointer-events-auto absolute bottom-[5.25rem] right-2.5 z-20 flex items-center gap-1 rounded-full border border-white/75 bg-white/90 p-1 shadow-[0_8px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl sm:bottom-4 sm:right-14"
+      >
+        <Globe className="ml-2 mr-0.5 h-3 w-3 text-zinc-500" />
+        {(
+          [
+            ['en', 'EN'],
+            ['local', 'Local'],
+          ] as const
+        ).map(([lang, label]) => (
+          <button
+            key={lang}
+            type="button"
+            onClick={() => handleChangeLabelLanguage(lang)}
+            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+              labelLanguage === lang
+                ? 'bg-zinc-900 text-white shadow-sm'
+                : 'text-zinc-600 hover:text-zinc-900'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
     </div>
   );
