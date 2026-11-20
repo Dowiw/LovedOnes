@@ -524,6 +524,55 @@ export const LogEntrySchema = z.object({
 }).passthrough();
 export type LogEntry = z.infer<typeof LogEntrySchema>;
 
+// ---- Remote System Update Schemas ----
+
+export const SystemUpdatePhaseSchema = z.enum([
+  'idle',
+  'checking',
+  'pulling',
+  'building',
+  'restarting',
+  'completed',
+  'failed',
+]);
+export type SystemUpdatePhase = z.infer<typeof SystemUpdatePhaseSchema>;
+
+export const SystemUpdateCommitSchema = z.object({
+  sha: z.string(),
+  message: z.string(),
+  author: z.string().optional(),
+  date: z.string().optional(),
+});
+export type SystemUpdateCommit = z.infer<typeof SystemUpdateCommitSchema>;
+
+export const SystemUpdateStatusSchema = z.object({
+  enabled: z.boolean(),
+  disabledReason: z.string().nullable().optional(),
+  phase: SystemUpdatePhaseSchema,
+  running: z.boolean(),
+  branch: z.string().nullable(),
+  currentCommit: z.string().nullable(),
+  currentCommitMessage: z.string().nullable(),
+  upstreamBranch: z.string().nullable(),
+  remoteCommit: z.string().nullable(),
+  commitsBehind: z.number().int().nonnegative(),
+  pendingCommits: z.array(SystemUpdateCommitSchema),
+  updateAvailable: z.boolean(),
+  workingTreeDirty: z.boolean(),
+  lastCheckedAt: z.string().nullable(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  targetCommit: z.string().nullable(),
+  error: z.string().nullable(),
+  logs: z.array(z.string()),
+});
+export type SystemUpdateStatus = z.infer<typeof SystemUpdateStatusSchema>;
+
+export const TriggerSystemUpdateSchema = z.object({
+  rebuildEvenIfCurrent: z.boolean().default(false),
+});
+export type TriggerSystemUpdateInput = z.infer<typeof TriggerSystemUpdateSchema>;
+
 // ---- Third-Party Tracker Schemas (OwnTracks & Overland) ----
 
 export const OwnTracksLocationItemSchema = z

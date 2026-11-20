@@ -4,16 +4,25 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle,
+  ArrowUpCircle,
+  CheckCircle2,
   CloudDownload,
   Cpu,
   Database,
   HardDrive,
+  Loader2,
   QrCode,
   Radio,
   RefreshCw,
+  Terminal,
   Trash2,
 } from 'lucide-react';
-import type { MapDownloadJob, MapRegion, SystemTelemetry } from '@loved-ones/shared';
+import type {
+  MapDownloadJob,
+  MapRegion,
+  SystemTelemetry,
+  SystemUpdateStatus,
+} from '@loved-ones/shared';
 import { LiveLogTerminal } from '@/components/LiveLogTerminal';
 import { NavBar } from '@/components/NavBar';
 import { QrInvitePanel } from '@/components/QrInviteModal';
@@ -22,7 +31,9 @@ import {
   apiFetchGroups,
   apiFetchMapJobs,
   apiFetchMapRegions,
+  apiFetchSystemUpdateStatus,
   apiFetchTelemetry,
+  apiTriggerSystemUpdate,
   formatBytes,
   GroupItem,
   loadSession,
@@ -36,6 +47,12 @@ export default function AdminDashboardPage() {
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
   const [mapJobs, setMapJobs] = useState<MapDownloadJob[]>([]);
+  const [updateStatus, setUpdateStatus] = useState<SystemUpdateStatus | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [startingUpdate, setStartingUpdate] = useState(false);
+  const [confirmUpdateMode, setConfirmUpdateMode] = useState<'pull' | 'rebuild' | null>(null);
+  const [reconnectingDuringUpdate, setReconnectingDuringUpdate] = useState(false);
+  const [showUpdateLogs, setShowUpdateLogs] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,21 +62,63 @@ export default function AdminDashboardPage() {
 
   const refreshData = useCallback(async (token: string) => {
     try {
-      const [stats, grpList, regionsData, jobs] = await Promise.all([
+      const [stats, grpList, regionsData, jobs, sysUpdate] = await Promise.all([
         apiFetchTelemetry(token),
         apiFetchGroups(token),
         apiFetchMapRegions(),
         apiFetchMapJobs(token),
+        apiFetchSystemUpdateStatus(token, false).catch(() => null),
       ]);
       setTelemetry(stats);
       setGroups(grpList);
       setMapRegions(regionsData.regions);
       setMapJobs(jobs);
+      if (sysUpdate) {
+        setUpdateStatus(sysUpdate);
+        setReconnectingDuringUpdate(false);
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load telemetry');
     }
   }, []);
+
+  const handleCheckForUpdates = useCallback(async () => {
+    if (!session) return;
+    setCheckingUpdate(true);
+    try {
+      const next = await apiFetchSystemUpdateStatus(session.accessToken, true);
+      setUpdateStatus(next);
+      setReconnectingDuringUpdate(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to check for system updates');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }, [session]);
+
+  const handleTriggerUpdate = useCallback(
+    async (rebuildEvenIfCurrent: boolean) => {
+      if (!session) return;
+      setStartingUpdate(true);
+      setConfirmUpdateMode(null);
+      setShowUpdateLogs(true);
+      try {
+        const next = await apiTriggerSystemUpdate(session.accessToken, {
+          rebuildEvenIfCurrent,
+        });
+        setUpdateStatus(next);
+        setReconnectingDuringUpdate(false);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to start system update');
+      } finally {
+        setStartingUpdate(false);
+      }
+    },
+    [session],
+  );
 
   useEffect(() => {
     if (!session) return;
@@ -69,6 +128,25 @@ export default function AdminDashboardPage() {
     }, 5000);
     return () => clearInterval(interval);
   }, [session, refreshData]);
+
+  // Poll update job faster while running, tolerating transient 502/network drops during container swap
+  useEffect(() => {
+    if (!session || !updateStatus?.running) return;
+    const token = session.accessToken;
+    const timer = setInterval(async () => {
+      try {
+        const next = await apiFetchSystemUpdateStatus(token, false);
+        setUpdateStatus(next);
+        setReconnectingDuringUpdate(false);
+        if (!next.running) {
+          void refreshData(token);
+        }
+      } catch {
+        setReconnectingDuringUpdate(true);
+      }
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [session, updateStatus?.running, refreshData]);
 
   if (!session || session.user.role !== 'HOST_ADMIN') {
     return (
@@ -162,6 +240,212 @@ export default function AdminDashboardPage() {
             onClose={() => setShowInviteModal(false)}
           />
         )}
+
+        <section className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold text-zinc-950">Remote System Update</h2>
+                {updateStatus ? (
+                  updateStatus.running ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      {updateStatus.phase === 'pulling'
+                        ? 'Pulling updates'
+                        : updateStatus.phase === 'building'
+                          ? 'Building containers'
+                          : 'Restarting services'}
+                    </span>
+                  ) : !updateStatus.enabled ? (
+                    <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-medium text-zinc-600">
+                      Local / Disabled
+                    </span>
+                  ) : updateStatus.updateAvailable ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800">
+                      <ArrowUpCircle className="h-3 w-3" />
+                      {updateStatus.commitsBehind} update
+                      {updateStatus.commitsBehind === 1 ? '' : 's'} available
+                    </span>
+                  ) : updateStatus.phase === 'failed' ? (
+                    <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700">
+                      Last update failed
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Up to date
+                    </span>
+                  )
+                ) : (
+                  <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] text-zinc-500">
+                    Checking...
+                  </span>
+                )}
+              </div>
+
+              <p className="text-xs text-zinc-500">
+                {updateStatus?.currentCommit ? (
+                  <>
+                    Running{' '}
+                    <span className="font-mono font-medium text-zinc-800">
+                      {updateStatus.branch ?? 'HEAD'}@{updateStatus.currentCommit}
+                    </span>
+                    {updateStatus.currentCommitMessage
+                      ? ` — ${updateStatus.currentCommitMessage}`
+                      : ''}
+                  </>
+                ) : updateStatus?.disabledReason ? (
+                  updateStatus.disabledReason
+                ) : (
+                  'Inspect git upstream and rebuild/restart LovedOnes containers remotely.'
+                )}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={checkingUpdate || Boolean(updateStatus?.running) || !updateStatus?.enabled}
+                onClick={() => void handleCheckForUpdates()}
+                className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3.5 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdate ? 'animate-spin' : ''}`} />
+                {checkingUpdate ? 'Checking...' : 'Check Updates'}
+              </button>
+
+              {confirmUpdateMode ? (
+                <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1">
+                  <span className="text-[11px] font-medium text-zinc-700">
+                    {confirmUpdateMode === 'pull'
+                      ? 'Pull & restart stack?'
+                      : 'Rebuild & restart stack?'}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={startingUpdate}
+                    onClick={() => void handleTriggerUpdate(confirmUpdateMode === 'rebuild')}
+                    className="lo-press inline-flex items-center gap-1 rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {startingUpdate && <Loader2 className="h-3 w-3 animate-spin" />}
+                    Confirm
+                  </button>
+                  <button
+                    type="button"
+                    disabled={startingUpdate}
+                    onClick={() => setConfirmUpdateMode(null)}
+                    className="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-200/70"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : updateStatus?.updateAvailable ? (
+                <button
+                  type="button"
+                  disabled={
+                    startingUpdate ||
+                    Boolean(updateStatus.running) ||
+                    !updateStatus.enabled ||
+                    updateStatus.workingTreeDirty
+                  }
+                  onClick={() => setConfirmUpdateMode('pull')}
+                  className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ArrowUpCircle className="h-3.5 w-3.5" />
+                  Update System
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={
+                    startingUpdate ||
+                    !updateStatus?.enabled ||
+                    Boolean(updateStatus?.running) ||
+                    Boolean(updateStatus?.workingTreeDirty)
+                  }
+                  onClick={() => setConfirmUpdateMode('rebuild')}
+                  className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ArrowUpCircle className="h-3.5 w-3.5" />
+                  Rebuild &amp; Restart
+                </button>
+              )}
+
+              {updateStatus && updateStatus.logs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowUpdateLogs((v) => !v)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50"
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                  {showUpdateLogs ? 'Hide Output' : 'Build Output'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {updateStatus?.workingTreeDirty && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                Host repository has uncommitted changes to tracked files. Clean or commit them on
+                the host before triggering a remote update.
+              </span>
+            </div>
+          )}
+
+          {reconnectingDuringUpdate && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-700" />
+              <span>
+                Updated containers are swapping cleanly — reconnecting automatically in a few
+                seconds...
+              </span>
+            </div>
+          )}
+
+          {updateStatus?.error && !updateStatus.running && (
+            <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              {updateStatus.error}
+            </div>
+          )}
+
+          {updateStatus?.phase === 'completed' && updateStatus.finishedAt && !updateStatus.running && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                Last update completed cleanly
+                {updateStatus.targetCommit ? ` at ${updateStatus.targetCommit}` : ''} (
+                {new Date(updateStatus.finishedAt).toLocaleString()}).
+              </span>
+            </div>
+          )}
+
+          {updateStatus && updateStatus.pendingCommits.length > 0 && (
+            <div className="mt-3 rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                Pending Updates ({updateStatus.upstreamBranch ?? 'upstream'})
+              </div>
+              <ul className="mt-1.5 space-y-1 text-xs text-zinc-700">
+                {updateStatus.pendingCommits.map((c) => (
+                  <li key={c.sha} className="flex items-baseline gap-2">
+                    <span className="font-mono text-[11px] font-semibold text-zinc-900">
+                      {c.sha}
+                    </span>
+                    <span className="truncate">{c.message}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {(showUpdateLogs || updateStatus?.running) &&
+            updateStatus &&
+            updateStatus.logs.length > 0 && (
+              <pre className="mt-3 max-h-48 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed text-zinc-200">
+                {updateStatus.logs.join('\n')}
+              </pre>
+            )}
+        </section>
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl">

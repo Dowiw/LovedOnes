@@ -102,6 +102,8 @@ services:
       ALLOW_MEMBER_MAP_DOWNLOADS: ${ALLOW_MEMBER_MAP_DOWNLOADS:-true}
       MAX_MAP_EXTRACT_MB: ${MAX_MAP_EXTRACT_MB:-1024}
       PUBLIC_SERVER_URL: ${PUBLIC_SERVER_URL:-http://localhost:${GATEWAY_PORT:-8080}}
+      SYSTEM_UPDATER_URL: ${SYSTEM_UPDATER_URL:-http://system-updater:4010}
+      ALLOW_REMOTE_SYSTEM_UPDATE: ${ALLOW_REMOTE_SYSTEM_UPDATE:-true}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_SECURE: ${SMTP_SECURE:-false}
@@ -197,6 +199,31 @@ services:
         condition: service_healthy
       realtime-service:
         condition: service_healthy
+
+  system-updater:
+    build:
+      context: .
+      dockerfile: infra/docker/updater/Dockerfile
+    container_name: lovedones-system-updater
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PORT: 4010
+      REPO_DIR: /repo
+      STATE_FILE: /var/log/app/system-update.json
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-key-minimum-32-characters-long}
+      ALLOW_REMOTE_SYSTEM_UPDATE: ${ALLOW_REMOTE_SYSTEM_UPDATE:-true}
+    volumes:
+      - .:/repo
+      - ./logs:/var/log/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4010/health | grep -q '\"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
 volumes:
   pgdata:

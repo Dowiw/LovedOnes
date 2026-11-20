@@ -31,6 +31,10 @@ import {
   MapRegionsModule,
   MapRegionsModuleOptions,
 } from './domain/map-regions-module.js';
+import {
+  SystemUpdateDriver,
+  SystemUpdateModule,
+} from './domain/system-update-module.js';
 import { TelemetryQueryModule } from './domain/telemetry-query-module.js';
 
 export interface AuthAdminOptions {
@@ -43,6 +47,11 @@ export interface AuthAdminOptions {
   publicServerUrl?: string;
   emailSender?: EmailSender;
   mapRegions?: MapRegionsModuleOptions;
+  systemUpdater?: {
+    driver?: SystemUpdateDriver;
+    updaterUrl?: string;
+    allowRemoteUpdate?: boolean;
+  };
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
 }
@@ -105,6 +114,15 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     onLog: (level, msg, meta) => {
       loggerHandle.logger[level](meta ?? {}, msg);
     },
+  });
+  const systemUpdater = new SystemUpdateModule({
+    driver: options.systemUpdater?.driver,
+    updaterUrl: options.systemUpdater?.updaterUrl ?? process.env.SYSTEM_UPDATER_URL,
+    jwtSecret,
+    stateFilePath: path.join(logDir, 'system-update.json'),
+    allowRemoteUpdate:
+      options.systemUpdater?.allowRemoteUpdate ??
+      process.env.ALLOW_REMOTE_SYSTEM_UPDATE !== 'false',
   });
 
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
@@ -570,6 +588,50 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   app.get('/api/admin/logs/recent', { preHandler: [requireHostAdmin] }, async () => {
     return telemetryQuery.getRecentLogs(200);
   });
+
+  app.get(
+    '/api/admin/system/update',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const query = (request.query ?? {}) as { refresh?: string };
+      const refresh = query.refresh === '1' || query.refresh === 'true';
+      const status = await systemUpdater.getStatus(refresh);
+      if (refresh) {
+        loggerHandle.logger.info(
+          {
+            action: 'system.update_checked',
+            userId: actor.id,
+            username: actor.username,
+            commitsBehind: status.commitsBehind,
+            updateAvailable: status.updateAvailable,
+          },
+          `${actor.username} checked for system updates (${status.commitsBehind} commit(s) behind)`,
+        );
+      }
+      return status;
+    },
+  );
+
+  app.post(
+    '/api/admin/system/update',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest, reply) => {
+      const actor = request.authUser!;
+      const result = await systemUpdater.triggerUpdate(request.body);
+      loggerHandle.logger.info(
+        {
+          action: 'system.update_started',
+          userId: actor.id,
+          username: actor.username,
+          phase: result.status.phase,
+          targetCommit: result.status.targetCommit,
+        },
+        `${actor.username} triggered a remote system update (${result.status.phase})`,
+      );
+      return reply.code(result.statusCode).send(result.status);
+    },
+  );
 
   // ---- Dynamic Map Region Coverage & PMTiles Download Endpoints ----
 

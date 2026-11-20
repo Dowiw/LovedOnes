@@ -32,6 +32,7 @@ describe('@loved-ones/auth-admin-service integration', () => {
   let logDir: string;
   let baseUrl: string;
   const sentEmails: Array<{ to: string; subject: string; text: string }> = [];
+  let updaterApplyCount = 0;
 
   beforeAll(async () => {
     await recreateTestDatabase(TEST_DB_NAME);
@@ -50,6 +51,64 @@ describe('@loved-ones/auth-admin-service integration', () => {
         isConfigured: () => true,
         async sendMail(msg) {
           sentEmails.push({ to: msg.to, subject: msg.subject, text: msg.text });
+        },
+      },
+      systemUpdater: {
+        driver: {
+          async getStatus(refresh) {
+            return {
+              enabled: true,
+              disabledReason: null,
+              phase: updaterApplyCount > 0 ? 'pulling' : 'idle',
+              running: updaterApplyCount > 0,
+              branch: 'main',
+              currentCommit: 'be116f1',
+              currentCommitMessage: 'feat(trails): average nearby stationary trail pings',
+              upstreamBranch: 'origin/main',
+              remoteCommit: 'c0ffee1',
+              commitsBehind: 1,
+              pendingCommits: [
+                { sha: 'c0ffee1', message: 'feat: remote system updater', author: 'Admin' },
+              ],
+              updateAvailable: true,
+              workingTreeDirty: false,
+              lastCheckedAt: refresh ? '2026-11-20T21:35:00.000Z' : null,
+              startedAt: updaterApplyCount > 0 ? '2026-11-20T21:35:10.000Z' : null,
+              finishedAt: null,
+              targetCommit: updaterApplyCount > 0 ? 'c0ffee1' : null,
+              error: null,
+              logs: updaterApplyCount > 0 ? ['Pulling origin/main...'] : [],
+            };
+          },
+          async applyUpdate() {
+            updaterApplyCount += 1;
+            return {
+              statusCode: 202,
+              status: {
+                enabled: true,
+                disabledReason: null,
+                phase: 'pulling',
+                running: true,
+                branch: 'main',
+                currentCommit: 'be116f1',
+                currentCommitMessage: 'feat(trails): average nearby stationary trail pings',
+                upstreamBranch: 'origin/main',
+                remoteCommit: 'c0ffee1',
+                commitsBehind: 1,
+                pendingCommits: [
+                  { sha: 'c0ffee1', message: 'feat: remote system updater', author: 'Admin' },
+                ],
+                updateAvailable: true,
+                workingTreeDirty: false,
+                lastCheckedAt: '2026-11-20T21:35:00.000Z',
+                startedAt: '2026-11-20T21:35:10.000Z',
+                finishedAt: null,
+                targetCommit: 'c0ffee1',
+                error: null,
+                logs: ['Pulling origin/main...'],
+              },
+            };
+          },
         },
       },
     });
@@ -363,5 +422,48 @@ describe('@loved-ones/auth-admin-service integration', () => {
       url: `/api/auth/invites/${invite.inviteToken}`,
     });
     expect(previewDeletedRes.statusCode).toBe(404);
+
+    // 13. Host Admin remote system update RBAC, status check, and trigger audit logging
+    const memberUpdateRes = await app.inject({
+      method: 'GET',
+      url: '/api/admin/system/update',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+    });
+    expect(memberUpdateRes.statusCode).toBe(403);
+
+    const memberTriggerRes = await app.inject({
+      method: 'POST',
+      url: '/api/admin/system/update',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+      payload: {},
+    });
+    expect(memberTriggerRes.statusCode).toBe(403);
+
+    const adminUpdateCheckRes = await app.inject({
+      method: 'GET',
+      url: '/api/admin/system/update?refresh=1',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(adminUpdateCheckRes.statusCode).toBe(200);
+    expect(adminUpdateCheckRes.json()).toMatchObject({
+      enabled: true,
+      updateAvailable: true,
+      commitsBehind: 1,
+      remoteCommit: 'c0ffee1',
+    });
+
+    const adminTriggerRes = await app.inject({
+      method: 'POST',
+      url: '/api/admin/system/update',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+      payload: { rebuildEvenIfCurrent: false },
+    });
+    expect(adminTriggerRes.statusCode).toBe(202);
+    expect(adminTriggerRes.json()).toMatchObject({
+      running: true,
+      phase: 'pulling',
+      targetCommit: 'c0ffee1',
+    });
+    expect(updaterApplyCount).toBe(1);
   });
 });

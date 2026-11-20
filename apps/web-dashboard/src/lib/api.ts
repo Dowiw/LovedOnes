@@ -12,6 +12,7 @@ import type {
   QrInvitePayload,
   SystemRole,
   SystemTelemetry,
+  SystemUpdateStatus,
 } from '@loved-ones/shared';
 
 export interface AuthUser {
@@ -719,4 +720,27 @@ export async function apiDeleteMapRegion(accessToken: string, regionId: string):
     accessToken,
     { method: 'DELETE' },
   );
+}
+
+export async function apiFetchSystemUpdateStatus(
+  accessToken: string,
+  refresh = false,
+): Promise<SystemUpdateStatus> {
+  const { authBase } = getServiceBaseUrls();
+  const qs = refresh ? '?refresh=1' : '';
+  return requestAuthedJson<SystemUpdateStatus>(
+    `${authBase}/api/admin/system/update${qs}`,
+    accessToken,
+  );
+}
+
+export async function apiTriggerSystemUpdate(
+  accessToken: string,
+  options: { rebuildEvenIfCurrent?: boolean } = {},
+): Promise<SystemUpdateStatus> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<SystemUpdateStatus>(`${authBase}/api/admin/system/update`, accessToken, {
+    method: 'POST',
+    body: JSON.stringify({ rebuildEvenIfCurrent: Boolean(options.rebuildEvenIfCurrent) }),
+  });
 }
