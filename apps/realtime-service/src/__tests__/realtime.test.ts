@@ -472,6 +472,36 @@ describe('@loved-ones/realtime-service integration', () => {
       const bobStats = telemetry.users.find((u: { userId: string }) => u.userId === bob.user.id);
       expect(bobStats.locationPoints).toBe(5);
       expect(bobStats.eventsCount).toBeGreaterThanOrEqual(5);
+
+      // 8. Verify recent audit logs capture chat, place creation/deletion, check-in, and geofence transitions with full context
+      const logsRes = await authApp.inject({
+        method: 'GET',
+        url: '/api/admin/logs/recent',
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+      });
+      expect(logsRes.statusCode).toBe(200);
+      const parsedLogs = (logsRes.json().logs as string[]).map((line) =>
+        JSON.parse(line) as Record<string, unknown>,
+      );
+      const chatLog = parsedLogs.find((l) => l.action === 'chat.message_sent');
+      expect(chatLog?.username).toBe('Alice');
+      expect(chatLog?.groupName).toBe('Road Trip');
+      expect(String(chatLog?.msg)).toContain('sent message to group "Road Trip"');
+
+      const placeCreatedLog = parsedLogs.find((l) => l.action === 'place.created');
+      expect(placeCreatedLog?.placeName).toBe('Studio');
+      expect(placeCreatedLog?.groupName).toBe('Road Trip');
+      expect(String(placeCreatedLog?.msg)).toContain('Alice created place "Studio" in group "Road Trip"');
+
+      const transitionLog = parsedLogs.find((l) => l.action === 'place.transition');
+      expect(transitionLog?.username).toBe('Bob');
+      expect(transitionLog?.placeName).toBe('Studio');
+      expect(transitionLog?.transition).toBe('enter');
+      expect(String(transitionLog?.msg)).toContain('Bob entered place "Studio" in group "Road Trip"');
+
+      const placeDeletedLog = parsedLogs.find((l) => l.action === 'place.deleted');
+      expect(placeDeletedLog?.placeName).toBe('Studio');
+      expect(String(placeDeletedLog?.msg)).toContain('Alice deleted place "Studio" from group "Road Trip"');
     } finally {
       aliceSocket.disconnect();
       bobSocket.disconnect();

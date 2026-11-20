@@ -6,7 +6,7 @@ import Fastify, { FastifyInstance } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import { createPool, runMigrations } from '@loved-ones/db';
+import { createPool, resolveAuditContext, runMigrations } from '@loved-ones/db';
 import { JwtUserPayload, MemberProfileUpdatedSchema } from '@loved-ones/shared';
 import {
   attachAuthAndTelemetry,
@@ -96,15 +96,43 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     exposedHeaders: ['ETag', 'Last-Modified'],
   });
 
-  app.setErrorHandler((err, _request, reply) => {
+  app.setErrorHandler((err, request, reply) => {
     if (err instanceof DomainError) {
+      const authReq = request as AuthenticatedRequest;
+      loggerHandle.logger.warn(
+        {
+          action: 'request.rejected',
+          statusCode: err.statusCode,
+          method: request.method,
+          url: request.url,
+          userId: authReq.authUser?.id,
+          username: authReq.authUser?.username,
+          email: authReq.authUser?.email,
+          error: err.message,
+        },
+        `${authReq.authUser?.username ?? request.ip} ${request.method} ${request.url} rejected (${err.statusCode}): ${err.message}`,
+      );
       return reply
         .code(err.statusCode)
         .send(err.details ? { error: err.message, details: err.details } : { error: err.message });
     }
-    loggerHandle.logger.error({ err }, 'unhandled realtime error');
+    loggerHandle.logger.error({ err, method: request.method, url: request.url }, 'unhandled realtime error');
     return reply.code(500).send({ error: 'Internal server error' });
   });
+
+  const groupNameCache = new Map<string, string>();
+  const resolveGroupName = async (groupId: string): Promise<string> => {
+    const cached = groupNameCache.get(groupId);
+    if (cached) return cached;
+    const ctx = await resolveAuditContext(pool, { groupId });
+    if (ctx.groupName) {
+      groupNameCache.set(groupId, ctx.groupName);
+      return ctx.groupName;
+    }
+    return groupId;
+  };
+  const truncatePreview = (text: string, max = 140): string =>
+    text.length > max ? `${text.slice(0, max - 1)}…` : text;
 
   const tokenService = createTokenService({ jwtSecret });
   const { requireAuth, requireIngestionAuth } = attachAuthAndTelemetry(app, {
@@ -129,6 +157,26 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   const realtime = new RealtimeModule({
     store: new PostgresRealtimeStore(pool),
     broadcaster: new SocketIoBroadcaster(io),
+    onPlaceTransition: (evt) => {
+      void resolveGroupName(evt.groupId)
+        .then((groupName) => {
+          loggerHandle.logger.info(
+            {
+              action: 'place.transition',
+              userId: evt.userId,
+              username: evt.username,
+              groupId: evt.groupId,
+              groupName,
+              placeId: evt.placeId,
+              placeName: evt.placeName,
+              transition: evt.transition,
+              recordedAt: evt.recordedAt,
+            },
+            `${evt.username} ${evt.transition === 'enter' ? 'entered' : 'exited'} place "${evt.placeName}" in group "${groupName}"`,
+          );
+        })
+        .catch(() => {});
+    },
   });
 
   logSubClient.on('message', (channel, message) => {
@@ -167,7 +215,16 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       const body = request.body as { points?: unknown[] } | undefined;
       const inserted = await realtime.ingestLocationBatch(user, body);
       request.telemetryEventWeight = Math.max(1, inserted);
-      loggerHandle.logger.info({ userId: user.id, points: inserted }, 'ingested location batch via REST');
+      loggerHandle.logger.info(
+        {
+          action: 'location.ingested_rest',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          points: inserted,
+        },
+        `${user.username} (${user.email}) shared ${inserted} location point(s) via REST`,
+      );
       return { inserted };
     },
   );
@@ -179,7 +236,16 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       const user = request.authUser!;
       const { inserted, response } = await realtime.ingestOwnTracks(user, request.body);
       request.telemetryEventWeight = Math.max(1, inserted);
-      loggerHandle.logger.info({ userId: user.id, points: inserted }, 'ingested OwnTracks payload');
+      loggerHandle.logger.info(
+        {
+          action: 'location.ingested_owntracks',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          points: inserted,
+        },
+        `${user.username} (${user.email}) shared ${inserted} location point(s) via OwnTracks`,
+      );
       return response;
     },
   );
@@ -191,7 +257,16 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       const user = request.authUser!;
       const { inserted, result } = await realtime.ingestOverland(user, request.body);
       request.telemetryEventWeight = Math.max(1, inserted);
-      loggerHandle.logger.info({ userId: user.id, points: inserted }, 'ingested Overland payload');
+      loggerHandle.logger.info(
+        {
+          action: 'location.ingested_overland',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          points: inserted,
+        },
+        `${user.username} (${user.email}) shared ${inserted} location point(s) via Overland`,
+      );
       return { result, inserted };
     },
   );
@@ -246,13 +321,29 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     '/api/realtime/groups/:groupId/messages',
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest, reply) => {
+      const user = request.authUser!;
       const { groupId } = request.params as { groupId: string };
       const body = (request.body ?? {}) as { content?: string };
-      const message = await realtime.sendChatMessage(request.authUser!, {
+      const message = await realtime.sendChatMessage(user, {
         groupId,
         content: body.content,
       });
-      loggerHandle.logger.info({ userId: request.authUser!.id, groupId }, 'chat message sent via REST');
+      const groupName = await resolveGroupName(groupId);
+      const preview = truncatePreview(message.content);
+      loggerHandle.logger.info(
+        {
+          action: 'chat.message_sent',
+          channel: 'rest',
+          userId: user.id,
+          username: message.senderUsername,
+          email: user.email,
+          groupId,
+          groupName,
+          messageId: message.id,
+          messagePreview: preview,
+        },
+        `${message.senderUsername} sent message to group "${groupName}": "${preview}"`,
+      );
       return reply.code(201).send({ message });
     },
   );
@@ -270,11 +361,31 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     '/api/realtime/groups/:groupId/location-requests',
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest, reply) => {
+      const user = request.authUser!;
       const { groupId } = request.params as { groupId: string };
       const created = await realtime.createCheckInRequest(
-        request.authUser!,
+        user,
         groupId,
         request.body,
+      );
+      const groupName = await resolveGroupName(groupId);
+      loggerHandle.logger.info(
+        {
+          action: 'checkin.requested',
+          channel: 'rest',
+          requestId: created.id,
+          userId: user.id,
+          username: created.requesterUsername,
+          targetUserId: created.targetUserId,
+          targetUsername: created.targetUsername,
+          groupId,
+          groupName,
+          durationMinutes: created.suggestedDurationMinutes,
+          note: created.message,
+        },
+        `${created.requesterUsername} requested check-in from ${created.targetUsername} in group "${groupName}" (${created.suggestedDurationMinutes} min${
+          created.message ? `, note: "${truncatePreview(created.message, 80)}"` : ''
+        })`,
       );
       return reply.code(201).send({ request: created });
     },
@@ -284,13 +395,34 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     '/api/realtime/groups/:groupId/location-requests/:requestId/respond',
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
       const { groupId, requestId } = request.params as { groupId: string; requestId: string };
-      return realtime.respondToCheckInRequest(
-        request.authUser!,
+      const res = await realtime.respondToCheckInRequest(
+        user,
         groupId,
         requestId,
         request.body,
       );
+      const groupName = await resolveGroupName(groupId);
+      loggerHandle.logger.info(
+        {
+          action: 'checkin.responded',
+          channel: 'rest',
+          requestId: res.request.id,
+          status: res.request.status,
+          userId: user.id,
+          username: res.request.targetUsername,
+          requesterId: res.request.requesterId,
+          requesterUsername: res.request.requesterUsername,
+          groupId,
+          groupName,
+          privacyOverrideUntil: res.privacyOverrideUntil,
+        },
+        `${res.request.targetUsername} ${res.request.status} check-in request from ${res.request.requesterUsername} in group "${groupName}"${
+          res.privacyOverrideUntil ? ` (EXACT override until ${res.privacyOverrideUntil})` : ''
+        }`,
+      );
+      return res;
     },
   );
 
@@ -307,8 +439,26 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     '/api/realtime/groups/:groupId/places',
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest, reply) => {
+      const user = request.authUser!;
       const { groupId } = request.params as { groupId: string };
-      const place = await realtime.createGroupPlace(request.authUser!, groupId, request.body);
+      const place = await realtime.createGroupPlace(user, groupId, request.body);
+      const groupName = await resolveGroupName(groupId);
+      loggerHandle.logger.info(
+        {
+          action: 'place.created',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          groupId,
+          groupName,
+          placeId: place.id,
+          placeName: place.name,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          radiusMeters: place.radiusMeters,
+        },
+        `${user.username} created place "${place.name}" in group "${groupName}" (${place.latitude.toFixed(5)}, ${place.longitude.toFixed(5)}, radius ${place.radiusMeters}m)`,
+      );
       return reply.code(201).send({ place });
     },
   );
@@ -317,8 +467,26 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     '/api/realtime/groups/:groupId/places/:placeId',
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
       const { groupId, placeId } = request.params as { groupId: string; placeId: string };
-      await realtime.deleteGroupPlace(request.authUser!, groupId, placeId);
+      const before = await resolveAuditContext(pool, { userId: user.id, groupId, placeId });
+      await realtime.deleteGroupPlace(user, groupId, placeId);
+      const actorName = before.actorUsername ?? user.username;
+      const groupName = before.groupName ?? groupId;
+      const placeName = before.placeName ?? placeId;
+      loggerHandle.logger.info(
+        {
+          action: 'place.deleted',
+          userId: user.id,
+          username: actorName,
+          email: user.email,
+          groupId,
+          groupName,
+          placeId,
+          placeName,
+        },
+        `${actorName} deleted place "${placeName}" from group "${groupName}"`,
+      );
       return { ok: true };
     },
   );
@@ -360,12 +528,34 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       });
     }
 
-    loggerHandle.logger.info({ userId: user.id, socketId: socket.id }, 'socket connected');
+    loggerHandle.logger.info(
+      {
+        action: 'socket.connected',
+        userId: user.id,
+        username: user.username,
+        email: user.email,
+        socketId: socket.id,
+        groupCount: groupIds.length,
+      },
+      `${user.username} (${user.email}) connected live socket`,
+    );
 
     socket.on('group:join', async (groupId: string, ack?: (res: { ok: boolean }) => void) => {
       try {
         if (typeof groupId === 'string' && (await realtime.canJoinGroupRoom(user.id, groupId))) {
           await socket.join(`group:${groupId}`);
+          const groupName = await resolveGroupName(groupId);
+          loggerHandle.logger.info(
+            {
+              action: 'socket.group_joined',
+              userId: user.id,
+              username: user.username,
+              groupId,
+              groupName,
+              socketId: socket.id,
+            },
+            `${user.username} joined live room for group "${groupName}"`,
+          );
           ack?.({ ok: true });
         } else {
           ack?.({ ok: false });
@@ -389,8 +579,14 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
             await recordUserTelemetry(redis, user.id, elapsedMs, inserted);
           }
           loggerHandle.logger.info(
-            { userId: user.id, points: inserted },
-            'ingested location batch via socket',
+            {
+              action: 'location.ingested_socket',
+              userId: user.id,
+              username: user.username,
+              email: user.email,
+              points: inserted,
+            },
+            `${user.username} (${user.email}) shared ${inserted} location point(s) via Socket`,
           );
           ack?.({ ok: true, inserted });
         } catch (err) {
@@ -410,9 +606,21 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
           const message = await realtime.sendChatMessage(user, payload);
           const elapsedMs = Math.max(0, performance.now() - startMs);
           await recordUserTelemetry(redis, user.id, elapsedMs, 1);
+          const groupName = await resolveGroupName(message.groupId);
+          const preview = truncatePreview(message.content);
           loggerHandle.logger.info(
-            { userId: user.id, groupId: message.groupId },
-            'chat message sent via socket',
+            {
+              action: 'chat.message_sent',
+              channel: 'socket',
+              userId: user.id,
+              username: message.senderUsername,
+              email: user.email,
+              groupId: message.groupId,
+              groupName,
+              messageId: message.id,
+              messagePreview: preview,
+            },
+            `${message.senderUsername} sent message to group "${groupName}": "${preview}"`,
           );
           ack?.({ ok: true, message });
         } catch (err) {
@@ -430,6 +638,25 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         try {
           const groupId = typeof payload?.groupId === 'string' ? payload.groupId : '';
           const created = await realtime.createCheckInRequest(user, groupId, payload);
+          const groupName = await resolveGroupName(groupId);
+          loggerHandle.logger.info(
+            {
+              action: 'checkin.requested',
+              channel: 'socket',
+              requestId: created.id,
+              userId: user.id,
+              username: created.requesterUsername,
+              targetUserId: created.targetUserId,
+              targetUsername: created.targetUsername,
+              groupId,
+              groupName,
+              durationMinutes: created.suggestedDurationMinutes,
+              note: created.message,
+            },
+            `${created.requesterUsername} requested check-in from ${created.targetUsername} in group "${groupName}" (${created.suggestedDurationMinutes} min${
+              created.message ? `, note: "${truncatePreview(created.message, 80)}"` : ''
+            })`,
+          );
           ack?.({ ok: true, request: created });
         } catch (err) {
           ack?.({ ok: false, error: err instanceof Error ? err.message : 'Failed to request check-in' });
@@ -447,6 +674,25 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
           const groupId = typeof payload?.groupId === 'string' ? payload.groupId : '';
           const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
           const res = await realtime.respondToCheckInRequest(user, groupId, requestId, payload);
+          const groupName = await resolveGroupName(groupId);
+          loggerHandle.logger.info(
+            {
+              action: 'checkin.responded',
+              channel: 'socket',
+              requestId: res.request.id,
+              status: res.request.status,
+              userId: user.id,
+              username: res.request.targetUsername,
+              requesterId: res.request.requesterId,
+              requesterUsername: res.request.requesterUsername,
+              groupId,
+              groupName,
+              privacyOverrideUntil: res.privacyOverrideUntil,
+            },
+            `${res.request.targetUsername} ${res.request.status} check-in request from ${res.request.requesterUsername} in group "${groupName}"${
+              res.privacyOverrideUntil ? ` (EXACT override until ${res.privacyOverrideUntil})` : ''
+            }`,
+          );
           ack?.({ ok: true, ...res });
         } catch (err) {
           ack?.({ ok: false, error: err instanceof Error ? err.message : 'Failed to respond' });
@@ -456,7 +702,16 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
 
     socket.on('disconnect', () => {
       void trackUserSocket(redis, user.id, socket.id, 'disconnect').catch(() => {});
-      loggerHandle.logger.info({ userId: user.id, socketId: socket.id }, 'socket disconnected');
+      loggerHandle.logger.info(
+        {
+          action: 'socket.disconnected',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          socketId: socket.id,
+        },
+        `${user.username} (${user.email}) disconnected live socket`,
+      );
     });
   });
 

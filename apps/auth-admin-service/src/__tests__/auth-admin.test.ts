@@ -211,6 +211,23 @@ describe('@loved-ones/auth-admin-service integration', () => {
     });
     expect(JSON.parse(receivedLine).service).toBe('auth-admin-service');
 
+    // Verify recent audit logs include full human-readable context (username, groupName, privacy change)
+    const recentLogsRes = await app.inject({
+      method: 'GET',
+      url: '/api/admin/logs/recent',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(recentLogsRes.statusCode).toBe(200);
+    const recentLogs = recentLogsRes.json().logs as string[];
+    const privacyLogLine = recentLogs.find((line) => line.includes('"group.privacy_updated"'));
+    expect(privacyLogLine).toBeTruthy();
+    const privacyLogObj = JSON.parse(privacyLogLine!);
+    expect(privacyLogObj.username).toBe('FamilyMember');
+    expect(privacyLogObj.groupName).toBe('Family Circle');
+    expect(privacyLogObj.previousPrivacy).toBe('EXACT');
+    expect(privacyLogObj.privacy).toBe('FUZZED');
+    expect(privacyLogObj.msg).toContain('FamilyMember switched privacy in group "Family Circle" from EXACT to FUZZED');
+
     // 11. Account Settings: update username, email, avatarUrl & password
     const avatarPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     const patchRes = await app.inject({

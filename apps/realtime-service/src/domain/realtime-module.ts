@@ -280,6 +280,7 @@ export interface RealtimeModuleOptions extends CoordinateFilterOptions {
   store: RealtimeStore;
   broadcaster: RealtimeBroadcaster;
   now?: () => number;
+  onPlaceTransition?: (event: PlaceTransitionEvent) => void;
 }
 
 /**
@@ -292,6 +293,7 @@ export class RealtimeModule {
   private readonly broadcaster: RealtimeBroadcaster;
   private readonly filterOptions: CoordinateFilterOptions;
   private readonly now: () => number;
+  private readonly onPlaceTransition?: (event: PlaceTransitionEvent) => void;
 
   constructor(options: RealtimeModuleOptions) {
     this.store = options.store;
@@ -302,6 +304,7 @@ export class RealtimeModule {
       minJumpDistanceMeters: options.minJumpDistanceMeters,
     };
     this.now = options.now ?? (() => Date.now());
+    this.onPlaceTransition = options.onPlaceTransition;
   }
 
   private async requireMembership(
@@ -355,6 +358,7 @@ export class RealtimeModule {
           });
           for (const evt of placeEvents) {
             this.broadcaster.broadcastPlaceTransition(m.groupId, evt);
+            this.onPlaceTransition?.(evt);
           }
         }
       }

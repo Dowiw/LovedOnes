@@ -10,6 +10,24 @@ interface ParsedLogLine {
   level?: number;
   service?: string;
   msg?: string;
+  details?: string;
+}
+
+const LOG_META_OMIT_KEYS = new Set(['level', 'time', 'pid', 'hostname', 'service', 'msg']);
+
+function formatLogDetails(obj: Record<string, unknown>): string | undefined {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(obj)) {
+    if (LOG_META_OMIT_KEYS.has(k) || v === undefined || v === null || v === '') continue;
+    if (Array.isArray(v)) {
+      parts.push(`${k}=[${v.join(',')}]`);
+    } else if (typeof v === 'object') {
+      parts.push(`${k}=${JSON.stringify(v)}`);
+    } else {
+      parts.push(`${k}=${String(v)}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
 function parseLogLine(raw: string): ParsedLogLine {
@@ -21,6 +39,7 @@ function parseLogLine(raw: string): ParsedLogLine {
       level: typeof obj.level === 'number' ? obj.level : undefined,
       service: typeof obj.service === 'string' ? obj.service : undefined,
       msg: typeof obj.msg === 'string' ? obj.msg : raw,
+      details: formatLogDetails(obj),
     };
   } catch {
     return { raw, msg: raw };
@@ -41,6 +60,7 @@ interface LiveLogTerminalProps {
 export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
   const [lines, setLines] = useState<ParsedLogLine[]>([]);
   const [paused, setPaused] = useState(false);
+  const [showRawJson, setShowRawJson] = useState(false);
   const [connected, setConnected] = useState(false);
   const [filter, setFilter] = useState('');
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -115,9 +135,20 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter logs..."
+            placeholder="Filter logs (user, group, action)..."
             className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none"
           />
+          <button
+            type="button"
+            onClick={() => setShowRawJson((r) => !r)}
+            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+              showRawJson
+                ? 'border-zinc-950 bg-zinc-950 text-white'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950'
+            }`}
+          >
+            {showRawJson ? 'Raw JSON' : 'Readable'}
+          </button>
           <button
             type="button"
             onClick={() => setPaused((p) => !p)}
@@ -150,7 +181,16 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
                 </span>{' '}
                 <span className={meta.color}>[{meta.label}]</span>{' '}
                 {item.service && <span className="text-sky-400">[{item.service}]</span>}{' '}
-                <span className="text-zinc-200">{item.raw}</span>
+                {showRawJson ? (
+                  <span className="text-zinc-200">{item.raw}</span>
+                ) : (
+                  <>
+                    <span className="text-zinc-100">{item.msg}</span>
+                    {item.details && (
+                      <span className="ml-2 text-[11px] text-zinc-400">({item.details})</span>
+                    )}
+                  </>
+                )}
               </div>
             );
           })

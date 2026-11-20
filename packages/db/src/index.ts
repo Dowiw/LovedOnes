@@ -838,3 +838,111 @@ export async function evaluateAndRecordPlaceTransitions(
 
   return transitions;
 }
+
+export interface AuditContextSnapshot {
+  actorUsername?: string;
+  actorEmail?: string;
+  targetUsername?: string;
+  targetEmail?: string;
+  groupName?: string;
+  placeName?: string;
+  membershipRole?: GroupRole;
+  membershipPrivacy?: PrivacyMode;
+}
+
+export async function resolveAuditContext(
+  pool: pg.Pool,
+  params: {
+    userId?: string;
+    targetUserId?: string;
+    groupId?: string;
+    placeId?: string;
+  },
+): Promise<AuditContextSnapshot> {
+  const snapshot: AuditContextSnapshot = {};
+  const tasks: Array<Promise<void>> = [];
+
+  if (params.userId) {
+    tasks.push(
+      pool
+        .query<{ username: string; email: string }>(
+          'SELECT username, email FROM users WHERE id = $1 LIMIT 1',
+          [params.userId],
+        )
+        .then((res) => {
+          const row = res.rows[0];
+          if (row) {
+            snapshot.actorUsername = row.username;
+            snapshot.actorEmail = row.email;
+          }
+        })
+        .catch(() => {}),
+    );
+  }
+
+  if (params.targetUserId) {
+    tasks.push(
+      pool
+        .query<{ username: string; email: string }>(
+          'SELECT username, email FROM users WHERE id = $1 LIMIT 1',
+          [params.targetUserId],
+        )
+        .then((res) => {
+          const row = res.rows[0];
+          if (row) {
+            snapshot.targetUsername = row.username;
+            snapshot.targetEmail = row.email;
+          }
+        })
+        .catch(() => {}),
+    );
+  }
+
+  if (params.groupId) {
+    tasks.push(
+      pool
+        .query<{ name: string }>('SELECT name FROM groups WHERE id = $1 LIMIT 1', [params.groupId])
+        .then((res) => {
+          const row = res.rows[0];
+          if (row) snapshot.groupName = row.name;
+        })
+        .catch(() => {}),
+    );
+  }
+
+  if (params.placeId) {
+    tasks.push(
+      pool
+        .query<{ name: string }>('SELECT name FROM group_places WHERE id = $1 LIMIT 1', [
+          params.placeId,
+        ])
+        .then((res) => {
+          const row = res.rows[0];
+          if (row) snapshot.placeName = row.name;
+        })
+        .catch(() => {}),
+    );
+  }
+
+  const membershipUserId = params.targetUserId ?? params.userId;
+  if (membershipUserId && params.groupId) {
+    tasks.push(
+      pool
+        .query<{ role: GroupRole; privacy: PrivacyMode }>(
+          'SELECT role, privacy FROM group_memberships WHERE user_id = $1 AND group_id = $2 LIMIT 1',
+          [membershipUserId, params.groupId],
+        )
+        .then((res) => {
+          const row = res.rows[0];
+          if (row) {
+            snapshot.membershipRole = row.role;
+            snapshot.membershipPrivacy = row.privacy;
+          }
+        })
+        .catch(() => {}),
+    );
+  }
+
+  await Promise.all(tasks);
+  return snapshot;
+}
