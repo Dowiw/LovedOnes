@@ -16,14 +16,15 @@
 		uri strip_prefix /tiles
 		root * /srv/tiles
 		@pmtiles path *.pmtiles /tiles/*.pmtiles
-		@styleJson path *.json /tiles/*.json
+		@styleJson path *.json
+		@staticTiles not path *.json
 		header Access-Control-Allow-Origin "*"
 		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
 		header Access-Control-Allow-Headers "Range, If-Modified-Since, Cache-Control, Content-Type"
 		header Access-Control-Expose-Headers "Accept-Ranges, Content-Range, Content-Length, ETag"
 		header Accept-Ranges "bytes"
 		header @pmtiles Content-Type "application/vnd.pmtiles"
-		header Cache-Control "public, max-age=3600"
+		header @staticTiles Cache-Control "public, max-age=3600"
 		header @styleJson Cache-Control "no-cache"
 		file_server
 	}
