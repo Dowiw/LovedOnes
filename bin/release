@@ -1,0 +1,263 @@
+#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, '..');
+
+const VERSION_JSON_FILES = [
+  'package.json',
+  'apps/auth-admin-service/package.json',
+  'apps/map-service/package.json',
+  'apps/mobile-app/package.json',
+  'apps/realtime-service/package.json',
+  'apps/web-dashboard/package.json',
+  'packages/db/package.json',
+  'packages/shared/package.json',
+];
+
+function printUsage() {
+  console.log(`Usage:
+  ./bin/release <patch|minor|major|X.Y.Z> [options]
+  pnpm release <patch|minor|major|X.Y.Z> [-- ...]
+
+Options:
+  --dry-run        Preview version bump, checks, commit, and tag without modifying anything
+  --no-push        Commit and create tag locally without pushing to origin
+  --skip-checks    Skip typecheck, build, and unit test verification
+  --watch          Wait for the GitHub Actions APK release workflow and update dist-apk/
+  --allow-branch   Allow releasing from a branch other than main
+  -h, --help       Show this help message`);
+}
+
+function parseArgs(argv) {
+  let target = '';
+  let dryRun = false;
+  let noPush = false;
+  let skipChecks = false;
+  let watch = false;
+  let allowBranch = false;
+
+  for (const arg of argv) {
+    if (arg === '--') continue;
+    if (arg === '-h' || arg === '--help') {
+      printUsage();
+      process.exit(0);
+    } else if (arg === '--dry-run') {
+      dryRun = true;
+    } else if (arg === '--no-push') {
+      noPush = true;
+    } else if (arg === '--skip-checks') {
+      skipChecks = true;
+    } else if (arg === '--watch') {
+      watch = true;
+    } else if (arg === '--allow-branch') {
+      allowBranch = true;
+    } else if (arg.startsWith('-')) {
+      throw new Error(`Unknown option: ${arg}`);
+    } else if (!target) {
+      target = arg;
+    } else {
+      throw new Error(`Unexpected extra argument: ${arg}`);
+    }
+  }
+
+  if (!target) {
+    printUsage();
+    throw new Error('Specify a version bump (patch, minor, major) or explicit semver (e.g. 0.2.0).');
+  }
+
+  return { target, dryRun, noPush, skipChecks, watch, allowBranch };
+}
+
+function run(cmd, args, opts = {}) {
+  const res = spawnSync(cmd, args, {
+    cwd: ROOT_DIR,
+    stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+    encoding: 'utf8',
+    env: { ...process.env, ...(opts.env ?? {}) },
+  });
+  if (res.status !== 0) {
+    const detail = opts.capture ? (res.stderr || res.stdout || '').trim() : '';
+    throw new Error(`Command failed (${cmd} ${args.join(' ')})${detail ? `: ${detail}` : ''}`);
+  }
+  return opts.capture ? res.stdout.trim() : '';
+}
+
+function bumpSemver(current, spec) {
+  const cleaned = current.trim().replace(/^v/i, '');
+  const parts = cleaned.split('.').map((n) => Number.parseInt(n, 10));
+  if (parts.length !== 3 || parts.some((n) => !Number.isInteger(n) || n < 0)) {
+    throw new Error(`Current root package version "${current}" is not valid X.Y.Z semver.`);
+  }
+  const [major, minor, patch] = parts;
+
+  if (spec === 'patch') return `${major}.${minor}.${patch + 1}`;
+  if (spec === 'minor') return `${major}.${minor + 1}.0`;
+  if (spec === 'major') return `${major + 1}.0.0`;
+
+  const explicit = spec.trim().replace(/^v/i, '');
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(explicit)) {
+    throw new Error(`Invalid target version "${spec}". Use patch, minor, major, or X.Y.Z.`);
+  }
+  if (explicit === current) {
+    throw new Error(`Target version ${explicit} matches current version ${current}.`);
+  }
+  return explicit;
+}
+
+function readJson(relPath) {
+  const absPath = path.join(ROOT_DIR, relPath);
+  return JSON.parse(fs.readFileSync(absPath, 'utf8'));
+}
+
+function writeJson(relPath, data) {
+  const absPath = path.join(ROOT_DIR, relPath);
+  fs.writeFileSync(absPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
+
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+
+  const branch = run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { capture: true });
+  if (!opts.allowBranch && branch !== 'main') {
+    throw new Error(`Current branch is "${branch}". Switch to "main" or pass --allow-branch.`);
+  }
+
+  const dirtyTracked = run('git', ['status', '--porcelain', '--untracked-files=no'], {
+    capture: true,
+  });
+  if (dirtyTracked.length > 0) {
+    throw new Error(
+      `Working tree has uncommitted tracked changes:\n${dirtyTracked}\nCommit or stash them before releasing.`,
+    );
+  }
+
+  const rootPkg = readJson('package.json');
+  const currentVersion = String(rootPkg.version ?? '0.1.0');
+  const nextVersion = bumpSemver(currentVersion, opts.target);
+  const tagName = `v${nextVersion}`;
+
+  const existingTag = run('git', ['tag', '--list', tagName], { capture: true });
+  if (existingTag === tagName) {
+    throw new Error(`Git tag "${tagName}" already exists locally.`);
+  }
+
+  const appJson = readJson('apps/mobile-app/app.json');
+  const prevVersionCode = Number(appJson?.expo?.android?.versionCode ?? 1) || 1;
+  const nextVersionCode = prevVersionCode + 1;
+  const prevBuildNum = Number.parseInt(String(appJson?.expo?.ios?.buildNumber ?? '1'), 10) || 1;
+  const nextBuildNum = String(prevBuildNum + 1);
+
+  console.log(`\nPreparing LovedOnes release: ${currentVersion} -> ${nextVersion} (${tagName})`);
+  console.log(`Mobile native build: Android versionCode ${prevVersionCode} -> ${nextVersionCode}, iOS buildNumber ${prevBuildNum} -> ${nextBuildNum}`);
+
+  if (opts.dryRun) {
+    console.log('\nFiles that would be updated:');
+    for (const file of [...VERSION_JSON_FILES, 'apps/mobile-app/app.json']) {
+      console.log(`  - ${file}`);
+    }
+    console.log(`\nDry run checks complete (${opts.skipChecks ? 'checks skipped' : 'would run typecheck/build/unit tests'}). No files modified.`);
+    return;
+  }
+
+  for (const relPath of VERSION_JSON_FILES) {
+    const pkg = readJson(relPath);
+    pkg.version = nextVersion;
+    writeJson(relPath, pkg);
+  }
+
+  appJson.expo = appJson.expo ?? {};
+  appJson.expo.version = nextVersion;
+  appJson.expo.android = appJson.expo.android ?? {};
+  appJson.expo.android.versionCode = nextVersionCode;
+  appJson.expo.ios = appJson.expo.ios ?? {};
+  appJson.expo.ios.buildNumber = nextBuildNum;
+  writeJson('apps/mobile-app/app.json', appJson);
+
+  if (!opts.skipChecks) {
+    console.log('\nRunning workspace typecheck, build, and unit tests...');
+    run('pnpm', ['typecheck']);
+    run('pnpm', ['build']);
+    run('pnpm', [
+      '--filter',
+      '@loved-ones/shared',
+      '--filter',
+      '@loved-ones/mobile-app',
+      '--filter',
+      '@loved-ones/web-dashboard',
+      '--filter',
+      '@loved-ones/map-service',
+      'test',
+    ]);
+  }
+
+  const filesToStage = [...VERSION_JSON_FILES, 'apps/mobile-app/app.json'];
+  run('git', ['add', ...filesToStage]);
+  run('git', ['commit', '-m', `chore(release): ${tagName}`]);
+  run('git', ['tag', '-a', tagName, '-m', `LovedOnes ${tagName}`]);
+
+  console.log(`\nCreated release commit and tag ${tagName}.`);
+
+  if (opts.noPush) {
+    console.log(`Skipped push (--no-push). To publish later: git push origin ${branch} ${tagName}`);
+    return;
+  }
+
+  console.log(`\nPushing ${branch} and tag ${tagName} to origin (triggers CI, Docker images, and GitHub Release APK)...`);
+  run('git', ['push', 'origin', branch, tagName]);
+
+  if (opts.watch) {
+    console.log('\nWaiting for GitHub Actions Mobile Android APK workflow...');
+    let runId = '';
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const listJson = run(
+        'gh',
+        [
+          'run',
+          'list',
+          '--workflow',
+          'mobile-android.yml',
+          '--limit',
+          '5',
+          '--json',
+          'databaseId,headBranch',
+        ],
+        { capture: true },
+      );
+      const runs = JSON.parse(listJson);
+      const match = runs.find((r) => r.headBranch === tagName);
+      if (match?.databaseId) {
+        runId = String(match.databaseId);
+        break;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+    }
+
+    if (!runId) {
+      console.log(`Could not locate workflow run for ${tagName} yet. Check: gh run list -w mobile-android.yml`);
+      return;
+    }
+
+    run('gh', ['run', 'watch', runId, '--exit-status']);
+    const artifactName = `lovedones-android-apk-${tagName}`;
+    const stagingDir = path.join(ROOT_DIR, 'dist-apk', `${artifactName}.next`);
+    const targetDir = path.join(ROOT_DIR, 'dist-apk', artifactName);
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    run('gh', ['run', 'download', runId, '--name', artifactName, '--dir', stagingDir]);
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    fs.renameSync(stagingDir, targetDir);
+    console.log(`\nDownloaded release APK into ${path.relative(ROOT_DIR, targetDir)}`);
+  } else {
+    console.log(`\nRelease ${tagName} triggered! Track progress with: gh run list -w mobile-android.yml`);
+  }
+}
+
+try {
+  main();
+} catch (err) {
+  console.error(`\nRelease failed: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}

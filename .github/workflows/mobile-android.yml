@@ -64,12 +64,13 @@ jobs:
           echo "artifact_name=lovedones-android-apk-${SAFE_REF}" >> "$GITHUB_OUTPUT"
           mkdir -p dist-apk
           cp apps/mobile-app/android/app/build/outputs/apk/release/app-release.apk "dist-apk/lovedones-${SAFE_REF}.apk"
+          (cd dist-apk && sha256sum "lovedones-${SAFE_REF}.apk" > "lovedones-${SAFE_REF}.apk.sha256")
 
       - name: Upload APK workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.stage.outputs.artifact_name }}
-          path: dist-apk/*.apk
+          path: dist-apk/*
           retention-days: 14
 
   release:
@@ -91,4 +92,5 @@ jobs:
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist-apk/*.apk
+          generate_release_notes: true
+          files: dist-apk/*

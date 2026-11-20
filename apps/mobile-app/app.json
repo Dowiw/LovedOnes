@@ -18,6 +18,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "org.lovedones.app",
+      "buildNumber": "1",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Share your live location with authorized family groups.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Continue sharing background location updates with your group while the app is minimized.",
@@ -27,6 +28,7 @@
     },
     "android": {
       "package": "org.lovedones.app",
+      "versionCode": 1,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "./bin/start",
+    "release": "node bin/release",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
