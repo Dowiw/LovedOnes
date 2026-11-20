@@ -13,6 +13,7 @@ import {
   CreateLocationRequestSchema,
   GroupPlace,
   GroupRole,
+  haversineMeters,
   JwtUserPayload,
   LocationBatchSchema,
   LocationBroadcast,
@@ -28,6 +29,7 @@ import {
   SendMessageSchema,
   TrailQuerySchema,
 } from '@loved-ones/shared';
+export { haversineMeters };
 import { DomainError } from '@loved-ones/shared/auth';
 
 export interface RealtimeStore {
@@ -122,7 +124,6 @@ export interface RealtimeBroadcaster {
 const DEFAULT_MAX_ACCURACY_METERS = 1000;
 const DEFAULT_MAX_JUMP_SPEED_MPS = 350;
 const DEFAULT_MIN_JUMP_DISTANCE_METERS = 5000;
-const EARTH_RADIUS_METERS = 6_371_000;
 
 export interface CoordinateFilterOptions {
   maxAccuracyMeters?: number;
@@ -136,24 +137,6 @@ export interface CoordinateFilterOptions {
  */
 export function isNullIsland(latitude: number, longitude: number): boolean {
   return Math.abs(latitude) < 0.0001 && Math.abs(longitude) < 0.0001;
-}
-
-/**
- * Great-circle surface distance in meters between two WGS84 coordinates.
- */
-export function haversineMeters(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number,
-): number {
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 /**

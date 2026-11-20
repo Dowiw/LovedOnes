@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import { PMTiles, Protocol } from 'pmtiles';
 import {
+  averageNearbyTrailPings,
   buildGeodesicCircleRing,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
@@ -1154,32 +1155,41 @@ export function MapCanvas({
     if (!map) return;
 
     const applyTrailsLayer = () => {
-      const byUser = new Map<string, [number, number][]>();
       const features: Array<{
         type: 'Feature';
         geometry: { type: 'LineString'; coordinates: [number, number][] } | { type: 'Point'; coordinates: [number, number] };
-        properties: { username: string };
+        properties: {
+          username: string;
+          pingCount?: number;
+          firstRecordedAt?: string;
+          lastRecordedAt?: string;
+          isFuzzed?: boolean;
+        };
       }> = [];
 
       if (showTrails && trails.length > 0) {
-        for (const pt of trails) {
-          const arr = byUser.get(pt.userId) ?? [];
-          arr.push([pt.longitude, pt.latitude]);
-          byUser.set(pt.userId, arr);
-          features.push({
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: [pt.longitude, pt.latitude] },
-            properties: { username: pt.username },
-          });
-        }
-        for (const [userId, coords] of byUser.entries()) {
-          if (coords.length < 2) continue;
-          const uname = trails.find((t) => t.userId === userId)?.username ?? 'Member';
-          features.push({
-            type: 'Feature',
-            geometry: { type: 'LineString', coordinates: coords },
-            properties: { username: uname },
-          });
+        const compacted = averageNearbyTrailPings(trails);
+        for (const userTrail of compacted) {
+          for (const stop of userTrail.stops) {
+            features.push({
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [stop.longitude, stop.latitude] },
+              properties: {
+                username: stop.username,
+                pingCount: stop.pingCount,
+                firstRecordedAt: stop.firstRecordedAt,
+                lastRecordedAt: stop.lastRecordedAt,
+                isFuzzed: stop.isFuzzed,
+              },
+            });
+          }
+          if (userTrail.pathCoordinates.length >= 2) {
+            features.push({
+              type: 'Feature',
+              geometry: { type: 'LineString', coordinates: userTrail.pathCoordinates },
+              properties: { username: userTrail.username },
+            });
+          }
         }
       }
 
@@ -1208,7 +1218,7 @@ export function MapCanvas({
         source: TRAIL_SOURCE_ID,
         filter: ['==', ['geometry-type'], 'Point'],
         paint: {
-          'circle-radius': 4,
+          'circle-radius': ['case', ['>', ['coalesce', ['get', 'pingCount'], 1], 1], 5, 4],
           'circle-color': '#ffffff',
           'circle-stroke-color': '#18181b',
           'circle-stroke-width': 1.5,

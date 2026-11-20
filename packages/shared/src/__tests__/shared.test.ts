@@ -4,12 +4,14 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   applyPrivacyFuzzing,
+  averageNearbyTrailPings,
   buildGeodesicCircleRing,
   ChangePasswordSchema,
   computeCityFallbackBbox,
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
   findCoveringRegions,
+  haversineMeters,
   hexToRgba,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
@@ -424,5 +426,130 @@ describe('@loved-ones/shared', () => {
     const t1 = Date.now();
     await expect(withMinDelay(Promise.reject(new Error('boom')), 45)).rejects.toThrow('boom');
     expect(Date.now() - t1).toBeGreaterThanOrEqual(40);
+  });
+
+  it('averages nearby trail pings per user while preserving trips and fuzzed isolation', () => {
+    const jitterHome = [
+      { lat: 52.5200, lon: 13.5100, ts: '2026-11-20T08:00:00.000Z' },
+      { lat: 52.5202, lon: 13.5103, ts: '2026-11-20T08:05:00.000Z' },
+      { lat: 52.5198, lon: 13.5097, ts: '2026-11-20T08:10:00.000Z' },
+      { lat: 52.5203, lon: 13.5101, ts: '2026-11-20T08:15:00.000Z' },
+      { lat: 52.5199, lon: 13.5104, ts: '2026-11-20T08:20:00.000Z' },
+    ];
+    const workStop = [
+      { lat: 52.5250, lon: 13.5250, ts: '2026-11-20T09:00:00.000Z' },
+      { lat: 52.5252, lon: 13.5252, ts: '2026-11-20T09:10:00.000Z' },
+    ];
+    const returnHome = [
+      { lat: 52.5201, lon: 13.5098, ts: '2026-11-20T18:00:00.000Z' },
+      { lat: 52.5201, lon: 13.5102, ts: '2026-11-20T18:05:00.000Z' },
+    ];
+
+    const allHome = [...jitterHome, ...returnHome];
+    const expectedHomeLat = Number(
+      (allHome.reduce((s, p) => s + p.lat, 0) / allHome.length).toFixed(6),
+    );
+    const expectedHomeLon = Number(
+      (allHome.reduce((s, p) => s + p.lon, 0) / allHome.length).toFixed(6),
+    );
+
+    const compacted = averageNearbyTrailPings([
+      // Intentionally shuffled order + second user + fuzzed point near Home
+      {
+        userId: 'user-a',
+        username: 'KB',
+        latitude: returnHome[1].lat,
+        longitude: returnHome[1].lon,
+        recordedAt: returnHome[1].ts,
+        isFuzzed: false,
+      },
+      ...jitterHome.map((p) => ({
+        userId: 'user-a',
+        username: 'KB',
+        latitude: p.lat,
+        longitude: p.lon,
+        recordedAt: p.ts,
+        isFuzzed: false,
+      })),
+      ...workStop.map((p) => ({
+        userId: 'user-a',
+        username: 'KB',
+        latitude: p.lat,
+        longitude: p.lon,
+        recordedAt: p.ts,
+        isFuzzed: false,
+      })),
+      {
+        userId: 'user-a',
+        username: 'KB',
+        latitude: returnHome[0].lat,
+        longitude: returnHome[0].lon,
+        recordedAt: returnHome[0].ts,
+        isFuzzed: false,
+      },
+      // Fuzzed ping at same coordinate should NOT merge with EXACT cluster
+      {
+        userId: 'user-a',
+        username: 'KB',
+        latitude: expectedHomeLat,
+        longitude: expectedHomeLon,
+        recordedAt: '2026-11-20T19:00:00.000Z',
+        isFuzzed: true,
+      },
+      // Another user's nearby ping stays separate by userId
+      {
+        userId: 'user-b',
+        username: 'Sam',
+        latitude: 52.52005,
+        longitude: 13.51005,
+        recordedAt: '2026-11-20T08:02:00.000Z',
+        isFuzzed: false,
+      },
+    ]);
+
+    expect(compacted).toHaveLength(2);
+    const userA = compacted.find((u) => u.userId === 'user-a')!;
+    const userB = compacted.find((u) => u.userId === 'user-b')!;
+
+    expect(userB.stops).toHaveLength(1);
+    expect(userB.pathCoordinates).toHaveLength(1);
+
+    // Stops: merged Home (7 pings), Work (2 pings), and separated Fuzzed stop (1 ping)
+    expect(userA.stops).toHaveLength(3);
+    const homeStop = userA.stops[0];
+    expect(homeStop.pingCount).toBe(allHome.length);
+    expect(homeStop.latitude).toBeCloseTo(expectedHomeLat, 6);
+    expect(homeStop.longitude).toBeCloseTo(expectedHomeLon, 6);
+    expect(homeStop.firstRecordedAt).toBe('2026-11-20T08:00:00.000Z');
+    expect(homeStop.lastRecordedAt).toBe('2026-11-20T18:05:00.000Z');
+    expect(homeStop.isFuzzed).toBe(false);
+
+    const workAvgStop = userA.stops[1];
+    expect(workAvgStop.pingCount).toBe(2);
+    expect(workAvgStop.latitude).toBeCloseTo(52.5251, 6);
+    expect(workAvgStop.longitude).toBeCloseTo(13.5251, 6);
+
+    expect(userA.stops[2].isFuzzed).toBe(true);
+    expect(userA.stops[2].pingCount).toBe(1);
+
+    // Path preserves Home -> Work -> Home -> Fuzzed without intra-cluster zig-zags
+    expect(userA.pathCoordinates).toEqual([
+      [homeStop.longitude, homeStop.latitude],
+      [workAvgStop.longitude, workAvgStop.latitude],
+      [homeStop.longitude, homeStop.latitude],
+      [userA.stops[2].longitude, userA.stops[2].latitude],
+    ]);
+
+    // Continuous walk with 110m steps should NOT chain into one giant cluster
+    const walkPings = Array.from({ length: 10 }, (_, idx) => ({
+      userId: 'walker',
+      username: 'Walker',
+      latitude: 52.5 + idx * 0.001, // ~111m per step
+      longitude: 13.4,
+      recordedAt: new Date(Date.UTC(2026, 10, 20, 10, idx, 0)).toISOString(),
+    }));
+    const [walkTrail] = averageNearbyTrailPings(walkPings);
+    expect(walkTrail.stops).toHaveLength(10);
+    expect(haversineMeters(52.5, 13.4, 52.501, 13.4)).toBeGreaterThan(100);
   });
 });
