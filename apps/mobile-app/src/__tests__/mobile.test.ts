@@ -5,7 +5,12 @@ import {
   flushOfflineLocations,
   getPendingLocationCount,
 } from '../services/offlineQueue';
-import { buildMobileMapStyle, buildPmtilesSourceUrl } from '../services/pmtilesStyle';
+import {
+  buildMobileMapStyle,
+  buildPmtilesSourceUrl,
+  estimateOfflineRegionSize,
+  formatCacheBytes,
+} from '../services/pmtilesStyle';
 import {
   createMemoryKeyValueStore,
   getStoredConfig,
@@ -16,7 +21,10 @@ import {
   formatAppUpdateNotice,
   INSTALLED_APP_VERSION,
 } from '../services/appVersion';
+import { groupChatMessagesForDisplay } from '../services/chatFormatting';
+import { formatUserError } from '../services/errorFormatter';
 import { requestLocationPermissionsOnLaunch } from '../services/locationPermissions';
+import { computeSafeAreaInsets } from '../services/safeAreaMath';
 
 describe('@loved-ones/mobile-app', () => {
   it('parses QR invite JSON and binds serverUrl into secure store', async () => {
@@ -192,5 +200,128 @@ describe('@loved-ones/mobile-app', () => {
     const notice = formatAppUpdateNotice(info!, '0.1.0');
     expect(notice.title).toContain('0.2.0');
     expect(notice.body).toContain('0.1.0');
+  });
+
+  it('sanitizes raw JS/network/HTTP errors into human-readable messages', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(formatUserError(new TypeError('Network request failed'))).toBe(
+        'Unable to reach the server. Check your internet connection or server URL.',
+      );
+      expect(formatUserError(new SyntaxError('JSON Parse error: Unexpected character: <'))).toBe(
+        'Received an unexpected response from the server. Verify your server address.',
+      );
+      expect(
+        formatUserError(
+          new SyntaxError('Unexpected token'),
+          'Invalid invite code or QR format. Please scan a valid LovedOnes invite.',
+        ),
+      ).toBe('Invalid invite code or QR format. Please scan a valid LovedOnes invite.');
+      expect(formatUserError(new Error('HTTP 401'))).toBe(
+        "Your session expired or you don't have permission for this action.",
+      );
+      expect(formatUserError(new Error('HTTP 403'))).toBe(
+        "Your session expired or you don't have permission for this action.",
+      );
+      expect(formatUserError(new Error('Already in this group'))).toBe('Already in this group');
+
+      const store = createMemoryKeyValueStore();
+      await expect(parseAndBindQrInvite('not-json-or-url', store)).rejects.toThrow(
+        'Invalid invite code or QR format. Please scan a valid LovedOnes invite.',
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('computes safe-area insets for Android 3-button/gesture nav bars and iOS', () => {
+    const android3Btn = computeSafeAreaInsets('android', 24, 800, 728);
+    expect(android3Btn.top).toBe(28);
+    expect(android3Btn.bottom).toBe(48);
+
+    const androidGesture = computeSafeAreaInsets('android', 28, 844, 816);
+    expect(androidGesture.bottom).toBe(28);
+
+    const iosInsets = computeSafeAreaInsets('ios', null, 844, 844);
+    expect(iosInsets.top).toBe(48);
+    expect(iosInsets.bottom).toBe(34);
+  });
+
+  it('estimates offline PMTiles cache sizes and formats grouped chat messages', async () => {
+    expect(formatCacheBytes(0)).toBe('0 B');
+    expect(formatCacheBytes(512 * 1024)).toBe('512.0 KB');
+    expect(formatCacheBytes(42.5 * 1024 * 1024)).toBe('42.5 MB');
+
+    const headMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      expect(init?.method).toBe('HEAD');
+      return new Response(null, { status: 200, headers: { 'content-length': '44564480' } });
+    }) as unknown as typeof fetch;
+    expect(
+      await estimateOfflineRegionSize('https://track.example.com', '/tiles/berlin.pmtiles', 123, headMock),
+    ).toBe(44564480);
+
+    const failingFetch = vi.fn(async () => {
+      throw new Error('offline');
+    }) as unknown as typeof fetch;
+    expect(
+      await estimateOfflineRegionSize('https://track.example.com', '/tiles/berlin.pmtiles', 2048, failingFetch),
+    ).toBe(2048);
+
+    const now = new Date('2026-11-20T22:00:00.000Z');
+    const grouped = groupChatMessagesForDisplay(
+      [
+        {
+          id: 'm1',
+          groupId: 'g1',
+          senderId: 'u-kb',
+          senderUsername: 'KB',
+          senderAvatarUrl: null,
+          content: 'Hey',
+          createdAt: '2026-11-19T21:00:00.000Z',
+        },
+        {
+          id: 'm2',
+          groupId: 'g1',
+          senderId: 'u-kb',
+          senderUsername: 'KB',
+          senderAvatarUrl: null,
+          content: 'On my way',
+          createdAt: '2026-11-20T20:10:00.000Z',
+        },
+        {
+          id: 'm3',
+          groupId: 'g1',
+          senderId: 'u-kb',
+          senderUsername: 'KB',
+          senderAvatarUrl: null,
+          content: 'Almost there',
+          createdAt: '2026-11-20T20:11:00.000Z',
+        },
+        {
+          id: 'm4',
+          groupId: 'g1',
+          senderId: 'u-me',
+          senderUsername: 'Me',
+          senderAvatarUrl: null,
+          content: 'Great!',
+          createdAt: '2026-11-20T20:12:00.000Z',
+        },
+      ],
+      'u-me',
+      now,
+    );
+
+    expect(grouped).toHaveLength(4);
+    expect(grouped[0].showDateSeparator).toBe(true);
+    expect(grouped[0].dateLabel).toBe('Yesterday');
+    expect(grouped[0].showSenderHeader).toBe(true);
+    expect(grouped[0].senderInitials).toBe('KB');
+    expect(grouped[1].showDateSeparator).toBe(true);
+    expect(grouped[1].dateLabel).toBe('Today');
+    expect(grouped[1].showSenderHeader).toBe(true);
+    expect(grouped[2].showSenderHeader).toBe(false);
+    expect(grouped[3].isMine).toBe(true);
+    expect(grouped[3].showSenderHeader).toBe(false);
+    expect(grouped[3].compactTime).toMatch(/^\d{2}:\d{2}$/);
   });
 });

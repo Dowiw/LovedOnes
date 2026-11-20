@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,6 +13,8 @@ import {
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import type { QrInvitePayload } from '@loved-ones/shared';
 import { parseInviteInput, withMinDelay } from '@loved-ones/shared';
+import { formatUserError } from '../services/errorFormatter';
+import { useSafeAreaInsets } from '../services/safeArea';
 import {
   MobileStoredConfig,
   parseAndBindQrInvite,
@@ -22,6 +26,7 @@ interface QrOnboardingScreenProps {
 }
 
 export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps) {
+  const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
   const [manualInput, setManualInput] = useState('');
@@ -52,7 +57,9 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
       setInvite(bound);
       setServerUrl(bound.serverUrl);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid QR invite code');
+      setError(
+        formatUserError(err, 'Invalid invite code or QR format. Please scan a valid LovedOnes invite.'),
+      );
     }
   }
 
@@ -77,7 +84,9 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
         });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid QR JSON, URL, or token');
+      setError(
+        formatUserError(err, 'Invalid invite code or QR format. Please scan a valid LovedOnes invite.'),
+      );
     }
   }
 
@@ -148,7 +157,7 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
       });
       onAuthenticated(nextConfig);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Authentication failed');
+      setError(formatUserError(err, 'Unable to sign in. Please check your credentials and server URL.'));
     } finally {
       setLoading(false);
     }
@@ -178,7 +187,7 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
           'If that account has a verified backup email, a 6-digit reset code has been sent.',
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to request reset code');
+      setError(formatUserError(err, 'Failed to request reset code'));
     } finally {
       setLoading(false);
     }
@@ -223,7 +232,7 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
       setMode('login');
       setNotice('Password reset! Sign in with your new password.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to reset password');
+      setError(formatUserError(err, 'Failed to reset password'));
     } finally {
       setLoading(false);
     }
@@ -237,7 +246,12 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
           barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
           onBarcodeScanned={(res) => void handleQrScanned(res)}
         />
-        <View style={styles.scannerOverlay}>
+        <View
+          style={[
+            styles.scannerOverlay,
+            { paddingBottom: Math.max(insets.bottom + 20, 34) },
+          ]}
+        >
           <Text style={styles.scannerPrompt}>Scan Admin QR Invite</Text>
           <TouchableOpacity style={styles.secondaryBtn} onPress={() => setScanning(false)}>
             <Text style={styles.secondaryBtnText}>Cancel</Text>
@@ -248,7 +262,20 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView
+      style={styles.flexRoot}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingTop: Math.max(insets.top + 16, 48),
+            paddingBottom: Math.max(insets.bottom + 24, 36),
+          },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
       <View style={styles.header}>
         <View style={styles.brandBadge}>
           <View style={styles.brandDot} />
@@ -516,11 +543,16 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
           <Text style={styles.secondaryBtnText}>Bind Invite Payload</Text>
         </TouchableOpacity>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  flexRoot: {
+    flex: 1,
+    backgroundColor: '#f4f4f5',
+  },
   container: {
     flexGrow: 1,
     backgroundColor: '#f4f4f5',

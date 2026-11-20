@@ -1,4 +1,5 @@
 import type { LocationPoint } from '@loved-ones/shared';
+import { formatUserError } from './errorFormatter';
 
 export interface QueuedLocationRow extends LocationPoint {
   id: number;
@@ -154,17 +155,25 @@ export async function flushOfflineLocations(
   }));
 
   const cleanBase = serverUrl.replace(/\/$/, '');
-  const response = await fetchImpl(`${cleanBase}/api/realtime/locations`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ points }),
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(`${cleanBase}/api/realtime/locations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ points }),
+    });
+  } catch (err) {
+    throw new Error(
+      formatUserError(err, 'Unable to reach the server. Check your internet connection or server URL.'),
+    );
+  }
 
   if (!response.ok) {
-    throw new Error(`Batch upload failed with HTTP ${response.status}`);
+    const err = new Error(`HTTP ${response.status}`);
+    throw new Error(formatUserError(err, 'Unable to sync queued locations right now.'));
   }
 
   await s.deleteByIds(pending.map((row) => row.id));

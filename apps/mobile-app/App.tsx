@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import './src/services/backgroundLocation';
 import { MobileMapScreen } from './src/screens/MobileMapScreen';
 import { QrOnboardingScreen } from './src/screens/QrOnboardingScreen';
+import { SafeAreaProvider } from './src/services/safeArea';
 import { getStoredConfig, MobileStoredConfig } from './src/services/secureConfig';
 
 export default function App() {
@@ -20,33 +21,37 @@ export default function App() {
 
   if (loading) {
     return (
-      <View style={styles.loader}>
-        <StatusBar style="light" />
-        <ActivityIndicator color="#10b981" size="large" />
-      </View>
+      <SafeAreaProvider>
+        <View style={styles.loader}>
+          <StatusBar style="light" />
+          <ActivityIndicator color="#10b981" size="large" />
+        </View>
+      </SafeAreaProvider>
     );
   }
 
   return (
-    <View style={styles.root}>
-      <StatusBar style="light" />
-      {config?.accessToken && config.serverUrl ? (
-        <MobileMapScreen
-          config={config}
-          onSignedOut={() =>
-            setConfig({
-              serverUrl: null,
-              accessToken: null,
-              refreshToken: null,
-              user: null,
-              activeGroupId: null,
-            })
-          }
-        />
-      ) : (
-        <QrOnboardingScreen onAuthenticated={setConfig} />
-      )}
-    </View>
+    <SafeAreaProvider>
+      <View style={styles.root}>
+        <StatusBar style="light" />
+        {config?.accessToken && config.serverUrl ? (
+          <MobileMapScreen
+            config={config}
+            onSignedOut={() =>
+              setConfig({
+                serverUrl: null,
+                accessToken: null,
+                refreshToken: null,
+                user: null,
+                activeGroupId: null,
+              })
+            }
+          />
+        ) : (
+          <QrOnboardingScreen onAuthenticated={setConfig} />
+        )}
+      </View>
+    </SafeAreaProvider>
   );
 }
 

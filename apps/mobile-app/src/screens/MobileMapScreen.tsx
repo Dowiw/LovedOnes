@@ -4,6 +4,7 @@ import {
   Alert,
   AppState,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -63,10 +64,19 @@ import {
 import {
   buildMobileMapStyle,
   checkForOtaUpdate,
-  downloadOfflineRegionPmtiles,
+  deleteCachedRegionPmtiles,
+  downloadOfflineRegionPmtilesWithProgress,
+  estimateOfflineRegionSize,
+  formatCacheBytes,
+  getCachedRegionPmtilesInfo,
   getCachedRegionPmtilesUri,
   type MapLabelLanguage,
+  type OfflineCacheInfo,
+  type OfflineDownloadProgress,
 } from '../services/pmtilesStyle';
+import { groupChatMessagesForDisplay } from '../services/chatFormatting';
+import { formatUserError } from '../services/errorFormatter';
+import { useSafeAreaInsets } from '../services/safeArea';
 import { clearStoredConfig, MobileStoredConfig, saveStoredConfig } from '../services/secureConfig';
 
 interface GroupSummary {
@@ -81,6 +91,7 @@ interface MobileMapScreenProps {
 }
 
 export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
+  const insets = useSafeAreaInsets();
   const serverUrl = (config.serverUrl ?? '').replace(/\/$/, '');
   const [accessToken, setAccessToken] = useState(config.accessToken ?? '');
   const [refreshToken, setRefreshToken] = useState(config.refreshToken ?? '');
@@ -154,6 +165,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [privacySavingMode, setPrivacySavingMode] = useState<PrivacyMode | null>(null);
   const [syncingBusy, setSyncingBusy] = useState(false);
   const [cachingOffline, setCachingOffline] = useState(false);
+  const [cacheInfo, setCacheInfo] = useState<OfflineCacheInfo | null>(null);
+  const [offlineModalOpen, setOfflineModalOpen] = useState(false);
+  const [estimatedRegionBytes, setEstimatedRegionBytes] = useState<number | null>(null);
+  const [estimatingSize, setEstimatingSize] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<OfflineDownloadProgress | null>(null);
+  const [menuModalOpen, setMenuModalOpen] = useState(false);
+  const [privacySheetOpen, setPrivacySheetOpen] = useState(false);
 
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
@@ -169,6 +187,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
   const socketRef = useRef<Socket | null>(null);
   const cameraRef = useRef<CameraRef | null>(null);
+  const chatScrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(null);
+  const offlineAbortRef = useRef<AbortController | null>(null);
 
   const activeGroup = useMemo(
     () => groups.find((g) => g.id === activeGroupId) ?? groups[0] ?? null,
@@ -197,9 +217,37 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       })
       .catch(() => {});
     void isBackgroundTrackingActive().then(setTracking).catch(() => {});
-    void getCachedRegionPmtilesUri().then(setLocalPmtilesUri).catch(() => {});
+    void getCachedRegionPmtilesInfo()
+      .then((info) => {
+        setCacheInfo(info);
+        setLocalPmtilesUri(info.exists ? info.uri : null);
+      })
+      .catch(() => {
+        void getCachedRegionPmtilesUri().then(setLocalPmtilesUri).catch(() => {});
+      });
     void refreshQueueCount().catch(() => {});
   }, [refreshQueueCount]);
+
+  useEffect(() => {
+    if (!statusBanner) return;
+    const timer = setTimeout(() => {
+      setStatusBanner(null);
+    }, 4200);
+    return () => clearTimeout(timer);
+  }, [statusBanner]);
+
+  useEffect(() => {
+    if (!chatOpen) return;
+    const timer = setTimeout(() => {
+      chatScrollRef.current?.scrollToEnd({ animated: true });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [chatOpen, messages.length]);
+
+  const chatDisplayItems = useMemo(
+    () => groupChatMessagesForDisplay(messages, userProfile?.id),
+    [messages, userProfile?.id],
+  );
 
   const checkServerAppVersion = useCallback(
     async (manual = false) => {
@@ -256,7 +304,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       setPermissionInfo(perm);
       setStatusBanner(perm.label);
     } catch (err) {
-      setStatusBanner(err instanceof Error ? err.message : 'Unable to request location permission');
+      setStatusBanner(formatUserError(err, 'Unable to request location permission'));
     }
   }
 
@@ -513,7 +561,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         await captureFocusAndSyncPosition().catch(() => null);
       }
     } catch (err) {
-      setStatusBanner(err instanceof Error ? err.message : 'Unable to toggle location tracking');
+      setStatusBanner(formatUserError(err, 'Unable to toggle location tracking'));
     }
   }
 
@@ -532,7 +580,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       }
     } catch (err) {
       await refreshQueueCount();
-      setStatusBanner(err instanceof Error ? err.message : 'Saved offline in SQLite queue');
+      setStatusBanner(formatUserError(err, 'Saved offline — unable to reach server right now.'));
     } finally {
       setSyncingBusy(false);
     }
@@ -542,48 +590,117 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     if (!activeGroup || privacySavingMode) return;
     setPrivacySavingMode(mode);
     try {
-      await withMinDelay(
-        fetch(`${serverUrl}/api/auth/groups/${activeGroup.id}/privacy`, {
+      await withMinDelay(async () => {
+        const res = await authedFetch(`/api/auth/groups/${activeGroup.id}/privacy`, {
           method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${accessToken}`,
-          },
           body: JSON.stringify({ privacy: mode }),
-        }),
-      );
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+      });
       setGroups((prev) =>
         prev.map((g) => (g.id === activeGroup.id ? { ...g, myPrivacy: mode } : g)),
       );
+      setPrivacySheetOpen(false);
       setStatusBanner(`Sharing mode: ${mode}`);
     } catch (err) {
-      setStatusBanner(err instanceof Error ? err.message : 'Failed to switch sharing mode');
+      setStatusBanner(formatUserError(err, 'Failed to switch sharing mode'));
     } finally {
       setPrivacySavingMode(null);
     }
   }
 
-  async function handleCacheOfflineMap() {
-    if (cachingOffline) return;
-    setCachingOffline(true);
+  const targetCacheRegion = useMemo(() => {
+    const targetLat = selfCoord?.[1] ?? locations[0]?.latitude;
+    const targetLon = selfCoord?.[0] ?? locations[0]?.longitude;
+    if (targetLat !== undefined && targetLon !== undefined) {
+      const match = findCoveringRegions(targetLat, targetLon, mapRegions)[0];
+      if (match) return match;
+    }
+    return mapRegions.find((r) => !r.isStub) ?? mapRegions[0] ?? null;
+  }, [selfCoord, locations, mapRegions]);
+
+  async function openOfflineCacheModal() {
+    setOfflineModalOpen(true);
+    const info = await getCachedRegionPmtilesInfo().catch(() => null);
+    if (info) {
+      setCacheInfo(info);
+      setLocalPmtilesUri(info.exists ? info.uri : null);
+    }
+    if (!serverUrl) return;
+    setEstimatingSize(true);
     try {
-      const targetLat = selfCoord?.[1] ?? locations[0]?.latitude;
-      const targetLon = selfCoord?.[0] ?? locations[0]?.longitude;
-      const covering =
-        targetLat !== undefined && targetLon !== undefined
-          ? findCoveringRegions(targetLat, targetLon, mapRegions)[0]
-          : undefined;
-      const uri = await withMinDelay(
-        downloadOfflineRegionPmtiles(serverUrl, covering?.url ?? '/tiles/region.pmtiles'),
+      const estimated = await estimateOfflineRegionSize(
+        serverUrl,
+        targetCacheRegion?.url ?? '/tiles/region.pmtiles',
+        targetCacheRegion?.sizeBytes ?? null,
       );
-      setLocalPmtilesUri(uri);
+      setEstimatedRegionBytes(estimated);
+    } finally {
+      setEstimatingSize(false);
+    }
+  }
+
+  async function handleCacheOfflineMap() {
+    if (cachingOffline || !serverUrl) return;
+    const controller = new AbortController();
+    offlineAbortRef.current = controller;
+    setCachingOffline(true);
+    setDownloadProgress({
+      bytesWritten: 0,
+      totalBytes: estimatedRegionBytes ?? targetCacheRegion?.sizeBytes ?? 0,
+      percent: 0,
+    });
+    try {
+      const result = await withMinDelay(
+        downloadOfflineRegionPmtilesWithProgress({
+          serverUrl,
+          regionUrl: targetCacheRegion?.url ?? '/tiles/region.pmtiles',
+          expectedBytes: estimatedRegionBytes ?? targetCacheRegion?.sizeBytes ?? null,
+          signal: controller.signal,
+          onProgress: (progress) => setDownloadProgress(progress),
+        }),
+      );
+      setLocalPmtilesUri(result.uri);
+      const refreshed = await getCachedRegionPmtilesInfo().catch(() => null);
+      setCacheInfo(
+        refreshed ?? {
+          exists: true,
+          uri: result.uri,
+          sizeBytes: result.sizeBytes,
+          lastModified: Date.now(),
+        },
+      );
       setStatusBanner(
-        `Cached ${covering?.displayName ?? covering?.name ?? 'regional'} PMTiles offline`,
+        `Cached ${targetCacheRegion?.displayName ?? targetCacheRegion?.name ?? 'regional'} map (${formatCacheBytes(result.sizeBytes)})`,
       );
     } catch (err) {
-      setStatusBanner(err instanceof Error ? err.message : 'Tile cache failed');
+      const msg = err instanceof Error ? err.message : '';
+      if (/cancelled/i.test(msg)) {
+        setStatusBanner('Offline map download cancelled');
+      } else {
+        setStatusBanner(formatUserError(err, 'Unable to download offline map right now.'));
+      }
     } finally {
+      offlineAbortRef.current = null;
       setCachingOffline(false);
+      setDownloadProgress(null);
+    }
+  }
+
+  function handleCancelOfflineDownload() {
+    offlineAbortRef.current?.abort();
+  }
+
+  async function handleDeleteCachedMap() {
+    try {
+      await deleteCachedRegionPmtiles();
+      setLocalPmtilesUri(null);
+      setCacheInfo({ exists: false, uri: null, sizeBytes: 0, lastModified: null });
+      setStatusBanner('Removed cached offline map');
+    } catch (err) {
+      setStatusBanner(formatUserError(err, 'Unable to remove cached offline map.'));
     }
   }
 
@@ -637,7 +754,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         setActiveMapJob(data.job);
       }
     } catch (err) {
-      setStatusBanner(err instanceof Error ? err.message : 'Failed to request city map');
+      setStatusBanner(formatUserError(err, 'Failed to request city map'));
     }
   }
 
@@ -710,7 +827,9 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       });
     } catch (err) {
       setQrPreview(null);
-      setQrError(err instanceof Error ? err.message : 'Invalid QR invite');
+      setQrError(
+        formatUserError(err, 'Invalid invite code or QR format. Please scan a valid LovedOnes invite.'),
+      );
     } finally {
       setQrLoading(false);
     }
@@ -747,7 +866,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       setJoinQrOpen(false);
       setJoinIsPrompt(false);
     } catch (err) {
-      setQrError(err instanceof Error ? err.message : 'Failed to join group');
+      setQrError(formatUserError(err, 'Failed to join group'));
     } finally {
       setQrLoading(false);
     }
@@ -869,7 +988,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       );
       setAccountMessage('Profile saved');
     } catch (err) {
-      setAccountError(err instanceof Error ? err.message : 'Unable to save profile');
+      setAccountError(formatUserError(err, 'Unable to save profile'));
     } finally {
       setAccountBusy(false);
     }
@@ -908,7 +1027,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       setRecoveryCodeSentTo(sentEmail);
       setRecoveryMessage(`6-digit code sent to ${sentEmail}`);
     } catch (err) {
-      setRecoveryError(err instanceof Error ? err.message : 'Failed to send code');
+      setRecoveryError(formatUserError(err, 'Failed to send code'));
     } finally {
       setRecoveryAction(null);
     }
@@ -945,7 +1064,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       setRecoveryCodeSentTo(null);
       setRecoveryMessage('Backup email verified!');
     } catch (err) {
-      setRecoveryError(err instanceof Error ? err.message : 'Failed to verify code');
+      setRecoveryError(formatUserError(err, 'Failed to verify code'));
     } finally {
       setRecoveryAction(null);
     }
@@ -977,7 +1096,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       setRecoveryCodeSentTo(null);
       setRecoveryMessage('Backup email removed');
     } catch (err) {
-      setRecoveryError(err instanceof Error ? err.message : 'Unable to remove backup email');
+      setRecoveryError(formatUserError(err, 'Unable to remove backup email'));
     } finally {
       setRecoveryAction(null);
     }
@@ -1012,7 +1131,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       setConfirmPassword('');
       setPasswordMessage('Password updated');
     } catch (err) {
-      setPasswordError(err instanceof Error ? err.message : 'Unable to change password');
+      setPasswordError(formatUserError(err, 'Unable to change password'));
     } finally {
       setPasswordBusy(false);
     }
@@ -1145,8 +1264,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         })}
       </Map>
 
-      {/* Top Floating Search / Group Capsule & Filter Chips */}
-      <View style={styles.topOverlay} pointerEvents="box-none">
+      {/* Decluttered Top Floating Capsule, Contextual Permission Banner & Unified Toast Slot */}
+      <View
+        style={[styles.topOverlay, { top: Math.max(insets.top + 8, 44) }]}
+        pointerEvents="box-none"
+      >
         <View style={styles.topCapsule}>
           <TouchableOpacity style={styles.topAvatarBtn} onPress={openAccountModal}>
             {selfAvatarUrl ? (
@@ -1162,197 +1284,192 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               {activeGroup?.name ?? 'LovedOnes'}
             </Text>
             <Text style={styles.topSubtitle} numberOfLines={1}>
-              {userProfile?.username ?? 'Account'} · {activeGroup ? `${activeGroup.myPrivacy}` : 'Live map'}
+              {locations.length} {locations.length === 1 ? 'member' : 'members'} visible
             </Text>
           </View>
-          <TouchableOpacity style={styles.joinQrPill} onPress={() => openJoinQrModal(false)}>
-            <Text style={styles.joinQrPillText}>Join QR</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.signOutPill} onPress={openAccountModal}>
-            <Text style={styles.signOutText}>Account</Text>
+          {activeGroup && (
+            <TouchableOpacity
+              style={styles.privacyBadge}
+              onPress={() => setPrivacySheetOpen(true)}
+            >
+              <View
+                style={[
+                  styles.privacyBadgeDot,
+                  activeGroup.myPrivacy === 'EXACT'
+                    ? styles.privacyDotExact
+                    : activeGroup.myPrivacy === 'FUZZED'
+                      ? styles.privacyDotFuzzed
+                      : styles.privacyDotGhost,
+                ]}
+              />
+              <Text style={styles.privacyBadgeText}>{activeGroup.myPrivacy}</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.menuIconBtn}
+            accessibilityLabel="Open quick menu"
+            onPress={() => setMenuModalOpen(true)}
+          >
+            <View style={styles.menuIconBar} />
+            <View style={styles.menuIconBar} />
+            <View style={styles.menuIconBar} />
           </TouchableOpacity>
         </View>
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipScroll}
-        >
-          {activeGroup &&
-            (['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => {
-              const savingThis = privacySavingMode === mode;
-              const selected = activeGroup.myPrivacy === mode || savingThis;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  disabled={Boolean(privacySavingMode)}
-                  onPress={() => void handlePrivacyChange(mode)}
-                  style={[
-                    styles.chipPill,
-                    selected && styles.chipPillActive,
-                    { flexDirection: 'row', alignItems: 'center', gap: 5 },
-                  ]}
-                >
-                  {savingThis && (
-                    <ActivityIndicator size="small" color={selected ? '#ffffff' : '#18181b'} />
-                  )}
-                  <Text style={[styles.chipText, selected && styles.chipTextActive]}>
-                    {mode}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-
-          {permissionInfo && (
-            <TouchableOpacity
-              onPress={() => void handleRequestPermissions()}
-              style={styles.chipPill}
-            >
-              <Text style={styles.chipPermText}>{permissionInfo.label}</Text>
-            </TouchableOpacity>
-          )}
-        </ScrollView>
-
-        {statusBanner && (
-          <View style={styles.statusToast}>
-            <Text style={styles.statusToastText} numberOfLines={1}>
-              {statusBanner}
-            </Text>
-          </View>
-        )}
-
-        {appVersionInfo?.updateAvailable &&
-          (appVersionInfo.updateRequired ||
-            dismissedAppUpdateVersion !== appVersionInfo.latestMobileVersion) && (
-            <View style={styles.chatToastBanner}>
-              <View style={styles.chatToastTextWrap}>
-                <Text style={styles.chatToastSender} numberOfLines={1}>
-                  {formatAppUpdateNotice(appVersionInfo, INSTALLED_APP_VERSION).title}
-                </Text>
-                <Text style={styles.chatToastBody} numberOfLines={1}>
-                  {formatAppUpdateNotice(appVersionInfo, INSTALLED_APP_VERSION).body}
-                </Text>
-              </View>
-              {appVersionInfo.downloadUrl && (
-                <TouchableOpacity
-                  onPress={() => {
-                    void Linking.openURL(appVersionInfo.downloadUrl!).catch(() => {});
-                  }}
-                >
-                  <Text style={styles.chatToastAction}>Download</Text>
-                </TouchableOpacity>
-              )}
-              {!appVersionInfo.updateRequired && (
-                <TouchableOpacity
-                  onPress={() =>
-                    setDismissedAppUpdateVersion(appVersionInfo.latestMobileVersion)
-                  }
-                >
-                  <Text style={[styles.chatToastAction, { color: '#71717a' }]}>Later</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-
-        {(activeMapJob ||
-          (uncoveredMobileTarget && dismissedUncoveredKey !== uncoveredMobileTarget.key)) && (
-          <View style={styles.chatToastBanner}>
-            {activeMapJob ? (
-              <View style={styles.chatToastTextWrap}>
-                <Text style={styles.chatToastSender} numberOfLines={1}>
-                  Downloading city map · {activeMapJob.progressPct}%
-                </Text>
-                <Text style={styles.chatToastBody} numberOfLines={1}>
-                  {activeMapJob.message ?? activeMapJob.cityName}
-                </Text>
-              </View>
-            ) : (
-              uncoveredMobileTarget && (
-                <>
-                  <TouchableOpacity
-                    activeOpacity={0.9}
-                    style={styles.chatToastTextWrap}
-                    onPress={() =>
-                      void handleRequestServerCityMap(
-                        uncoveredMobileTarget.latitude,
-                        uncoveredMobileTarget.longitude,
-                      )
-                    }
-                  >
-                    <Text style={styles.chatToastSender} numberOfLines={1}>
-                      No map behind coordinates
-                    </Text>
-                    <Text style={styles.chatToastBody} numberOfLines={1}>
-                      Tap to download city tiles on server
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => setDismissedUncoveredKey(uncoveredMobileTarget.key)}
-                  >
-                    <Text style={styles.chatToastAction}>Dismiss</Text>
-                  </TouchableOpacity>
-                </>
-              )
-            )}
-          </View>
-        )}
-
-        {chatBanner && !chatOpen && (
+        {permissionInfo?.level === 'denied' && (
           <TouchableOpacity
-            activeOpacity={0.9}
-            style={styles.chatToastBanner}
-            onPress={() => {
-              setUnreadChatCount(0);
-              setChatBanner(null);
-              setChatOpen(true);
-            }}
+            onPress={() => void handleRequestPermissions()}
+            style={[styles.chipPill, { alignSelf: 'flex-start', borderColor: '#fecdd3', backgroundColor: '#fff1f2' }]}
           >
-            <View style={styles.chatToastTextWrap}>
-              <Text style={styles.chatToastSender} numberOfLines={1}>
-                New chat · {chatBanner.senderUsername}
-              </Text>
-              <Text style={styles.chatToastBody} numberOfLines={1}>
-                {chatBanner.content}
-              </Text>
-            </View>
-            <Text style={styles.chatToastAction}>Open</Text>
+            <Text style={[styles.chipPermText, { color: '#be123c' }]}>
+              Location access needed · Tap to grant
+            </Text>
           </TouchableOpacity>
         )}
+
+        {/* Single Unified Non-Overlapping Toast Slot */}
+        {(() => {
+          const showAppUpdate = Boolean(
+            appVersionInfo?.updateAvailable &&
+              (appVersionInfo.updateRequired ||
+                dismissedAppUpdateVersion !== appVersionInfo.latestMobileVersion),
+          );
+          if (showAppUpdate && appVersionInfo) {
+            return (
+              <View style={styles.chatToastBanner}>
+                <View style={styles.chatToastTextWrap}>
+                  <Text style={styles.chatToastSender} numberOfLines={1}>
+                    {formatAppUpdateNotice(appVersionInfo, INSTALLED_APP_VERSION).title}
+                  </Text>
+                  <Text style={styles.chatToastBody} numberOfLines={1}>
+                    {formatAppUpdateNotice(appVersionInfo, INSTALLED_APP_VERSION).body}
+                  </Text>
+                </View>
+                {appVersionInfo.downloadUrl && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      void Linking.openURL(appVersionInfo.downloadUrl!).catch(() => {});
+                    }}
+                  >
+                    <Text style={styles.chatToastAction}>Download</Text>
+                  </TouchableOpacity>
+                )}
+                {!appVersionInfo.updateRequired && (
+                  <TouchableOpacity
+                    onPress={() =>
+                      setDismissedAppUpdateVersion(appVersionInfo.latestMobileVersion)
+                    }
+                  >
+                    <Text style={[styles.chatToastAction, { color: '#a1a1aa' }]}>Later</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          }
+
+          if (chatBanner && !chatOpen) {
+            return (
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.chatToastBanner}
+                onPress={() => {
+                  setUnreadChatCount(0);
+                  setChatBanner(null);
+                  setChatOpen(true);
+                }}
+              >
+                <View style={styles.chatToastTextWrap}>
+                  <Text style={styles.chatToastSender} numberOfLines={1}>
+                    New chat · {chatBanner.senderUsername}
+                  </Text>
+                  <Text style={styles.chatToastBody} numberOfLines={1}>
+                    {chatBanner.content}
+                  </Text>
+                </View>
+                <Text style={styles.chatToastAction}>Open</Text>
+              </TouchableOpacity>
+            );
+          }
+
+          if (activeMapJob) {
+            return (
+              <View style={styles.chatToastBanner}>
+                <View style={styles.chatToastTextWrap}>
+                  <Text style={styles.chatToastSender} numberOfLines={1}>
+                    Downloading city map · {activeMapJob.progressPct}%
+                  </Text>
+                  <Text style={styles.chatToastBody} numberOfLines={1}>
+                    {activeMapJob.message ?? activeMapJob.cityName}
+                  </Text>
+                </View>
+              </View>
+            );
+          }
+
+          if (uncoveredMobileTarget && dismissedUncoveredKey !== uncoveredMobileTarget.key) {
+            return (
+              <View style={styles.chatToastBanner}>
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  style={styles.chatToastTextWrap}
+                  onPress={() =>
+                    void handleRequestServerCityMap(
+                      uncoveredMobileTarget.latitude,
+                      uncoveredMobileTarget.longitude,
+                    )
+                  }
+                >
+                  <Text style={styles.chatToastSender} numberOfLines={1}>
+                    No map behind coordinates
+                  </Text>
+                  <Text style={styles.chatToastBody} numberOfLines={1}>
+                    Tap to download city tiles on server
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setDismissedUncoveredKey(uncoveredMobileTarget.key)}
+                >
+                  <Text style={styles.chatToastAction}>Dismiss</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          }
+
+          if (statusBanner) {
+            return (
+              <View style={styles.statusToast}>
+                <Text style={styles.statusToastText} numberOfLines={1}>
+                  {statusBanner}
+                </Text>
+              </View>
+            );
+          }
+
+          return null;
+        })()}
       </View>
 
-      {/* Right-Side Floating Stacked Map Controls */}
-      <View style={styles.rightStack}>
-        <TouchableOpacity
-          style={styles.stackBtn}
-          disabled={cachingOffline}
-          onPress={() => void handleCacheOfflineMap()}
-        >
-          {cachingOffline ? (
-            <ActivityIndicator size="small" color="#18181b" />
-          ) : (
-            <Text style={styles.stackBtnText}>
-              {localPmtilesUri ? 'Cached' : 'Cache'}
-            </Text>
-          )}
-        </TouchableOpacity>
-        <View style={styles.stackDivider} />
-        <TouchableOpacity style={styles.stackBtn} onPress={() => void handleCheckOta()}>
-          <Text style={styles.stackBtnText}>OTA</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Bottom Floating Mint CTA + White Rounded Sheet */}
+      {/* Bottom Floating Controls & Safe-Area Bottom Sheet */}
       <View style={styles.bottomWrap} pointerEvents="box-none">
         <View style={styles.floatingCtaRow} pointerEvents="box-none">
           <TouchableOpacity
-            style={[styles.floatingCirclePill, { flexDirection: 'row', alignItems: 'center', gap: 5 }]}
+            style={styles.floatingCircleBtn}
             disabled={syncingBusy}
+            accessibilityLabel="Sync and center location"
             onPress={() => void handlePingAndSync()}
           >
-            {syncingBusy && <ActivityIndicator size="small" color="#18181b" />}
-            <Text style={styles.floatingCircleText}>
-              {syncingBusy ? 'Syncing...' : `Sync (${queuedCount})`}
-            </Text>
+            {syncingBusy ? (
+              <ActivityIndicator size="small" color="#18181b" />
+            ) : (
+              <Text style={styles.floatingCircleIcon}>◎</Text>
+            )}
+            {queuedCount > 0 && (
+              <View style={styles.floatingBadge}>
+                <Text style={styles.floatingBadgeText}>
+                  {queuedCount > 99 ? '99+' : queuedCount}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1366,20 +1483,25 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.floatingCirclePill}
-            onPress={() => setLabelLanguage((prev) => (prev === 'en' ? 'local' : 'en'))}
+            style={[styles.floatingCircleBtn, localPmtilesUri && styles.floatingCircleBtnActive]}
+            accessibilityLabel="Offline map cache"
+            onPress={() => void openOfflineCacheModal()}
           >
-            <Text style={styles.floatingCircleText}>
-              {labelLanguage === 'en' ? 'EN' : 'Local'}
-            </Text>
+            {cachingOffline ? (
+              <ActivityIndicator size="small" color="#18181b" />
+            ) : (
+              <Text style={styles.floatingCircleIcon}>{localPmtilesUri ? '✓' : '↓'}</Text>
+            )}
           </TouchableOpacity>
         </View>
 
-        <View style={styles.bottomSheet}>
+        <View
+          style={[
+            styles.bottomSheet,
+            { paddingBottom: Math.max(insets.bottom, 12) + 8 },
+          ]}
+        >
           <View style={styles.sheetHandle} />
-          <Text style={styles.sheetSummary}>
-            {locations.length} {locations.length === 1 ? 'member' : 'members'} visible
-          </Text>
 
           {locations.length > 0 && (
             <ScrollView
@@ -1413,14 +1535,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
           <View style={styles.tabBar}>
             <TouchableOpacity style={[styles.tabItem, styles.tabItemActive]}>
-              <Text style={[styles.tabLabel, styles.tabLabelActive]}>Map</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.tabItem}
-              onPress={() => void handlePingAndSync()}
-            >
-              <Text style={styles.tabLabel}>Sync ({queuedCount})</Text>
+              <Text style={[styles.tabLabel, styles.tabLabelActive]}>⌖ Map</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1432,7 +1547,9 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               }}
             >
               <View style={styles.chatTabRow}>
-                <Text style={styles.tabLabel}>Chat ({messages.length})</Text>
+                <Text style={styles.tabLabel}>
+                  💬 Chat{messages.length > 0 ? ` (${messages.length})` : ''}
+                </Text>
                 {unreadChatCount > 0 && (
                   <View style={styles.unreadBadge}>
                     <Text style={styles.unreadBadgeText}>
@@ -1446,9 +1563,9 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         </View>
       </View>
 
-      {/* Minimalist White Chat Sheet Modal */}
+      {/* Redesigned Group Chat Sheet Modal (Desktop Web Dashboard Parity) */}
       <Modal visible={chatOpen} animationType="slide" onRequestClose={() => setChatOpen(false)}>
-        <View style={styles.modalWrap}>
+        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48) }]}>
           <View style={styles.modalHeader}>
             <View>
               <Text style={styles.modalTitle}>{activeGroup?.name ?? 'Group'} Chat</Text>
@@ -1458,26 +1575,130 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               <Text style={styles.closeText}>Done</Text>
             </TouchableOpacity>
           </View>
-          <ScrollView style={styles.chatList} contentContainerStyle={styles.chatListContent}>
-            {messages.map((m) => (
-              <View key={m.id} style={styles.chatBubble}>
-                <Text style={styles.chatSender}>{m.senderUsername}</Text>
-                <Text style={styles.chatBody}>{m.content}</Text>
-              </View>
-            ))}
-          </ScrollView>
-          <View style={styles.chatComposer}>
-            <TextInput
-              style={styles.chatInput}
-              value={chatText}
-              onChangeText={setChatText}
-              placeholder="Write a message..."
-              placeholderTextColor="#94a3b8"
-            />
-            <TouchableOpacity style={styles.sendBtn} onPress={handleSendChat}>
-              <Text style={styles.sendBtnText}>Send</Text>
-            </TouchableOpacity>
-          </View>
+
+          <KeyboardAvoidingView
+            style={styles.flexOne}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          >
+            <ScrollView
+              ref={chatScrollRef}
+              style={styles.chatList}
+              contentContainerStyle={styles.chatListContent}
+              keyboardShouldPersistTaps="handled"
+              onContentSizeChange={() => chatScrollRef.current?.scrollToEnd({ animated: true })}
+            >
+              {chatDisplayItems.length === 0 ? (
+                <View style={styles.chatEmptyWrap}>
+                  <Text style={styles.chatEmptyText}>
+                    No messages yet. Say hello to {activeGroup?.name ?? 'your group'}!
+                  </Text>
+                </View>
+              ) : (
+                chatDisplayItems.map((item) => {
+                  const avatarUri = isSafeAvatarUrl(item.message.senderAvatarUrl)
+                    ? item.message.senderAvatarUrl
+                    : null;
+                  return (
+                    <View key={item.message.id}>
+                      {item.showDateSeparator && (
+                        <View style={styles.dateSeparator}>
+                          <Text style={styles.dateSeparatorText}>{item.dateLabel}</Text>
+                        </View>
+                      )}
+                      <View
+                        style={[
+                          styles.chatMessageRow,
+                          item.isMine ? styles.chatRowMine : styles.chatRowOther,
+                        ]}
+                      >
+                        {!item.isMine && (
+                          <View style={styles.chatAvatarSlot}>
+                            {item.showSenderHeader ? (
+                              avatarUri ? (
+                                <Image source={{ uri: avatarUri }} style={styles.chatAvatarImg} />
+                              ) : (
+                                <View style={styles.chatAvatarFallback}>
+                                  <Text style={styles.chatAvatarInitials}>
+                                    {item.senderInitials}
+                                  </Text>
+                                </View>
+                              )
+                            ) : null}
+                          </View>
+                        )}
+
+                        <View
+                          style={[
+                            styles.chatColumn,
+                            item.isMine ? styles.chatColumnMine : styles.chatColumnOther,
+                          ]}
+                        >
+                          {item.showSenderHeader && (
+                            <Text style={styles.chatMetaHeader}>
+                              {item.message.senderUsername} · {item.compactTime}
+                            </Text>
+                          )}
+                          <View
+                            style={[
+                              styles.chatBubble,
+                              item.isMine ? styles.chatBubbleMine : styles.chatBubbleOther,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.chatBody,
+                                item.isMine ? styles.chatBodyMine : styles.chatBodyOther,
+                              ]}
+                            >
+                              {item.message.content}
+                            </Text>
+                          </View>
+                          {(item.isMine || !item.showSenderHeader) && item.compactTime ? (
+                            <Text
+                              style={[
+                                styles.chatTimeFooter,
+                                item.isMine && styles.chatTimeFooterMine,
+                              ]}
+                            >
+                              {item.isMine ? `${item.compactTime} · Sent` : item.compactTime}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
+
+            <View
+              style={[
+                styles.chatComposer,
+                { paddingBottom: Math.max(insets.bottom, 12) + 8 },
+              ]}
+            >
+              <TextInput
+                style={styles.chatInput}
+                value={chatText}
+                onChangeText={setChatText}
+                placeholder={activeGroup ? 'Message group...' : 'Select a group'}
+                placeholderTextColor="#71717a"
+                returnKeyType="send"
+                onSubmitEditing={handleSendChat}
+              />
+              <TouchableOpacity
+                style={[
+                  styles.sendIconBtn,
+                  (!activeGroup || !chatText.trim()) && styles.sendIconBtnDisabled,
+                ]}
+                disabled={!activeGroup || !chatText.trim()}
+                accessibilityLabel="Send message"
+                onPress={handleSendChat}
+              >
+                <Text style={styles.sendBtnText}>↑</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
 
@@ -1487,7 +1708,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         animationType="slide"
         onRequestClose={() => setAccountOpen(false)}
       >
-        <View style={styles.modalWrap}>
+        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48) }]}>
           <View style={styles.modalHeader}>
             <View>
               <Text style={styles.modalTitle}>Account Settings</Text>
@@ -1498,7 +1719,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={styles.settingsScroll}>
+          <ScrollView
+            contentContainerStyle={[
+              styles.settingsScroll,
+              { paddingBottom: Math.max(insets.bottom, 16) + 28 },
+            ]}
+          >
             <View style={styles.settingsCard}>
               <View style={styles.avatarPreviewRow}>
                 <View style={styles.settingsAvatarCircle}>
@@ -1781,9 +2007,302 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         </View>
       </Modal>
 
+      {/* Privacy Mode Popover Sheet Modal */}
+      <Modal
+        visible={privacySheetOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPrivacySheetOpen(false)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <View
+            style={[
+              styles.sheetCard,
+              { paddingBottom: Math.max(insets.bottom, 16) + 8 },
+            ]}
+          >
+            <View style={styles.sheetHeaderRow}>
+              <Text style={styles.modalTitle}>Sharing Privacy</Text>
+              <TouchableOpacity style={styles.closePill} onPress={() => setPrivacySheetOpen(false)}>
+                <Text style={styles.closeText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.settingsHint}>
+              Choose how {activeGroup?.name ?? 'your group'} sees your live coordinates.
+            </Text>
+
+            {(
+              [
+                {
+                  mode: 'EXACT' as PrivacyMode,
+                  title: 'EXACT · Live pin',
+                  desc: 'Shares your precise coordinates in this group.',
+                },
+                {
+                  mode: 'FUZZED' as PrivacyMode,
+                  title: 'FUZZED · ~1 km area',
+                  desc: 'Shows an approximate ~1 km zone ring instead of exact coordinates.',
+                },
+                {
+                  mode: 'GHOST' as PrivacyMode,
+                  title: 'GHOST · Hidden',
+                  desc: 'Hides your location pin and trails from this group.',
+                },
+              ] as const
+            ).map((opt) => {
+              const savingThis = privacySavingMode === opt.mode;
+              const selected = activeGroup?.myPrivacy === opt.mode;
+              return (
+                <TouchableOpacity
+                  key={opt.mode}
+                  disabled={Boolean(privacySavingMode)}
+                  style={[styles.sheetOptionBtn, selected && styles.sheetOptionSelected]}
+                  onPress={() => void handlePrivacyChange(opt.mode)}
+                >
+                  <View style={styles.flexOne}>
+                    <Text style={[styles.settingsSectionTitle, selected && { color: '#ffffff' }]}>
+                      {opt.title}
+                    </Text>
+                    <Text style={[styles.settingsHint, selected && { color: '#d4d4d8' }]}>
+                      {opt.desc}
+                    </Text>
+                  </View>
+                  {savingThis && (
+                    <ActivityIndicator size="small" color={selected ? '#ffffff' : '#18181b'} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Progressive Disclosure Quick Menu Sheet */}
+      <Modal
+        visible={menuModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuModalOpen(false)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <View
+            style={[
+              styles.sheetCard,
+              { paddingBottom: Math.max(insets.bottom, 16) + 8 },
+            ]}
+          >
+            <View style={styles.sheetHeaderRow}>
+              <Text style={styles.modalTitle}>Quick Menu</Text>
+              <TouchableOpacity style={styles.closePill} onPress={() => setMenuModalOpen(false)}>
+                <Text style={styles.closeText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setMenuModalOpen(false);
+                void openOfflineCacheModal();
+              }}
+            >
+              <View style={styles.flexOne}>
+                <Text style={styles.settingsSectionTitle}>Offline Map Cache</Text>
+                <Text style={styles.settingsHint}>
+                  {cacheInfo?.exists
+                    ? `Cached (${formatCacheBytes(cacheInfo.sizeBytes)})`
+                    : 'Download regional map tiles for offline use'}
+                </Text>
+              </View>
+              <Text style={styles.menuRowAction}>Manage →</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setMenuModalOpen(false);
+                openJoinQrModal(false);
+              }}
+            >
+              <View style={styles.flexOne}>
+                <Text style={styles.settingsSectionTitle}>Join Group via QR</Text>
+                <Text style={styles.settingsHint}>Scan or paste an invite token</Text>
+              </View>
+              <Text style={styles.menuRowAction}>Open →</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setMenuModalOpen(false);
+                openAccountModal();
+              }}
+            >
+              <View style={styles.flexOne}>
+                <Text style={styles.settingsSectionTitle}>Account & Appearance</Text>
+                <Text style={styles.settingsHint}>Profile, halo colors, backup email & password</Text>
+              </View>
+              <Text style={styles.menuRowAction}>Open →</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setLabelLanguage((prev) => (prev === 'en' ? 'local' : 'en'));
+              }}
+            >
+              <View style={styles.flexOne}>
+                <Text style={styles.settingsSectionTitle}>Map Label Language</Text>
+                <Text style={styles.settingsHint}>
+                  Currently: {labelLanguage === 'en' ? 'English' : 'Local names'}
+                </Text>
+              </View>
+              <Text style={styles.menuRowAction}>{labelLanguage === 'en' ? 'EN' : 'Local'}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setMenuModalOpen(false);
+                void handleCheckOta();
+              }}
+            >
+              <View style={styles.flexOne}>
+                <Text style={styles.settingsSectionTitle}>App & OTA Updates</Text>
+                <Text style={styles.settingsHint}>Installed v{INSTALLED_APP_VERSION}</Text>
+              </View>
+              <Text style={styles.menuRowAction}>Check →</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setMenuModalOpen(false);
+                void handleRequestPermissions();
+              }}
+            >
+              <View style={styles.flexOne}>
+                <Text style={styles.settingsSectionTitle}>Location Permission</Text>
+                <Text style={styles.settingsHint}>
+                  {permissionInfo?.label ?? 'Tap to check location permissions'}
+                </Text>
+              </View>
+              <Text style={styles.menuRowAction}>Verify →</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Offline Map Cache Modal with Size Preview & Live Progress */}
+      <Modal
+        visible={offlineModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOfflineModalOpen(false)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <View
+            style={[
+              styles.sheetCard,
+              { paddingBottom: Math.max(insets.bottom, 16) + 8 },
+            ]}
+          >
+            <View style={styles.sheetHeaderRow}>
+              <Text style={styles.modalTitle}>Offline Map Cache</Text>
+              <TouchableOpacity
+                style={styles.closePill}
+                onPress={() => setOfflineModalOpen(false)}
+              >
+                <Text style={styles.closeText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.settingsCard}>
+              <Text style={styles.fieldLabel}>Target Region</Text>
+              <Text style={styles.settingsSectionTitle}>
+                {targetCacheRegion?.displayName ?? targetCacheRegion?.name ?? 'Primary Map Region'}
+              </Text>
+              <Text style={styles.settingsHint}>
+                Estimated download size:{' '}
+                {estimatingSize
+                  ? 'Checking server...'
+                  : estimatedRegionBytes
+                    ? `~${formatCacheBytes(estimatedRegionBytes)}`
+                    : 'Size reported on download start'}
+              </Text>
+            </View>
+
+            {cachingOffline && downloadProgress && (
+              <View style={styles.settingsCard}>
+                <View style={styles.sheetHeaderRow}>
+                  <Text style={styles.settingsSectionTitle}>
+                    Downloading · {downloadProgress.percent}%
+                  </Text>
+                  <Text style={styles.settingsHint}>
+                    {formatCacheBytes(downloadProgress.bytesWritten)}
+                    {downloadProgress.totalBytes > 0
+                      ? ` / ${formatCacheBytes(downloadProgress.totalBytes)}`
+                      : ''}
+                  </Text>
+                </View>
+                <View style={styles.progressTrack}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      { width: `${Math.min(100, Math.max(4, downloadProgress.percent))}%` },
+                    ]}
+                  />
+                </View>
+                <TouchableOpacity
+                  style={styles.signOutFullBtn}
+                  onPress={handleCancelOfflineDownload}
+                >
+                  <Text style={styles.signOutFullText}>Cancel Download</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {cacheInfo?.exists && !cachingOffline && (
+              <View style={styles.settingsCard}>
+                <Text style={styles.fieldLabel}>Stored On Device</Text>
+                <Text style={styles.settingsSectionTitle}>
+                  {formatCacheBytes(cacheInfo.sizeBytes)} cached offline
+                </Text>
+                {cacheInfo.lastModified ? (
+                  <Text style={styles.settingsHint}>
+                    Updated {new Date(cacheInfo.lastModified).toLocaleString()}
+                  </Text>
+                ) : null}
+              </View>
+            )}
+
+            {!cachingOffline && (
+              <>
+                <TouchableOpacity
+                  style={styles.primaryBlackBtn}
+                  onPress={() => void handleCacheOfflineMap()}
+                >
+                  <Text style={styles.primaryBlackText}>
+                    {cacheInfo?.exists ? 'Update Cached Map' : 'Download Map for Offline Use'}
+                  </Text>
+                </TouchableOpacity>
+
+                {cacheInfo?.exists && (
+                  <TouchableOpacity
+                    style={styles.signOutFullBtn}
+                    onPress={() => void handleDeleteCachedMap()}
+                  >
+                    <Text style={styles.signOutFullText}>Delete Cached Map</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* Join Group via QR Modal */}
       <Modal visible={joinQrOpen} animationType="slide" onRequestClose={closeJoinQrModal}>
-        <View style={styles.modalWrap}>
+        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48) }]}>
           {qrScanning ? (
             <View style={styles.scannerFull}>
               <CameraView
@@ -1791,7 +2310,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                 barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
                 onBarcodeScanned={(res) => void handleMobileQrScanned(res)}
               />
-              <View style={styles.scannerOverlayBar}>
+              <View
+                style={[
+                  styles.scannerOverlayBar,
+                  { bottom: Math.max(insets.bottom + 24, 48) },
+                ]}
+              >
                 <Text style={styles.scannerOverlayText}>Point camera at Admin Invite QR</Text>
                 <TouchableOpacity
                   style={styles.closePill}
@@ -2364,32 +2888,86 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   closeText: { color: '#18181b', fontSize: 13, fontWeight: '700' },
-  chatList: { flex: 1 },
+  chatList: { flex: 1, backgroundColor: '#fafafa' },
   chatListContent: { padding: 16, gap: 10 },
-  chatBubble: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e2e8f0',
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+  chatEmptyWrap: { paddingVertical: 40, alignItems: 'center' },
+  chatEmptyText: { color: '#71717a', fontSize: 13, textAlign: 'center' },
+  dateSeparator: { alignItems: 'center', marginVertical: 8 },
+  dateSeparatorText: {
+    backgroundColor: '#e4e4e7',
+    color: '#52525b',
+    fontSize: 11,
+    fontWeight: '600',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 999,
+    overflow: 'hidden',
   },
+  chatMessageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 4 },
+  chatRowMine: { justifyContent: 'flex-end' },
+  chatRowOther: { justifyContent: 'flex-start' },
+  chatAvatarSlot: { width: 28, height: 28 },
+  chatAvatarImg: { width: 28, height: 28, borderRadius: 999 },
+  chatAvatarFallback: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    backgroundColor: '#18181b',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatAvatarInitials: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
+  chatColumn: { maxWidth: '78%' },
+  chatColumnMine: { alignItems: 'flex-end' },
+  chatColumnOther: { alignItems: 'flex-start' },
+  chatMetaHeader: {
+    color: '#71717a',
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 3,
+    paddingHorizontal: 2,
+  },
+  chatBubble: {
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  chatBubbleMine: {
+    backgroundColor: '#18181b',
+    borderBottomRightRadius: 4,
+  },
+  chatBubbleOther: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e4e4e7',
+    borderWidth: 1,
+    borderBottomLeftRadius: 4,
+  },
+  chatBody: { fontSize: 14, lineHeight: 19 },
+  chatBodyMine: { color: '#ffffff' },
+  chatBodyOther: { color: '#18181b' },
+  chatTimeFooter: {
+    color: '#a1a1aa',
+    fontSize: 10,
+    marginTop: 2,
+    paddingHorizontal: 2,
+  },
+  chatTimeFooterMine: { color: '#71717a' },
   chatSender: { color: '#18181b', fontSize: 11, fontWeight: '700', marginBottom: 3 },
-  chatBody: { color: '#18181b', fontSize: 14 },
   chatComposer: {
     flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 28,
+    paddingTop: 10,
+    paddingBottom: 24,
     gap: 8,
     backgroundColor: '#ffffff',
     borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
+    borderTopColor: '#e4e4e7',
   },
   chatInput: {
     flex: 1,
-    backgroundColor: '#f8fafc',
-    borderColor: '#e2e8f0',
+    backgroundColor: '#f4f4f5',
+    borderColor: '#e4e4e7',
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 16,
@@ -2403,7 +2981,127 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     justifyContent: 'center',
   },
-  sendBtnText: { color: '#ffffff', fontWeight: '700', fontSize: 13 },
+  sendIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 999,
+    backgroundColor: '#18181b',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendIconBtnDisabled: { opacity: 0.4 },
+  sendBtnText: { color: '#ffffff', fontWeight: '700', fontSize: 16 },
+  flexOne: { flex: 1 },
+  privacyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#f4f4f5',
+    borderColor: '#e4e4e7',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  privacyBadgeDot: { width: 7, height: 7, borderRadius: 999 },
+  privacyDotExact: { backgroundColor: '#10b981' },
+  privacyDotFuzzed: { backgroundColor: '#f59e0b' },
+  privacyDotGhost: { backgroundColor: '#71717a' },
+  privacyBadgeText: { color: '#18181b', fontSize: 11, fontWeight: '700' },
+  menuIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 999,
+    backgroundColor: '#f4f4f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3.5,
+  },
+  menuIconBar: { width: 14, height: 1.8, borderRadius: 999, backgroundColor: '#18181b' },
+  floatingCircleBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  floatingCircleBtnActive: { borderColor: '#18181b' },
+  floatingCircleIcon: { color: '#18181b', fontSize: 18, fontWeight: '700' },
+  floatingBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#18181b',
+    borderRadius: 999,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  floatingBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: '700' },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(9, 9, 11, 0.45)',
+    justifyContent: 'flex-end',
+  },
+  sheetCard: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    gap: 12,
+  },
+  sheetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sheetOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    backgroundColor: '#fafafa',
+    padding: 14,
+  },
+  sheetOptionSelected: {
+    backgroundColor: '#18181b',
+    borderColor: '#18181b',
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    backgroundColor: '#fafafa',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  menuRowAction: { color: '#18181b', fontSize: 12, fontWeight: '700' },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#e4e4e7',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#18181b',
+  },
   settingsScroll: { padding: 16, gap: 14, paddingBottom: 40 },
   settingsCard: {
     backgroundColor: '#ffffff',

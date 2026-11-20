@@ -1,4 +1,5 @@
 import { QrInvitePayload, QrInvitePayloadSchema, SystemRole } from '@loved-ones/shared';
+import { formatUserError } from './errorFormatter';
 
 export interface MobileUser {
   id: string;
@@ -134,27 +135,34 @@ export async function parseAndBindQrInvite(
   rawData: string,
   store?: SecureKeyValueStore,
 ): Promise<QrInvitePayload> {
-  const trimmed = rawData.trim();
-  let candidate: unknown;
+  try {
+    const trimmed = rawData.trim();
+    let candidate: unknown;
 
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    const parsedUrl = new URL(trimmed);
-    const token = parsedUrl.searchParams.get('token');
-    if (!token) {
-      throw new Error('Invite URL does not include a token query parameter');
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      const parsedUrl = new URL(trimmed);
+      const token = parsedUrl.searchParams.get('token');
+      if (!token) {
+        throw new Error('Invite URL does not include a token query parameter');
+      }
+      candidate = {
+        v: 1,
+        serverUrl: parsedUrl.origin,
+        inviteToken: token,
+        groupName: parsedUrl.searchParams.get('groupName') ?? 'Invited Group',
+      };
+    } else {
+      candidate = JSON.parse(trimmed) as unknown;
     }
-    candidate = {
-      v: 1,
-      serverUrl: parsedUrl.origin,
-      inviteToken: token,
-      groupName: parsedUrl.searchParams.get('groupName') ?? 'Invited Group',
-    };
-  } else {
-    candidate = JSON.parse(trimmed) as unknown;
-  }
 
-  const payload = QrInvitePayloadSchema.parse(candidate);
-  const cleanServerUrl = payload.serverUrl.replace(/\/$/, '');
-  await saveStoredConfig({ serverUrl: cleanServerUrl }, store);
-  return { ...payload, serverUrl: cleanServerUrl };
+    const payload = QrInvitePayloadSchema.parse(candidate);
+    const cleanServerUrl = payload.serverUrl.replace(/\/$/, '');
+    await saveStoredConfig({ serverUrl: cleanServerUrl }, store);
+    return { ...payload, serverUrl: cleanServerUrl };
+  } catch (err) {
+    console.warn('[LovedOnes] QR parse error:', err);
+    throw new Error(
+      formatUserError(err, 'Invalid invite code or QR format. Please scan a valid LovedOnes invite.'),
+    );
+  }
 }

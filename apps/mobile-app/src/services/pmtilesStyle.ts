@@ -657,10 +657,139 @@ export function buildMobileMapStyle(
   };
 }
 
+export interface OfflineCacheInfo {
+  exists: boolean;
+  uri: string | null;
+  sizeBytes: number;
+  lastModified: number | null;
+}
+
+export interface OfflineDownloadProgress {
+  bytesWritten: number;
+  totalBytes: number;
+  percent: number;
+}
+
+export function formatCacheBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let val = bytes;
+  let idx = 0;
+  while (val >= 1024 && idx < units.length - 1) {
+    val /= 1024;
+    idx += 1;
+  }
+  return idx === 0 ? `${Math.round(val)} B` : `${val.toFixed(1)} ${units[idx]}`;
+}
+
 export async function getCachedRegionPmtilesUri(): Promise<string | null> {
   const { File, Paths } = await import('expo-file-system');
   const localFile = new File(Paths.document, 'region.pmtiles');
   return localFile.exists ? localFile.uri : null;
+}
+
+export async function getCachedRegionPmtilesInfo(
+  localFilename = 'region.pmtiles',
+): Promise<OfflineCacheInfo> {
+  const { File, Paths } = await import('expo-file-system');
+  const localFile = new File(Paths.document, localFilename);
+  if (!localFile.exists) {
+    return { exists: false, uri: null, sizeBytes: 0, lastModified: null };
+  }
+  return {
+    exists: true,
+    uri: localFile.uri,
+    sizeBytes: Number.isFinite(localFile.size) ? localFile.size : 0,
+    lastModified: localFile.lastModified ?? null,
+  };
+}
+
+export async function deleteCachedRegionPmtiles(
+  localFilename = 'region.pmtiles',
+): Promise<void> {
+  const { File, Paths } = await import('expo-file-system');
+  const localFile = new File(Paths.document, localFilename);
+  if (localFile.exists) {
+    localFile.delete();
+  }
+}
+
+export async function estimateOfflineRegionSize(
+  serverUrl: string,
+  regionUrl = '/tiles/region.pmtiles',
+  fallbackSizeBytes?: number | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<number | null> {
+  const cleanServer = serverUrl.replace(/\/$/, '');
+  const cleanRegionUrl = regionUrl.startsWith('/') ? regionUrl : `/${regionUrl}`;
+  try {
+    const res = await fetchImpl(`${cleanServer}${cleanRegionUrl}`, { method: 'HEAD' });
+    if (res.ok) {
+      const rawLen = res.headers.get('content-length');
+      const parsed = rawLen ? Number.parseInt(rawLen, 10) : Number.NaN;
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // Fall back to known region metadata if HEAD fails or is blocked
+  }
+  return typeof fallbackSizeBytes === 'number' && fallbackSizeBytes > 0 ? fallbackSizeBytes : null;
+}
+
+export async function downloadOfflineRegionPmtilesWithProgress(options: {
+  serverUrl: string;
+  regionUrl?: string;
+  localFilename?: string;
+  expectedBytes?: number | null;
+  onProgress?: (progress: OfflineDownloadProgress) => void;
+  signal?: AbortSignal;
+}): Promise<{ uri: string; sizeBytes: number }> {
+  const { File, Paths } = await import('expo-file-system');
+  const cleanServer = options.serverUrl.replace(/\/$/, '');
+  const regionPath = options.regionUrl ?? '/tiles/region.pmtiles';
+  const cleanRegionUrl = regionPath.startsWith('/') ? regionPath : `/${regionPath}`;
+  const destination = new File(Paths.document, options.localFilename ?? 'region.pmtiles');
+
+  try {
+    const downloaded = await File.downloadFileAsync(
+      `${cleanServer}${cleanRegionUrl}`,
+      destination,
+      {
+        idempotent: true,
+        signal: options.signal,
+        onProgress: (data) => {
+          const totalBytes =
+            data.totalBytes > 0 ? data.totalBytes : (options.expectedBytes ?? 0);
+          const percent =
+            totalBytes > 0
+              ? Math.min(100, Math.max(0, Math.round((data.bytesWritten / totalBytes) * 100)))
+              : 0;
+          options.onProgress?.({
+            bytesWritten: data.bytesWritten,
+            totalBytes,
+            percent,
+          });
+        },
+      },
+    );
+    return {
+      uri: downloaded.uri,
+      sizeBytes: Number.isFinite(downloaded.size) ? downloaded.size : 0,
+    };
+  } catch (err) {
+    if (options.signal?.aborted) {
+      try {
+        if (destination.exists) destination.delete();
+      } catch {
+        // ignore cleanup failure
+      }
+      throw new Error('Download cancelled');
+    }
+    throw err;
+  }
 }
 
 export async function downloadOfflineRegionPmtiles(
@@ -668,16 +797,12 @@ export async function downloadOfflineRegionPmtiles(
   regionUrl = '/tiles/region.pmtiles',
   localFilename = 'region.pmtiles',
 ): Promise<string> {
-  const { File, Paths } = await import('expo-file-system');
-  const cleanServer = serverUrl.replace(/\/$/, '');
-  const cleanRegionUrl = regionUrl.startsWith('/') ? regionUrl : `/${regionUrl}`;
-  const destination = new File(Paths.document, localFilename);
-  const downloaded = await File.downloadFileAsync(
-    `${cleanServer}${cleanRegionUrl}`,
-    destination,
-    { idempotent: true },
-  );
-  return downloaded.uri;
+  const res = await downloadOfflineRegionPmtilesWithProgress({
+    serverUrl,
+    regionUrl,
+    localFilename,
+  });
+  return res.uri;
 }
 
 export async function checkForOtaUpdate(): Promise<{ updated: boolean; message: string }> {
