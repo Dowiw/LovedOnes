@@ -235,15 +235,15 @@
           ["linear"],
           ["zoom"],
           12,
-          9.5,
+          10,
           14,
-          11,
+          11.5,
           17,
-          13
+          13.5
         ],
-        "text-max-angle": 30,
-        "text-padding": 4,
-        "symbol-spacing": 320
+        "text-max-angle": 45,
+        "text-padding": 3,
+        "symbol-spacing": 200
       },
       "paint": {
         "text-color": "#3f444e",

@@ -82,15 +82,18 @@ export function MapCanvas({
     }
 
     const { tilesBase } = getServiceBaseUrls();
-    const styleUrl = `${tilesBase}/tiles/style.json`;
+    const styleUrl = `${tilesBase}/tiles/style.json?v=3`;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: styleUrl,
-      center: [13.4448, 52.5069],
-      zoom: 11,
+      center: [13.405, 52.52],
+      zoom: 13.2,
       attributionControl: false,
       transformRequest: (url) => {
+        if (tilesBase && url.startsWith('pmtiles:///tiles/')) {
+          return { url: `pmtiles://${tilesBase}${url.slice('pmtiles://'.length)}` };
+        }
         if (tilesBase && url.startsWith('/tiles/')) {
           return { url: `${tilesBase}${url}` };
         }

@@ -186,9 +186,9 @@ export function buildMobileMapStyle(
           'symbol-placement': 'line',
           'text-field': ['coalesce', ['get', 'name'], ['get', 'name:en']],
           'text-font': ['PlusJakartaSans-Medium'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 12, 9.5, 14, 11, 17, 13],
-          'text-max-angle': 30,
-          'symbol-spacing': 320,
+          'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 14, 11.5, 17, 13.5],
+          'text-max-angle': 45,
+          'symbol-spacing': 200,
         },
         paint: {
           'text-color': '#3f444e',
