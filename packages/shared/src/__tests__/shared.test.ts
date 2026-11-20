@@ -14,6 +14,7 @@ import {
   normalizeOwnTracksToPoints,
   normalizePrivacyMode,
   parseBoundingBox,
+  parseInviteInput,
   QrInvitePayloadSchema,
   RespondLocationRequestSchema,
   TrailQuerySchema,
@@ -317,5 +318,28 @@ describe('@loved-ones/shared', () => {
       ChangePasswordSchema.safeParse({ currentPassword: 'samepassword', newPassword: 'samepassword' })
         .success,
     ).toBe(false);
+
+    expect(
+      parseInviteInput(
+        JSON.stringify({
+          v: 1,
+          serverUrl: 'https://lovedones.doiw.dev/',
+          inviteToken: 'inv_abc12345',
+          groupName: 'Doiwki',
+        }),
+      ),
+    ).toEqual({
+      inviteToken: 'inv_abc12345',
+      serverUrl: 'https://lovedones.doiw.dev',
+      groupName: 'Doiwki',
+    });
+    expect(parseInviteInput('https://lovedones.doiw.dev/join?token=inv_abc12345')).toEqual({
+      inviteToken: 'inv_abc12345',
+      serverUrl: 'https://lovedones.doiw.dev',
+      groupName: undefined,
+    });
+    expect(parseInviteInput('inv_abc12345')).toEqual({ inviteToken: 'inv_abc12345' });
+    expect(() => parseInviteInput('   ')).toThrow();
+    expect(() => parseInviteInput('https://lovedones.doiw.dev/join')).toThrow();
   });
 });

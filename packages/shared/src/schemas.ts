@@ -156,6 +156,54 @@ export const QrInvitePayloadSchema = z.object({
 });
 export type QrInvitePayload = z.infer<typeof QrInvitePayloadSchema>;
 
+export interface ParsedInviteInput {
+  inviteToken: string;
+  serverUrl?: string;
+  groupName?: string;
+}
+
+/**
+ * Accepts any of:
+ * 1. QrInvitePayload JSON string (`{"v":1,"serverUrl":...,"inviteToken":...,"groupName":...}`)
+ * 2. Invite join URL (`https://.../join?token=inv_...`)
+ * 3. Raw invite token (`inv_...`, 4..128 non-whitespace chars)
+ */
+export function parseInviteInput(rawData: string): ParsedInviteInput {
+  const trimmed = rawData.trim();
+  if (!trimmed) {
+    throw new Error('Enter or scan an invite QR code, URL, or token');
+  }
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    const parsedUrl = new URL(trimmed);
+    const token = parsedUrl.searchParams.get('token')?.trim();
+    if (!token || token.length < 4 || token.length > 128 || /\s/.test(token)) {
+      throw new Error('Invite URL does not contain a valid token parameter');
+    }
+    const groupName = parsedUrl.searchParams.get('groupName')?.trim() || undefined;
+    return {
+      inviteToken: token,
+      serverUrl: parsedUrl.origin,
+      groupName,
+    };
+  }
+
+  if (trimmed.startsWith('{')) {
+    const candidate = JSON.parse(trimmed) as unknown;
+    const payload = QrInvitePayloadSchema.parse(candidate);
+    return {
+      inviteToken: payload.inviteToken,
+      serverUrl: payload.serverUrl.replace(/\/$/, ''),
+      groupName: payload.groupName,
+    };
+  }
+
+  if (trimmed.length < 4 || trimmed.length > 128 || /\s/.test(trimmed)) {
+    throw new Error('Invalid invite token format');
+  }
+  return { inviteToken: trimmed };
+}
+
 function parseNonNegativeFinite(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }

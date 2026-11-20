@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@loved-ones/shared": "workspace:*",
+    "jsqr": "^1.4.0",
     "lucide-react": "^0.468.0",
     "maplibre-gl": "^4.7.1",
     "next": "^15.1.0",

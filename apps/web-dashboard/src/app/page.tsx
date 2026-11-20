@@ -40,6 +40,7 @@ import {
 } from '@loved-ones/shared';
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
 import { MapCanvas, type MapLabelLanguage } from '@/components/MapCanvas';
+import { QrJoinModal } from '@/components/QrJoinModal';
 import {
   apiCreateGroup,
   apiCreateGroupPlace,
@@ -54,6 +55,7 @@ import {
   apiFetchLocationRequests,
   apiGetMe,
   apiGetTrackerTokenStatus,
+  apiJoinInvite,
   apiLogin,
   apiRegister,
   apiRespondLocationRequest,
@@ -62,6 +64,7 @@ import {
   apiUpdatePrivacy,
   getServiceBaseUrls,
   GroupItem,
+  InvitePreview,
   loadSession,
   saveSession,
   SESSION_UPDATED_EVENT,
@@ -144,6 +147,13 @@ export default function HomePage() {
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
+  const [preAuthInvite, setPreAuthInvite] = useState<InvitePreview | null>(null);
+  const [preAuthQrOpen, setPreAuthQrOpen] = useState(false);
+  const [joinQrOpen, setJoinQrOpen] = useState(false);
+  const [joinQrOnboardingPrompt, setJoinQrOnboardingPrompt] = useState(false);
+  const [invitePromptDismissed, setInvitePromptDismissed] = useState(false);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+
   useEffect(() => {
     setSession(loadSession());
     try {
@@ -196,11 +206,16 @@ export default function HomePage() {
   const refreshGroups = useCallback(async (token: string) => {
     const list = await apiFetchGroups(token);
     setGroups(list);
+    setGroupsLoaded(true);
     setActiveGroupId((prev) => (prev && list.some((g) => g.id === prev) ? prev : list[0]?.id ?? ''));
+    return list;
   }, []);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session) {
+      setGroupsLoaded(false);
+      return;
+    }
     const token = session.accessToken;
     void refreshGroups(token).catch(() => { });
     void apiGetMe(token)
@@ -532,15 +547,43 @@ export default function HomePage() {
     };
   }, [geoSharing, session]);
 
+  useEffect(() => {
+    if (
+      session &&
+      groupsLoaded &&
+      groups.length === 0 &&
+      session.user.role !== 'HOST_ADMIN' &&
+      !invitePromptDismissed &&
+      !joinQrOpen
+    ) {
+      setJoinQrOnboardingPrompt(true);
+      setJoinQrOpen(true);
+    }
+  }, [session, groupsLoaded, groups.length, invitePromptDismissed, joinQrOpen]);
+
   async function handleAuthSubmit(e: React.FormEvent) {
     e.preventDefault();
     setAuthError(null);
     setAuthLoading(true);
     try {
+      const boundToken = preAuthInvite?.token;
       const nextSession =
         authMode === 'login'
           ? await apiLogin(email, password)
-          : await apiRegister({ email, username, password });
+          : await apiRegister({
+              email,
+              username,
+              password,
+              ...(boundToken ? { inviteToken: boundToken } : {}),
+            });
+
+      if (authMode === 'login' && boundToken) {
+        await apiJoinInvite(nextSession.accessToken, boundToken).catch(() => {});
+      }
+
+      setPreAuthInvite(null);
+      setInvitePromptDismissed(Boolean(boundToken));
+      setGroupsLoaded(false);
       saveSession(nextSession);
       setSession(nextSession);
     } catch (err) {
@@ -607,6 +650,10 @@ export default function HomePage() {
     saveSession(null);
     setSession(null);
     setGroups([]);
+    setGroupsLoaded(false);
+    setJoinQrOpen(false);
+    setJoinQrOnboardingPrompt(false);
+    setInvitePromptDismissed(false);
     setLocations([]);
     setTrails([]);
     setMessages([]);
@@ -797,10 +844,49 @@ export default function HomePage() {
             </button>
           </form>
 
-          <p className="mt-4 text-center text-[11px] text-zinc-400">
+          <div className="mt-4 border-t border-zinc-100 pt-4">
+            {preAuthInvite ? (
+              <div className="flex items-center justify-between gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 text-xs">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold text-zinc-900">
+                    Joining: {preAuthInvite.groupName}
+                  </div>
+                  <div className="text-[11px] text-zinc-500">
+                    Role {preAuthInvite.assignedRole} on {authMode === 'register' ? 'registration' : 'sign in'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPreAuthInvite(null)}
+                  className="rounded-full p-1 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-950"
+                  title="Remove invite"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setPreAuthQrOpen(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-full border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50"
+              >
+                <QrCode className="h-3.5 w-3.5" />
+                Have an invite QR or link? Scan or paste
+              </button>
+            )}
+          </div>
+
+          <p className="mt-3 text-center text-[11px] text-zinc-400">
             First registered account automatically becomes Host Admin.
           </p>
         </div>
+
+        <QrJoinModal
+          open={preAuthQrOpen}
+          mode="pre-auth"
+          onClose={() => setPreAuthQrOpen(false)}
+          onBindPreAuthInvite={(preview) => setPreAuthInvite(preview)}
+        />
       </div>
     );
   }
@@ -902,19 +988,32 @@ export default function HomePage() {
           <>
             {/* Group & Privacy Floating Card */}
             <div className="pointer-events-auto rounded-3xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                   <Users className="h-3.5 w-3.5" />
                   Groups ({groups.length})
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setShowNewGroupForm((v) => !v)}
-                  className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-slate-200"
-                >
-                  <Plus className="h-3 w-3" />
-                  New
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setJoinQrOnboardingPrompt(false);
+                      setJoinQrOpen(true);
+                    }}
+                    className="flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100"
+                  >
+                    <QrCode className="h-3 w-3" />
+                    Join QR
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewGroupForm((v) => !v)}
+                    className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-slate-200"
+                  >
+                    <Plus className="h-3 w-3" />
+                    New
+                  </button>
+                </div>
               </div>
 
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -932,7 +1031,22 @@ export default function HomePage() {
                   </button>
                 ))}
                 {groups.length === 0 && (
-                  <p className="text-xs text-zinc-400">Create a group to start sharing.</p>
+                  <div className="w-full space-y-2 pt-0.5">
+                    <p className="text-xs text-zinc-500">
+                      Not in a group yet. Scan an invite QR code or create one.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setJoinQrOnboardingPrompt(false);
+                        setJoinQrOpen(true);
+                      }}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-full bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800"
+                    >
+                      <QrCode className="h-3.5 w-3.5" />
+                      Scan or Paste QR Invite
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -1644,6 +1758,26 @@ export default function HomePage() {
           </button>
         ))}
       </div>
+      <QrJoinModal
+        open={joinQrOpen}
+        mode="authenticated"
+        accessToken={session.accessToken}
+        isOnboardingPrompt={joinQrOnboardingPrompt}
+        onClose={() => {
+          if (joinQrOnboardingPrompt) {
+            setInvitePromptDismissed(true);
+          }
+          setJoinQrOpen(false);
+          setJoinQrOnboardingPrompt(false);
+        }}
+        onJoinedGroup={(groupId) => {
+          setInvitePromptDismissed(true);
+          void refreshGroups(session.accessToken).then(() => {
+            setActiveGroupId(groupId);
+          });
+        }}
+      />
+
       <AccountSettingsModal
         open={accountSettingsOpen}
         session={session}

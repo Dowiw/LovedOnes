@@ -10,11 +10,14 @@ import {
   View,
 } from 'react-native';
 import { Camera, type CameraRef, Map, Marker } from '@maplibre/maplibre-react-native';
+import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
 import {
   isSafeAvatarUrl,
+  parseInviteInput,
   type ChatMessage,
+  type GroupRole,
   type LocationBroadcast,
   type PrivacyMode,
 } from '@loved-ones/shared';
@@ -58,11 +61,28 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [refreshToken, setRefreshToken] = useState(config.refreshToken ?? '');
 
   const [groups, setGroups] = useState<GroupSummary[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState<string>(config.activeGroupId ?? '');
   const [locations, setLocations] = useState<LocationBroadcast[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatText, setChatText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
+
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [joinQrOpen, setJoinQrOpen] = useState(false);
+  const [joinIsPrompt, setJoinIsPrompt] = useState(false);
+  const [invitePromptDismissed, setInvitePromptDismissed] = useState(false);
+  const [qrScanning, setQrScanning] = useState(false);
+  const [qrPasteInput, setQrPasteInput] = useState('');
+  const [qrPreview, setQrPreview] = useState<{
+    token: string;
+    groupId: string;
+    groupName: string;
+    assignedRole: GroupRole;
+    valid: boolean;
+  } | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
 
   const [userProfile, setUserProfile] = useState(config.user);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -127,6 +147,21 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     }
   }
 
+  const fetchGroups = useCallback(async () => {
+    if (!serverUrl || !accessToken) return;
+    const res = await fetch(`${serverUrl}/api/auth/groups`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = (await res.json()) as { groups?: GroupSummary[] };
+    const list = data.groups ?? [];
+    setGroups(list);
+    setGroupsLoaded(true);
+    if (list.length > 0 && !activeGroupId) {
+      setActiveGroupId(list[0].id);
+      void saveStoredConfig({ activeGroupId: list[0].id });
+    }
+  }, [serverUrl, accessToken, activeGroupId]);
+
   useEffect(() => {
     if (!serverUrl || !accessToken) return;
     void fetch(`${serverUrl}/api/auth/me`, {
@@ -143,20 +178,21 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       })
       .catch(() => {});
 
-    void fetch(`${serverUrl}/api/auth/groups`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    })
-      .then((r) => r.json())
-      .then((data: { groups?: GroupSummary[] }) => {
-        const list = data.groups ?? [];
-        setGroups(list);
-        if (list.length > 0 && !activeGroupId) {
-          setActiveGroupId(list[0].id);
-          void saveStoredConfig({ activeGroupId: list[0].id });
-        }
-      })
-      .catch(() => {});
-  }, [serverUrl, accessToken, activeGroupId]);
+    void fetchGroups().catch(() => {});
+  }, [serverUrl, accessToken, fetchGroups]);
+
+  useEffect(() => {
+    if (
+      groupsLoaded &&
+      groups.length === 0 &&
+      userProfile?.role !== 'HOST_ADMIN' &&
+      !invitePromptDismissed &&
+      !joinQrOpen
+    ) {
+      setJoinIsPrompt(true);
+      setJoinQrOpen(true);
+    }
+  }, [groupsLoaded, groups.length, userProfile?.role, invitePromptDismissed, joinQrOpen]);
 
   useEffect(() => {
     if (!serverUrl || !accessToken) return;
@@ -343,6 +379,93 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       content: chatText.trim(),
     });
     setChatText('');
+  }
+
+  function openJoinQrModal(asPrompt = false) {
+    setJoinIsPrompt(asPrompt);
+    setQrScanning(false);
+    setQrPasteInput('');
+    setQrPreview(null);
+    setQrError(null);
+    setJoinQrOpen(true);
+  }
+
+  function closeJoinQrModal() {
+    if (joinIsPrompt) {
+      setInvitePromptDismissed(true);
+    }
+    setQrScanning(false);
+    setJoinQrOpen(false);
+    setJoinIsPrompt(false);
+  }
+
+  async function resolveMobileInvite(raw: string) {
+    setQrError(null);
+    setQrLoading(true);
+    try {
+      const parsed = parseInviteInput(raw);
+      const targetServer = (parsed.serverUrl ?? serverUrl).replace(/\/$/, '');
+      const res = await fetch(
+        `${targetServer}/api/auth/invites/${encodeURIComponent(parsed.inviteToken)}`,
+      );
+      const data = (await res.json()) as {
+        error?: string;
+        token?: string;
+        groupId?: string;
+        groupName?: string;
+        assignedRole?: GroupRole;
+        valid?: boolean;
+      };
+      if (!res.ok || !data.token || !data.groupName) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setQrPreview({
+        token: data.token,
+        groupId: data.groupId ?? '',
+        groupName: data.groupName,
+        assignedRole: data.assignedRole ?? 'MEMBER',
+        valid: Boolean(data.valid),
+      });
+    } catch (err) {
+      setQrPreview(null);
+      setQrError(err instanceof Error ? err.message : 'Invalid QR invite');
+    } finally {
+      setQrLoading(false);
+    }
+  }
+
+  async function handleMobileQrScanned(result: BarcodeScanningResult) {
+    if (!qrScanning) return;
+    setQrScanning(false);
+    await resolveMobileInvite(result.data);
+  }
+
+  async function handleConfirmJoinInvite() {
+    if (!qrPreview || !qrPreview.valid) return;
+    setQrLoading(true);
+    setQrError(null);
+    try {
+      const res = await authedFetch('/api/auth/join', {
+        method: 'POST',
+        body: JSON.stringify({ inviteToken: qrPreview.token }),
+      });
+      const data = (await res.json()) as { error?: string; groupId?: string; groupName?: string };
+      if (!res.ok || !data.groupId) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setInvitePromptDismissed(true);
+      await fetchGroups();
+      setActiveGroupId(data.groupId);
+      await saveStoredConfig({ activeGroupId: data.groupId });
+      socketRef.current?.emit('group:join', data.groupId);
+      setStatusBanner(`Joined ${data.groupName ?? qrPreview.groupName}`);
+      setJoinQrOpen(false);
+      setJoinIsPrompt(false);
+    } catch (err) {
+      setQrError(err instanceof Error ? err.message : 'Failed to join group');
+    } finally {
+      setQrLoading(false);
+    }
   }
 
   function openAccountModal() {
@@ -568,6 +691,9 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               {userProfile?.username ?? 'Account'} · {activeGroup ? `${activeGroup.myPrivacy}` : 'Live map'}
             </Text>
           </View>
+          <TouchableOpacity style={styles.joinQrPill} onPress={() => openJoinQrModal(false)}>
+            <Text style={styles.joinQrPillText}>Join QR</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.signOutPill} onPress={openAccountModal}>
             <Text style={styles.signOutText}>Account</Text>
           </TouchableOpacity>
@@ -902,6 +1028,127 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           </ScrollView>
         </View>
       </Modal>
+
+      {/* Join Group via QR Modal */}
+      <Modal visible={joinQrOpen} animationType="slide" onRequestClose={closeJoinQrModal}>
+        <View style={styles.modalWrap}>
+          {qrScanning ? (
+            <View style={styles.scannerFull}>
+              <CameraView
+                style={StyleSheet.absoluteFill}
+                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                onBarcodeScanned={(res) => void handleMobileQrScanned(res)}
+              />
+              <View style={styles.scannerOverlayBar}>
+                <Text style={styles.scannerOverlayText}>Point camera at Admin Invite QR</Text>
+                <TouchableOpacity
+                  style={styles.closePill}
+                  onPress={() => setQrScanning(false)}
+                >
+                  <Text style={styles.closeText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.modalHeader}>
+                <View style={styles.headerTitleFlex}>
+                  <Text style={styles.modalTitle}>
+                    {joinIsPrompt ? 'Were you invited to a group?' : 'Join Group via QR'}
+                  </Text>
+                  <Text style={styles.modalSubtitle}>
+                    Scan an invite QR code or paste the invite link/token.
+                  </Text>
+                </View>
+                <TouchableOpacity style={styles.closePill} onPress={closeJoinQrModal}>
+                  <Text style={styles.closeText}>{joinIsPrompt ? 'Skip' : 'Done'}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={styles.settingsScroll}>
+                {qrPreview ? (
+                  <View style={styles.settingsCard}>
+                    <Text style={styles.fieldLabel}>Invite Preview</Text>
+                    <Text style={styles.previewGroupName}>{qrPreview.groupName}</Text>
+                    <Text style={styles.settingsHint}>
+                      Role: {qrPreview.assignedRole} ·{' '}
+                      {qrPreview.valid ? 'Active' : 'Expired / Used Up'}
+                    </Text>
+                    {qrError && <Text style={styles.errorText}>{qrError}</Text>}
+                    <TouchableOpacity
+                      style={styles.primaryBlackBtn}
+                      disabled={!qrPreview.valid || qrLoading}
+                      onPress={() => void handleConfirmJoinInvite()}
+                    >
+                      <Text style={styles.primaryBlackText}>
+                        {qrLoading ? 'Joining...' : `Join ${qrPreview.groupName}`}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.outlineBlackBtn}
+                      onPress={() => {
+                        setQrPreview(null);
+                        setQrError(null);
+                      }}
+                    >
+                      <Text style={styles.outlineBlackText}>Scan Different QR</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.settingsCard}>
+                      <TouchableOpacity
+                        style={styles.primaryBlackBtn}
+                        onPress={async () => {
+                          if (!cameraPermission?.granted) {
+                            const next = await requestCameraPermission();
+                            if (!next.granted) {
+                              setQrError('Camera permission is required to scan QR codes.');
+                              return;
+                            }
+                          }
+                          setQrError(null);
+                          setQrScanning(true);
+                        }}
+                      >
+                        <Text style={styles.primaryBlackText}>Scan QR Code</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.settingsCard}>
+                      <Text style={styles.fieldLabel}>Or Paste Invite Link / Token / JSON</Text>
+                      <TextInput
+                        style={styles.fieldInput}
+                        value={qrPasteInput}
+                        onChangeText={setQrPasteInput}
+                        autoCapitalize="none"
+                        placeholder="https://.../join?token=inv_... or inv_..."
+                        placeholderTextColor="#94a3b8"
+                      />
+                      {qrError && <Text style={styles.errorText}>{qrError}</Text>}
+                      <TouchableOpacity
+                        style={styles.outlineBlackBtn}
+                        disabled={qrLoading || !qrPasteInput.trim()}
+                        onPress={() => void resolveMobileInvite(qrPasteInput)}
+                      >
+                        <Text style={styles.outlineBlackText}>
+                          {qrLoading ? 'Checking...' : 'Verify Invite'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+
+                {joinIsPrompt && (
+                  <TouchableOpacity style={styles.closePill} onPress={closeJoinQrModal}>
+                    <Text style={styles.skipPromptText}>Skip for now — take me to the map</Text>
+                  </TouchableOpacity>
+                )}
+              </ScrollView>
+            </>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1075,6 +1322,17 @@ const styles = StyleSheet.create({
   },
   signOutText: {
     color: '#18181b',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  joinQrPill: {
+    backgroundColor: '#18181b',
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+  },
+  joinQrPillText: {
+    color: '#ffffff',
     fontSize: 11,
     fontWeight: '700',
   },
@@ -1438,4 +1696,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   signOutFullText: { color: '#be123c', fontSize: 13, fontWeight: '700' },
+  scannerFull: { flex: 1, backgroundColor: '#000000' },
+  scannerOverlayBar: {
+    position: 'absolute',
+    bottom: 48,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(24, 24, 27, 0.92)',
+    borderRadius: 20,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  scannerOverlayText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
+  headerTitleFlex: { flex: 1, paddingRight: 12 },
+  previewGroupName: { color: '#18181b', fontSize: 18, fontWeight: '700' },
+  skipPromptText: { color: '#18181b', fontSize: 12, fontWeight: '700', textAlign: 'center' },
 });

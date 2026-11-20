@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import type { QrInvitePayload } from '@loved-ones/shared';
+import { parseInviteInput } from '@loved-ones/shared';
 import {
   MobileStoredConfig,
   parseAndBindQrInvite,
@@ -50,11 +51,25 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
   async function handleBindManual() {
     setError(null);
     try {
-      const bound = await parseAndBindQrInvite(manualInput);
-      setInvite(bound);
-      setServerUrl(bound.serverUrl);
+      const parsed = parseInviteInput(manualInput);
+      if (parsed.serverUrl) {
+        const bound = await parseAndBindQrInvite(manualInput);
+        setInvite(bound);
+        setServerUrl(bound.serverUrl);
+      } else {
+        const cleanServer = serverUrl.trim().replace(/\/$/, '');
+        if (!cleanServer) {
+          throw new Error('Enter Server Base URL or paste a full invite URL/QR JSON');
+        }
+        setInvite({
+          v: 1,
+          serverUrl: cleanServer,
+          inviteToken: parsed.inviteToken,
+          groupName: parsed.groupName ?? 'Invited Group',
+        });
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid QR JSON or URL');
+      setError(err instanceof Error ? err.message : 'Invalid QR JSON, URL, or token');
     }
   }
 
