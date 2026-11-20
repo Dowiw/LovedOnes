@@ -18,6 +18,8 @@ export interface AuthUser {
   username: string;
   role: SystemRole;
   avatarUrl?: string | null;
+  recoveryEmail?: string | null;
+  recoveryEmailVerified?: boolean;
   createdAt?: string;
 }
 
@@ -304,6 +306,59 @@ export async function apiChangePassword(
 ): Promise<{ updated: boolean }> {
   const { authBase } = getServiceBaseUrls();
   return requestAuthedJson<{ updated: boolean }>(`${authBase}/api/auth/password`, accessToken, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function apiSendRecoveryCode(
+  accessToken: string,
+  recoveryEmail: string,
+): Promise<{ sent: boolean; recoveryEmail: string; expiresInSeconds: number; user: AuthUser }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson(`${authBase}/api/auth/recovery-email/send-code`, accessToken, {
+    method: 'POST',
+    body: JSON.stringify({ recoveryEmail }),
+  });
+}
+
+export async function apiVerifyRecoveryEmail(
+  accessToken: string,
+  input: { recoveryEmail: string; code: string },
+): Promise<{ verified: boolean; user: AuthUser }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson(`${authBase}/api/auth/recovery-email/verify`, accessToken, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function apiClearRecoveryEmail(
+  accessToken: string,
+): Promise<{ cleared: boolean; user: AuthUser }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson(`${authBase}/api/auth/recovery-email`, accessToken, {
+    method: 'DELETE',
+  });
+}
+
+export async function apiRequestPasswordReset(
+  email: string,
+): Promise<{ ok: boolean; message: string }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson(`${authBase}/api/auth/forgot-password/request`, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function apiResetPasswordWithCode(input: {
+  email: string;
+  code: string;
+  newPassword: string;
+}): Promise<{ reset: boolean }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson(`${authBase}/api/auth/forgot-password/reset`, {
     method: 'POST',
     body: JSON.stringify(input),
   });

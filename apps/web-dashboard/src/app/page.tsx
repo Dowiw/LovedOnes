@@ -60,6 +60,8 @@ import {
   apiJoinInvite,
   apiLogin,
   apiRegister,
+  apiRequestPasswordReset,
+  apiResetPasswordWithCode,
   apiRespondLocationRequest,
   apiRevokeTrackerToken,
   apiSendLocationBatch,
@@ -120,7 +122,15 @@ export default function HomePage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
+
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotCode, setForgotCode] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
 
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [activeGroupId, setActiveGroupId] = useState<string>('');
@@ -954,6 +964,57 @@ export default function HomePage() {
     }
   }
 
+  async function handleForgotPasswordRequest(e: React.FormEvent) {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthNotice(null);
+    setAuthLoading(true);
+    try {
+      const res = await apiRequestPasswordReset(forgotEmail.trim());
+      setForgotStep('reset');
+      setAuthNotice(res.message);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Failed to request reset code');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleForgotPasswordReset(e: React.FormEvent) {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthNotice(null);
+    if (forgotNewPassword.length < 8) {
+      setAuthError('New password must be at least 8 characters');
+      return;
+    }
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setAuthError('New passwords do not match');
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      await apiResetPasswordWithCode({
+        email: forgotEmail.trim(),
+        code: forgotCode.trim(),
+        newPassword: forgotNewPassword,
+      });
+      setEmail(forgotEmail.trim());
+      setPassword('');
+      setForgotCode('');
+      setForgotNewPassword('');
+      setForgotConfirmPassword('');
+      setForgotMode(false);
+      setForgotStep('request');
+      setAuthMode('login');
+      setAuthNotice('Password reset! Sign in with your new password.');
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Failed to reset password');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
   if (!session) {
     return (
       <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f4f4f5] px-4">
@@ -971,90 +1032,249 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="mb-5 flex rounded-lg bg-slate-100 p-1 text-xs font-medium">
-            <button
-              type="button"
-              onClick={() => {
-                setAuthMode('login');
-                setAuthError(null);
-              }}
-              className={`flex-1 rounded-md py-2 transition ${authMode === 'login' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
-                }`}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setAuthMode('register');
-                setAuthError(null);
-              }}
-              className={`flex-1 rounded-md py-2 transition ${authMode === 'register' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
-                }`}
-            >
-              Create account
-            </button>
-          </div>
-
-          <form onSubmit={handleAuthSubmit} className="space-y-3.5">
-            <label className="block text-xs font-medium text-zinc-600">
-              Email
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
-                placeholder="you@example.com"
-              />
-            </label>
-
-            {authMode === 'register' && (
-              <label className="block text-xs font-medium text-zinc-600">
-                Username
-                <input
-                  type="text"
-                  required
-                  minLength={2}
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
-                  placeholder="Alex"
-                />
-              </label>
-            )}
-
-            <label className="block text-xs font-medium text-zinc-600">
-              Password
-              <input
-                type="password"
-                required
-                minLength={8}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
-                placeholder="••••••••"
-              />
-            </label>
-
-            {authError && (
-              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
-                {authError}
+          {forgotMode ? (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-sm font-bold text-zinc-900">Recover forgotten password</h2>
+                <p className="mt-0.5 text-xs text-zinc-500">
+                  Enter your account email or verified backup email to receive a 6-digit reset code.
+                </p>
               </div>
-            )}
 
-            <button
-              type="submit"
-              disabled={authLoading}
-              className="lo-press w-full rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
-            >
-              {authLoading
-                ? 'Please wait...'
-                : authMode === 'login'
-                  ? 'Continue'
-                  : 'Create account'}
-            </button>
-          </form>
+              {forgotStep === 'request' ? (
+                <form onSubmit={handleForgotPasswordRequest} className="space-y-3.5">
+                  <label className="block text-xs font-medium text-zinc-600">
+                    Account or Verified Backup Email
+                    <input
+                      type="email"
+                      required
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      placeholder="you@example.com"
+                    />
+                  </label>
+
+                  {authError && (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+                      {authError}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="lo-press w-full rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {authLoading ? 'Sending code...' : 'Send Reset Code'}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleForgotPasswordReset} className="space-y-3">
+                  <label className="block text-xs font-medium text-zinc-600">
+                    6-Digit Reset Code
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="\d{6}"
+                      maxLength={6}
+                      required
+                      value={forgotCode}
+                      onChange={(e) => setForgotCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 font-mono text-sm tracking-widest text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      placeholder="123456"
+                    />
+                  </label>
+
+                  <label className="block text-xs font-medium text-zinc-600">
+                    New Password
+                    <input
+                      type="password"
+                      required
+                      minLength={8}
+                      value={forgotNewPassword}
+                      onChange={(e) => setForgotNewPassword(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      placeholder="Minimum 8 characters"
+                    />
+                  </label>
+
+                  <label className="block text-xs font-medium text-zinc-600">
+                    Confirm New Password
+                    <input
+                      type="password"
+                      required
+                      minLength={8}
+                      value={forgotConfirmPassword}
+                      onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      placeholder="Repeat new password"
+                    />
+                  </label>
+
+                  {authNotice && (
+                    <div className="rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2.5 text-xs text-zinc-800">
+                      {authNotice}
+                    </div>
+                  )}
+
+                  {authError && (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+                      {authError}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="lo-press w-full rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {authLoading ? 'Resetting password...' : 'Reset Password'}
+                  </button>
+                </form>
+              )}
+
+              <div className="flex items-center justify-between pt-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotMode(false);
+                    setForgotStep('request');
+                    setAuthError(null);
+                    setAuthNotice(null);
+                  }}
+                  className="font-medium text-zinc-600 hover:text-zinc-950 hover:underline"
+                >
+                  Back to sign in
+                </button>
+                {forgotStep === 'reset' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForgotStep('request');
+                      setAuthError(null);
+                    }}
+                    className="font-medium text-zinc-600 hover:text-zinc-950 hover:underline"
+                  >
+                    Use another email / resend
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="mb-5 flex rounded-lg bg-slate-100 p-1 text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError(null);
+                    setAuthNotice(null);
+                  }}
+                  className={`flex-1 rounded-md py-2 transition ${authMode === 'login' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+                    }`}
+                >
+                  Sign in
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('register');
+                    setAuthError(null);
+                    setAuthNotice(null);
+                  }}
+                  className={`flex-1 rounded-md py-2 transition ${authMode === 'register' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+                    }`}
+                >
+                  Create account
+                </button>
+              </div>
+
+              <form onSubmit={handleAuthSubmit} className="space-y-3.5">
+                <label className="block text-xs font-medium text-zinc-600">
+                  Email
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    placeholder="you@example.com"
+                  />
+                </label>
+
+                {authMode === 'register' && (
+                  <label className="block text-xs font-medium text-zinc-600">
+                    Username
+                    <input
+                      type="text"
+                      required
+                      minLength={2}
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      placeholder="Alex"
+                    />
+                  </label>
+                )}
+
+                <label className="block text-xs font-medium text-zinc-600">
+                  Password
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    placeholder="••••••••"
+                  />
+                </label>
+
+                {authNotice && (
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2.5 text-xs font-medium text-zinc-900">
+                    {authNotice}
+                  </div>
+                )}
+
+                {authError && (
+                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+                    {authError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  className="lo-press w-full rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  {authLoading
+                    ? 'Please wait...'
+                    : authMode === 'login'
+                      ? 'Continue'
+                      : 'Create account'}
+                </button>
+
+                {authMode === 'login' && (
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForgotEmail(email.trim());
+                        setForgotMode(true);
+                        setForgotStep('request');
+                        setAuthError(null);
+                        setAuthNotice(null);
+                      }}
+                      className="text-xs font-medium text-zinc-600 hover:text-zinc-950 hover:underline"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+                )}
+              </form>
+            </>
+          )}
 
           <div className="mt-4 border-t border-zinc-100 pt-4">
             {preAuthInvite ? (

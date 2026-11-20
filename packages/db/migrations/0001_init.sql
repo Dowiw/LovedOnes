@@ -163,3 +163,10 @@ CREATE INDEX IF NOT EXISTS idx_group_place_events_group_time
 
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS avatar_url TEXT NULL;
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS recovery_email VARCHAR(255) NULL,
+    ADD COLUMN IF NOT EXISTS recovery_email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_users_recovery_email_lower
+    ON users (LOWER(recovery_email));

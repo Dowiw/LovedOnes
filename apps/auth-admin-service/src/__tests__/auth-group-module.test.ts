@@ -49,6 +49,8 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
         passwordHash: input.passwordHash,
         role: input.role,
         avatarUrl: null,
+        recoveryEmail: null,
+        recoveryEmailVerified: false,
         createdAt: new Date('2026-11-17T12:00:00Z'),
       };
       accounts.set(acc.id, acc);
@@ -113,6 +115,15 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
       }
     },
     findAccountByEmail: txStore.findAccountByEmail,
+    async findAccountByVerifiedRecoveryEmail(recoveryEmail) {
+      const lower = recoveryEmail.toLowerCase();
+      for (const acc of accounts.values()) {
+        if (acc.recoveryEmail?.toLowerCase() === lower && acc.recoveryEmailVerified) {
+          return acc;
+        }
+      }
+      return null;
+    },
     async findAccountById(id): Promise<PublicAccountRecord | null> {
       const acc = accounts.get(id);
       if (!acc) return null;
@@ -138,6 +149,14 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
       if (patch.avatarUrl !== undefined) acc.avatarUrl = patch.avatarUrl;
       const { passwordHash: _ignored, ...pub } = acc;
       return { status: 'ok' as const, account: pub };
+    },
+    async updateRecoveryEmail(userId, recoveryEmail, verified) {
+      const acc = accounts.get(userId);
+      if (!acc) return null;
+      acc.recoveryEmail = recoveryEmail;
+      acc.recoveryEmailVerified = verified;
+      const { passwordHash: _ignored, ...pub } = acc;
+      return pub;
     },
     async updateAccountPassword(userId, passwordHash) {
       const acc = accounts.get(userId);
@@ -581,6 +600,101 @@ describe('AuthGroupModule domain interface', () => {
       password: 'NewPassword456',
     });
     expect(relogin.user.username).toBe('Alice Updated');
+  });
+
+  it('verifies backup recovery email via 6-digit code and resets forgotten passwords only when verified', async () => {
+    const store = createInMemoryAuthGroupStore();
+    const sentMail: Array<{ to: string; subject: string; text: string }> = [];
+    let currentTime = Date.parse('2026-11-20T12:00:00Z');
+
+    const mod = new AuthGroupModule({
+      store,
+      sessionStore: { saveSession: async () => {} },
+      tokenService: createTokenService({
+        jwtSecret: 'test-access-secret-with-at-least-32-chars',
+        jwtRefreshSecret: 'test-refresh-secret-with-at-least-32-chars',
+      }),
+      emailSender: {
+        isConfigured: () => true,
+        async sendMail(msg) {
+          sentMail.push(msg);
+        },
+      },
+      now: () => currentTime,
+    });
+
+    const user = await mod.register({
+      email: 'alice@example.com',
+      username: 'Alice',
+      password: 'OriginalPassword1',
+    });
+    expect(user.user.recoveryEmail).toBeNull();
+    expect(user.user.recoveryEmailVerified).toBe(false);
+
+    // Forgot password before verification must NOT send any email
+    await mod.requestPasswordReset({ email: 'alice@example.com' });
+    expect(sentMail).toHaveLength(0);
+
+    // Request verification code for backup email
+    const sendRes = await mod.sendRecoveryVerificationCode(user.user.id, {
+      recoveryEmail: 'alice.backup@gmail.com',
+    });
+    expect(sendRes.sent).toBe(true);
+    expect(sendRes.recoveryEmail).toBe('alice.backup@gmail.com');
+    expect(sentMail).toHaveLength(1);
+    const verifyCode = sentMail[0].text.match(/\b(\d{6})\b/)?.[1];
+    expect(verifyCode).toBeTruthy();
+
+    // Wrong verification code fails cleanly
+    await expect(
+      mod.verifyRecoveryEmail(user.user.id, {
+        recoveryEmail: 'alice.backup@gmail.com',
+        code: verifyCode === '000000' ? '000001' : '000000',
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    // Correct verification code marks recoveryEmailVerified = true
+    const verified = await mod.verifyRecoveryEmail(user.user.id, {
+      recoveryEmail: 'alice.backup@gmail.com',
+      code: verifyCode!,
+    });
+    expect(verified.verified).toBe(true);
+    expect(verified.user.recoveryEmail).toBe('alice.backup@gmail.com');
+    expect(verified.user.recoveryEmailVerified).toBe(true);
+
+    // Advance past 30s cooldown, request password reset using the backup email
+    currentTime += 35_000;
+    const reqReset = await mod.requestPasswordReset({ email: 'alice.backup@gmail.com' });
+    expect(reqReset.ok).toBe(true);
+    expect(sentMail).toHaveLength(2);
+    expect(sentMail[1].to).toBe('alice.backup@gmail.com');
+    const resetCode = sentMail[1].text.match(/\b(\d{6})\b/)?.[1];
+    expect(resetCode).toBeTruthy();
+
+    // Complete password reset using account login email + reset code
+    const doneReset = await mod.resetPasswordWithCode({
+      email: 'alice@example.com',
+      code: resetCode!,
+      newPassword: 'RecoveredPassword2',
+    });
+    expect(doneReset).toEqual({ reset: true });
+
+    // Old password rejected, new password works
+    await expect(
+      mod.login({ email: 'alice@example.com', password: 'OriginalPassword1' }),
+    ).rejects.toMatchObject({ statusCode: 401 });
+
+    const signedIn = await mod.login({
+      email: 'alice@example.com',
+      password: 'RecoveredPassword2',
+    });
+    expect(signedIn.user.recoveryEmailVerified).toBe(true);
+
+    // Clearing backup email disables password recovery again
+    const cleared = await mod.clearRecoveryEmail(user.user.id);
+    expect(cleared.cleared).toBe(true);
+    expect(cleared.user.recoveryEmail).toBeNull();
+    expect(cleared.user.recoveryEmailVerified).toBe(false);
   });
 });
 

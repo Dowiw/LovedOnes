@@ -31,6 +31,7 @@ describe('@loved-ones/auth-admin-service integration', () => {
   let app: FastifyInstance;
   let logDir: string;
   let baseUrl: string;
+  const sentEmails: Array<{ to: string; subject: string; text: string }> = [];
 
   beforeAll(async () => {
     await recreateTestDatabase(TEST_DB_NAME);
@@ -45,6 +46,12 @@ describe('@loved-ones/auth-admin-service integration', () => {
       logDir,
       maxLogStorageMb: 50,
       publicServerUrl: 'https://track.example.com',
+      emailSender: {
+        isConfigured: () => true,
+        async sendMail(msg) {
+          sentEmails.push({ to: msg.to, subject: msg.subject, text: msg.text });
+        },
+      },
     });
     app = created.app;
     await app.listen({ port: 0, host: '127.0.0.1' });
@@ -255,6 +262,64 @@ describe('@loved-ones/auth-admin-service integration', () => {
     });
     expect(loginNewRes.statusCode).toBe(200);
     expect(loginNewRes.json().user.avatarUrl).toBe(avatarPng);
+
+    // 11b. Backup recovery email verification + forgot password reset flow
+    const sendRecoveryRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/recovery-email/send-code',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+      payload: { recoveryEmail: 'member.backup@lovedones.test' },
+    });
+    expect(sendRecoveryRes.statusCode).toBe(200);
+    const verifyMail = sentEmails.find((m) => m.to === 'member.backup@lovedones.test');
+    const verifyOtp = verifyMail?.text.match(/\b(\d{6})\b/)?.[1];
+    expect(verifyOtp).toBeTruthy();
+
+    const verifyRecoveryRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/recovery-email/verify',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+      payload: {
+        recoveryEmail: 'member.backup@lovedones.test',
+        code: verifyOtp,
+      },
+    });
+    expect(verifyRecoveryRes.statusCode).toBe(200);
+    expect(verifyRecoveryRes.json().verified).toBe(true);
+    expect(verifyRecoveryRes.json().user.recoveryEmailVerified).toBe(true);
+
+    const forgotReqRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/forgot-password/request',
+      payload: { email: 'member.new@lovedones.test' },
+    });
+    expect(forgotReqRes.statusCode).toBe(200);
+    const resetMail = sentEmails.filter((m) => m.to === 'member.backup@lovedones.test').at(-1);
+    const resetOtp = resetMail?.text.match(/\b(\d{6})\b/)?.[1];
+    expect(resetOtp).toBeTruthy();
+
+    const forgotResetRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/forgot-password/reset',
+      payload: {
+        email: 'member.backup@lovedones.test',
+        code: resetOtp,
+        newPassword: 'MemberResetPassword789',
+      },
+    });
+    expect(forgotResetRes.statusCode).toBe(200);
+    expect(forgotResetRes.json()).toEqual({ reset: true });
+
+    const loginResetRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: {
+        email: 'member.new@lovedones.test',
+        password: 'MemberResetPassword789',
+      },
+    });
+    expect(loginResetRes.statusCode).toBe(200);
+    expect(loginResetRes.json().user.recoveryEmailVerified).toBe(true);
 
     // 12. Admin invite deletion & RBAC check
     const memberDeleteRes = await app.inject({

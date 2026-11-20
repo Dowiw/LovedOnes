@@ -99,6 +99,12 @@ services:
       LOG_DIR: /var/log/app
       MAX_LOG_STORAGE_MB: ${MAX_LOG_STORAGE_MB:-500}
       PUBLIC_SERVER_URL: ${PUBLIC_SERVER_URL:-http://localhost:${GATEWAY_PORT:-8080}}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     volumes:
       - ./logs:/var/log/app
     networks:

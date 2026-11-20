@@ -15,6 +15,7 @@ import {
   AccountRecord,
   AuthGroupStore,
   AuthGroupTxStore,
+  EmailChallengeRecord,
   GroupMemberEntry,
   GroupSummaryRecord,
   GroupWithMembers,
@@ -32,6 +33,8 @@ interface PgUserRow {
   password_hash: string;
   role: SystemRole;
   avatar_url: string | null;
+  recovery_email: string | null;
+  recovery_email_verified: boolean;
   created_at: Date;
 }
 
@@ -46,6 +49,10 @@ interface PgInviteRow {
 }
 
 const REGISTRATION_ADVISORY_LOCK_KEY = 948271;
+const USER_SELECT_COLUMNS =
+  'id, email, username, role, avatar_url, recovery_email, recovery_email_verified, created_at';
+const USER_AUTH_SELECT_COLUMNS =
+  'id, email, username, password_hash, role, avatar_url, recovery_email, recovery_email_verified, created_at';
 
 function mapPublicAccount(row: Omit<PgUserRow, 'password_hash'>): PublicAccountRecord {
   return {
@@ -54,6 +61,8 @@ function mapPublicAccount(row: Omit<PgUserRow, 'password_hash'>): PublicAccountR
     username: row.username,
     role: row.role,
     avatarUrl: row.avatar_url ?? null,
+    recoveryEmail: row.recovery_email ?? null,
+    recoveryEmailVerified: Boolean(row.recovery_email_verified),
     createdAt: row.created_at,
   };
 }
@@ -81,7 +90,7 @@ function createTxStore(client: pg.PoolClient): AuthGroupTxStore {
   return {
     async findAccountByEmail(email: string): Promise<AccountRecord | null> {
       const res = await client.query<PgUserRow>(
-        'SELECT id, email, username, password_hash, role, avatar_url, created_at FROM users WHERE LOWER(email) = LOWER($1)',
+        `SELECT ${USER_AUTH_SELECT_COLUMNS} FROM users WHERE LOWER(email) = LOWER($1)`,
         [email],
       );
       return res.rows[0] ? mapAccount(res.rows[0]) : null;
@@ -96,7 +105,7 @@ function createTxStore(client: pg.PoolClient): AuthGroupTxStore {
       const res = await client.query<Omit<PgUserRow, 'password_hash'>>(
         `INSERT INTO users (email, username, password_hash, role)
          VALUES ($1, $2, $3, $4)
-         RETURNING id, email, username, role, avatar_url, created_at`,
+         RETURNING ${USER_SELECT_COLUMNS}`,
         [input.email, input.username, input.passwordHash, input.role],
       );
       return mapPublicAccount(res.rows[0]);
@@ -175,16 +184,28 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
 
   async findAccountByEmail(email: string): Promise<AccountRecord | null> {
     const res = await this.pool.query<PgUserRow>(
-      `SELECT id, email, username, password_hash, role, avatar_url, created_at
+      `SELECT ${USER_AUTH_SELECT_COLUMNS}
        FROM users WHERE LOWER(email) = LOWER($1)`,
       [email],
     );
     return res.rows[0] ? mapAccount(res.rows[0]) : null;
   }
 
+  async findAccountByVerifiedRecoveryEmail(recoveryEmail: string): Promise<AccountRecord | null> {
+    const res = await this.pool.query<PgUserRow>(
+      `SELECT ${USER_AUTH_SELECT_COLUMNS}
+       FROM users
+       WHERE LOWER(recovery_email) = LOWER($1) AND recovery_email_verified = TRUE
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [recoveryEmail],
+    );
+    return res.rows[0] ? mapAccount(res.rows[0]) : null;
+  }
+
   async findAccountById(id: string): Promise<PublicAccountRecord | null> {
     const res = await this.pool.query<Omit<PgUserRow, 'password_hash'>>(
-      'SELECT id, email, username, role, avatar_url, created_at FROM users WHERE id = $1',
+      `SELECT ${USER_SELECT_COLUMNS} FROM users WHERE id = $1`,
       [id],
     );
     return res.rows[0] ? mapPublicAccount(res.rows[0]) : null;
@@ -192,7 +213,7 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
 
   async findAccountWithPasswordById(id: string): Promise<AccountRecord | null> {
     const res = await this.pool.query<PgUserRow>(
-      'SELECT id, email, username, password_hash, role, avatar_url, created_at FROM users WHERE id = $1',
+      `SELECT ${USER_AUTH_SELECT_COLUMNS} FROM users WHERE id = $1`,
       [id],
     );
     return res.rows[0] ? mapAccount(res.rows[0]) : null;
@@ -240,7 +261,7 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
       const res = await this.pool.query<Omit<PgUserRow, 'password_hash'>>(
         `UPDATE users SET ${sets.join(', ')}
          WHERE id = $${params.length}
-         RETURNING id, email, username, role, avatar_url, created_at`,
+         RETURNING ${USER_SELECT_COLUMNS}`,
         params,
       );
       const row = res.rows[0];
@@ -251,6 +272,21 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
       }
       throw err;
     }
+  }
+
+  async updateRecoveryEmail(
+    userId: string,
+    recoveryEmail: string | null,
+    verified: boolean,
+  ): Promise<PublicAccountRecord | null> {
+    const res = await this.pool.query<Omit<PgUserRow, 'password_hash'>>(
+      `UPDATE users
+       SET recovery_email = $1, recovery_email_verified = $2
+       WHERE id = $3
+       RETURNING ${USER_SELECT_COLUMNS}`,
+      [recoveryEmail, verified, userId],
+    );
+    return res.rows[0] ? mapPublicAccount(res.rows[0]) : null;
   }
 
   async updateAccountPassword(userId: string, passwordHash: string): Promise<boolean> {
@@ -515,6 +551,33 @@ export class RedisSessionStore implements SessionStore {
     groupIds: string[];
   }): Promise<void> {
     await this.redis.publish(USER_PROFILE_UPDATED_CHANNEL, JSON.stringify(event));
+  }
+
+  async saveEmailChallenge(
+    key: string,
+    record: EmailChallengeRecord,
+    ttlSeconds: number,
+  ): Promise<void> {
+    await this.redis.set(
+      `auth:email_challenge:${key}`,
+      JSON.stringify(record),
+      'EX',
+      Math.max(60, Math.round(ttlSeconds)),
+    );
+  }
+
+  async getEmailChallenge(key: string): Promise<EmailChallengeRecord | null> {
+    const raw = await this.redis.get(`auth:email_challenge:${key}`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as EmailChallengeRecord;
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteEmailChallenge(key: string): Promise<void> {
+    await this.redis.del(`auth:email_challenge:${key}`);
   }
 }
 

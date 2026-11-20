@@ -6,6 +6,8 @@ export interface MobileUser {
   username: string;
   role: SystemRole;
   avatarUrl?: string | null;
+  recoveryEmail?: string | null;
+  recoveryEmailVerified?: boolean;
 }
 
 export interface MobileStoredConfig {

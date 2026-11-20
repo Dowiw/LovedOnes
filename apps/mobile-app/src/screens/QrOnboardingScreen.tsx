@@ -34,6 +34,14 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotCode, setForgotCode] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
 
   async function handleQrScanned(result: BarcodeScanningResult) {
     if (!scanning) return;
@@ -141,6 +149,76 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
     }
   }
 
+  async function handleRequestReset() {
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    const cleanServer = serverUrl.trim().replace(/\/$/, '');
+    try {
+      const res = await fetch(`${cleanServer}/api/auth/forgot-password/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail.trim() }),
+      });
+      const data = (await res.json()) as { error?: string; message?: string };
+      if (!res.ok) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setForgotStep('reset');
+      setNotice(
+        data.message ??
+          'If that account has a verified backup email, a 6-digit reset code has been sent.',
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to request reset code');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleConfirmReset() {
+    if (forgotNewPassword.length < 8) {
+      setError('New password must be at least 8 characters');
+      return;
+    }
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setError('New passwords do not match');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    const cleanServer = serverUrl.trim().replace(/\/$/, '');
+    try {
+      const res = await fetch(`${cleanServer}/api/auth/forgot-password/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: forgotEmail.trim(),
+          code: forgotCode.trim(),
+          newPassword: forgotNewPassword,
+        }),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setEmail(forgotEmail.trim());
+      setPassword('');
+      setForgotCode('');
+      setForgotNewPassword('');
+      setForgotConfirmPassword('');
+      setForgotMode(false);
+      setForgotStep('request');
+      setMode('login');
+      setNotice('Password reset! Sign in with your new password.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reset password');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   if (scanning) {
     return (
       <View style={styles.scannerWrap}>
@@ -198,85 +276,220 @@ export function QrOnboardingScreen({ onAuthenticated }: QrOnboardingScreenProps)
       )}
 
       <View style={styles.card}>
-        <View style={styles.segmentWrap}>
-          <TouchableOpacity
-            style={[styles.segmentBtn, mode === 'login' && styles.segmentBtnActive]}
-            onPress={() => setMode('login')}
-          >
-            <Text style={[styles.segmentText, mode === 'login' && styles.segmentTextActive]}>
-              Sign In
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.segmentBtn, mode === 'register' && styles.segmentBtnActive]}
-            onPress={() => setMode('register')}
-          >
-            <Text style={[styles.segmentText, mode === 'register' && styles.segmentTextActive]}>
-              Create Account
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.label}>Server Base URL</Text>
-        <TextInput
-          style={styles.input}
-          value={serverUrl}
-          onChangeText={setServerUrl}
-          autoCapitalize="none"
-          keyboardType="url"
-          placeholder="https://track.example.com"
-          placeholderTextColor="#94a3b8"
-        />
-
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          style={styles.input}
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          placeholder="member@example.com"
-          placeholderTextColor="#94a3b8"
-        />
-
-        {mode === 'register' && (
+        {forgotMode ? (
           <>
-            <Text style={styles.label}>Display Name</Text>
+            <Text style={styles.cardTitle}>Recover forgotten password</Text>
+            <Text style={styles.label}>
+              Enter your account email or verified backup email to receive a 6-digit code.
+            </Text>
+
+            <Text style={styles.label}>Server Base URL</Text>
             <TextInput
               style={styles.input}
-              value={username}
-              onChangeText={setUsername}
-              placeholder="Sam"
+              value={serverUrl}
+              onChangeText={setServerUrl}
+              autoCapitalize="none"
+              keyboardType="url"
+              placeholder="https://track.example.com"
               placeholderTextColor="#94a3b8"
             />
+
+            {forgotStep === 'request' ? (
+              <>
+                <Text style={styles.label}>Account or Verified Backup Email</Text>
+                <TextInput
+                  style={styles.input}
+                  value={forgotEmail}
+                  onChangeText={setForgotEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  placeholder="you@example.com"
+                  placeholderTextColor="#94a3b8"
+                />
+
+                {error && <Text style={styles.errorText}>{error}</Text>}
+
+                <TouchableOpacity
+                  style={styles.primaryBtn}
+                  disabled={loading}
+                  onPress={() => void handleRequestReset()}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#ffffff" />
+                  ) : (
+                    <Text style={styles.primaryBtnText}>Send Reset Code</Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <Text style={styles.label}>6-Digit Reset Code</Text>
+                <TextInput
+                  style={styles.input}
+                  value={forgotCode}
+                  onChangeText={(txt) => setForgotCode(txt.replace(/\D/g, '').slice(0, 6))}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  placeholder="123456"
+                  placeholderTextColor="#94a3b8"
+                />
+
+                <Text style={styles.label}>New Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={forgotNewPassword}
+                  onChangeText={setForgotNewPassword}
+                  secureTextEntry
+                  placeholder="Minimum 8 characters"
+                  placeholderTextColor="#94a3b8"
+                />
+
+                <Text style={styles.label}>Confirm New Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={forgotConfirmPassword}
+                  onChangeText={setForgotConfirmPassword}
+                  secureTextEntry
+                  placeholder="Repeat new password"
+                  placeholderTextColor="#94a3b8"
+                />
+
+                {notice && <Text style={styles.noticeText}>{notice}</Text>}
+                {error && <Text style={styles.errorText}>{error}</Text>}
+
+                <TouchableOpacity
+                  style={styles.primaryBtn}
+                  disabled={loading}
+                  onPress={() => void handleConfirmReset()}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#ffffff" />
+                  ) : (
+                    <Text style={styles.primaryBtnText}>Reset Password</Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            )}
+
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => {
+                setForgotMode(false);
+                setForgotStep('request');
+                setError(null);
+                setNotice(null);
+              }}
+            >
+              <Text style={styles.secondaryBtnText}>Back to Sign In</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <View style={styles.segmentWrap}>
+              <TouchableOpacity
+                style={[styles.segmentBtn, mode === 'login' && styles.segmentBtnActive]}
+                onPress={() => {
+                  setMode('login');
+                  setError(null);
+                  setNotice(null);
+                }}
+              >
+                <Text style={[styles.segmentText, mode === 'login' && styles.segmentTextActive]}>
+                  Sign In
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.segmentBtn, mode === 'register' && styles.segmentBtnActive]}
+                onPress={() => {
+                  setMode('register');
+                  setError(null);
+                  setNotice(null);
+                }}
+              >
+                <Text style={[styles.segmentText, mode === 'register' && styles.segmentTextActive]}>
+                  Create Account
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>Server Base URL</Text>
+            <TextInput
+              style={styles.input}
+              value={serverUrl}
+              onChangeText={setServerUrl}
+              autoCapitalize="none"
+              keyboardType="url"
+              placeholder="https://track.example.com"
+              placeholderTextColor="#94a3b8"
+            />
+
+            <Text style={styles.label}>Email</Text>
+            <TextInput
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              placeholder="member@example.com"
+              placeholderTextColor="#94a3b8"
+            />
+
+            {mode === 'register' && (
+              <>
+                <Text style={styles.label}>Display Name</Text>
+                <TextInput
+                  style={styles.input}
+                  value={username}
+                  onChangeText={setUsername}
+                  placeholder="Sam"
+                  placeholderTextColor="#94a3b8"
+                />
+              </>
+            )}
+
+            <Text style={styles.label}>Password</Text>
+            <TextInput
+              style={styles.input}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              placeholder="••••••••"
+              placeholderTextColor="#94a3b8"
+            />
+
+            {notice && <Text style={styles.noticeText}>{notice}</Text>}
+            {error && <Text style={styles.errorText}>{error}</Text>}
+
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              disabled={loading}
+              onPress={() => void handleSubmitAuth()}
+            >
+              {loading ? (
+                <ActivityIndicator color="#ffffff" />
+              ) : (
+                <Text style={styles.primaryBtnText}>
+                  {mode === 'register' ? 'Register & Connect' : 'Sign In & Connect'}
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {mode === 'login' && (
+              <TouchableOpacity
+                style={styles.linkBtn}
+                onPress={() => {
+                  setForgotEmail(email.trim());
+                  setForgotMode(true);
+                  setForgotStep('request');
+                  setError(null);
+                  setNotice(null);
+                }}
+              >
+                <Text style={styles.linkBtnText}>Forgot password?</Text>
+              </TouchableOpacity>
+            )}
           </>
         )}
-
-        <Text style={styles.label}>Password</Text>
-        <TextInput
-          style={styles.input}
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          placeholder="••••••••"
-          placeholderTextColor="#94a3b8"
-        />
-
-        {error && <Text style={styles.errorText}>{error}</Text>}
-
-        <TouchableOpacity
-          style={styles.primaryBtn}
-          disabled={loading}
-          onPress={() => void handleSubmitAuth()}
-        >
-          {loading ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.primaryBtnText}>
-              {mode === 'register' ? 'Register & Connect' : 'Sign In & Connect'}
-            </Text>
-          )}
-        </TouchableOpacity>
       </View>
 
       <View style={styles.card}>
@@ -366,7 +579,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderColor: '#e2e8f0',
     borderWidth: 1,
-    borderRadius: 24,
+    borderRadius: 14,
     padding: 18,
     gap: 10,
     shadowColor: '#0f172a',
@@ -375,16 +588,21 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 2,
   },
+  cardTitle: {
+    color: '#18181b',
+    fontSize: 16,
+    fontWeight: '700',
+  },
   segmentWrap: {
     flexDirection: 'row',
     backgroundColor: '#f1f5f9',
-    borderRadius: 999,
+    borderRadius: 10,
     padding: 4,
     marginBottom: 4,
   },
   segmentBtn: {
     flex: 1,
-    borderRadius: 999,
+    borderRadius: 8,
     paddingVertical: 9,
     alignItems: 'center',
   },
@@ -409,7 +627,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     borderColor: '#e2e8f0',
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: 10,
     color: '#18181b',
     paddingHorizontal: 14,
     paddingVertical: 11,
@@ -426,6 +644,16 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
     fontSize: 14,
+  },
+  linkBtn: {
+    alignSelf: 'flex-end',
+    paddingVertical: 4,
+  },
+  linkBtnText: {
+    color: '#18181b',
+    fontSize: 12,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
   secondaryBtn: {
     backgroundColor: '#f1f5f9',
@@ -464,10 +692,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  noticeText: {
+    color: '#18181b',
+    backgroundColor: '#f4f4f5',
+    borderColor: '#e4e4e7',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 12,
+    fontWeight: '500',
+  },
   errorText: {
     color: '#be123c',
     backgroundColor: '#fff1f2',
-    borderRadius: 12,
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
     fontSize: 12,

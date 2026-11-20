@@ -86,6 +86,35 @@ export const ChangePasswordSchema = z
   });
 export type ChangePasswordInput = z.infer<typeof ChangePasswordSchema>;
 
+export const RecoveryEmailSendCodeSchema = z.object({
+  recoveryEmail: z.string().trim().email().max(255),
+});
+export type RecoveryEmailSendCodeInput = z.infer<typeof RecoveryEmailSendCodeSchema>;
+
+export const RecoveryEmailVerifySchema = z.object({
+  recoveryEmail: z.string().trim().email().max(255),
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, 'Enter the 6-digit verification code'),
+});
+export type RecoveryEmailVerifyInput = z.infer<typeof RecoveryEmailVerifySchema>;
+
+export const ForgotPasswordRequestSchema = z.object({
+  email: z.string().trim().email().max(255),
+});
+export type ForgotPasswordRequestInput = z.infer<typeof ForgotPasswordRequestSchema>;
+
+export const ForgotPasswordResetSchema = z.object({
+  email: z.string().trim().email().max(255),
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, 'Enter the 6-digit reset code'),
+  newPassword: z.string().min(8).max(128),
+});
+export type ForgotPasswordResetInput = z.infer<typeof ForgotPasswordResetSchema>;
+
 export const MemberProfileUpdatedSchema = z.object({
   userId: z.string().uuid(),
   username: z.string(),

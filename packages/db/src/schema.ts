@@ -39,6 +39,8 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash').notNull(),
   role: systemRoleEnum('role').default('USER').notNull(),
   avatarUrl: text('avatar_url'),
+  recoveryEmail: varchar('recovery_email', { length: 255 }),
+  recoveryEmailVerified: boolean('recovery_email_verified').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 

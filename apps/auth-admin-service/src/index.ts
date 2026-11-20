@@ -25,7 +25,8 @@ import {
   PostgresRedisTelemetryStore,
   RedisSessionStore,
 } from './adapters/postgres-redis-adapters.js';
-import { AuthGroupModule } from './domain/auth-group-module.js';
+import { SmtpEmailSender } from './adapters/smtp-mailer.js';
+import { AuthGroupModule, EmailSender } from './domain/auth-group-module.js';
 import { TelemetryQueryModule } from './domain/telemetry-query-module.js';
 
 export interface AuthAdminOptions {
@@ -36,6 +37,7 @@ export interface AuthAdminOptions {
   logDir?: string;
   maxLogStorageMb?: number;
   publicServerUrl?: string;
+  emailSender?: EmailSender;
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
 }
@@ -79,11 +81,13 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     loggerHandle.logger.error({ err }, 'auth-admin redis client error');
   });
 
+  const emailSender = options.emailSender ?? new SmtpEmailSender();
   const tokenService = createTokenService({ jwtSecret, jwtRefreshSecret });
   const authGroup = new AuthGroupModule({
     store: new PostgresAuthGroupStore(pool),
     sessionStore: new RedisSessionStore(redis),
     tokenService,
+    emailSender,
     publicServerUrl,
   });
   const telemetryQuery = new TelemetryQueryModule({
@@ -164,6 +168,48 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   app.post('/api/auth/password', { preHandler: [requireAuth] }, async (request: AuthenticatedRequest) => {
     const result = await authGroup.changePassword(request.authUser!.id, request.body);
     loggerHandle.logger.info({ userId: request.authUser!.id }, 'user password changed');
+    return result;
+  });
+
+  app.post(
+    '/api/auth/recovery-email/send-code',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const result = await authGroup.sendRecoveryVerificationCode(request.authUser!.id, request.body);
+      loggerHandle.logger.info({ userId: request.authUser!.id }, 'sent recovery email verification code');
+      return result;
+    },
+  );
+
+  app.post(
+    '/api/auth/recovery-email/verify',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const result = await authGroup.verifyRecoveryEmail(request.authUser!.id, request.body);
+      loggerHandle.logger.info({ userId: request.authUser!.id }, 'verified recovery email');
+      return result;
+    },
+  );
+
+  app.delete(
+    '/api/auth/recovery-email',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const result = await authGroup.clearRecoveryEmail(request.authUser!.id);
+      loggerHandle.logger.info({ userId: request.authUser!.id }, 'cleared recovery email');
+      return result;
+    },
+  );
+
+  app.post('/api/auth/forgot-password/request', async (request: AuthenticatedRequest) => {
+    request.skipTelemetry = true;
+    return authGroup.requestPasswordReset(request.body);
+  });
+
+  app.post('/api/auth/forgot-password/reset', async (request: AuthenticatedRequest) => {
+    request.skipTelemetry = true;
+    const result = await authGroup.resetPasswordWithCode(request.body);
+    loggerHandle.logger.info('password reset completed via verified recovery email');
     return result;
   });
 

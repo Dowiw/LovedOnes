@@ -1,11 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Check, KeyRound, Trash2, User, X } from 'lucide-react';
+import { Camera, Check, KeyRound, Mail, ShieldCheck, Trash2, User, X } from 'lucide-react';
 import { isSafeAvatarUrl } from '@loved-ones/shared';
 import {
   apiChangePassword,
+  apiClearRecoveryEmail,
+  apiSendRecoveryCode,
   apiUpdateProfile,
+  apiVerifyRecoveryEmail,
   saveSession,
   StoredSession,
 } from '@/lib/api';
@@ -83,6 +86,15 @@ export function AccountSettingsModal({
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSaved, setPasswordSaved] = useState<string | null>(null);
 
+  const [recoveryEmailInput, setRecoveryEmailInput] = useState(
+    session.user.recoveryEmail ?? '',
+  );
+  const [recoveryCodeInput, setRecoveryCodeInput] = useState('');
+  const [recoveryCodeSentTo, setRecoveryCodeSentTo] = useState<string | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+
   useEffect(() => {
     if (!open) return;
     setUsername(session.user.username);
@@ -100,6 +112,11 @@ export function AccountSettingsModal({
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
+    setRecoveryEmailInput(session.user.recoveryEmail ?? '');
+    setRecoveryCodeInput('');
+    setRecoveryCodeSentTo(null);
+    setRecoveryError(null);
+    setRecoveryNotice(null);
   }, [open, session.user]);
 
   if (!open) return null;
@@ -182,6 +199,76 @@ export function AccountSettingsModal({
       setPasswordError(err instanceof Error ? err.message : 'Failed to change password');
     } finally {
       setPasswordBusy(false);
+    }
+  }
+
+  async function handleSendRecoveryCode(e?: React.FormEvent) {
+    e?.preventDefault();
+    const target = recoveryEmailInput.trim();
+    if (!target) {
+      setRecoveryError('Enter an email address to verify');
+      return;
+    }
+    setRecoveryError(null);
+    setRecoveryNotice(null);
+    setRecoveryBusy(true);
+    try {
+      const res = await apiSendRecoveryCode(session.accessToken, target);
+      const next: StoredSession = { ...session, user: res.user };
+      saveSession(next);
+      onSessionUpdated(next);
+      setRecoveryEmailInput(res.recoveryEmail);
+      setRecoveryCodeSentTo(res.recoveryEmail);
+      setRecoveryNotice(`6-digit verification code sent to ${res.recoveryEmail}`);
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'Failed to send verification code');
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
+
+  async function handleVerifyRecoveryEmail(e: React.FormEvent) {
+    e.preventDefault();
+    const target = (recoveryCodeSentTo ?? recoveryEmailInput).trim();
+    if (!target || !recoveryCodeInput.trim()) return;
+    setRecoveryError(null);
+    setRecoveryNotice(null);
+    setRecoveryBusy(true);
+    try {
+      const res = await apiVerifyRecoveryEmail(session.accessToken, {
+        recoveryEmail: target,
+        code: recoveryCodeInput.trim(),
+      });
+      const next: StoredSession = { ...session, user: res.user };
+      saveSession(next);
+      onSessionUpdated(next);
+      setRecoveryCodeInput('');
+      setRecoveryCodeSentTo(null);
+      setRecoveryNotice('Backup email verified! You can now use it to recover a forgotten password.');
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'Failed to verify code');
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
+
+  async function handleClearRecoveryEmail() {
+    setRecoveryError(null);
+    setRecoveryNotice(null);
+    setRecoveryBusy(true);
+    try {
+      const res = await apiClearRecoveryEmail(session.accessToken);
+      const next: StoredSession = { ...session, user: res.user };
+      saveSession(next);
+      onSessionUpdated(next);
+      setRecoveryEmailInput('');
+      setRecoveryCodeInput('');
+      setRecoveryCodeSentTo(null);
+      setRecoveryNotice('Backup email removed');
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'Failed to remove backup email');
+    } finally {
+      setRecoveryBusy(false);
     }
   }
 
@@ -343,6 +430,115 @@ export function AccountSettingsModal({
             {profileBusy ? 'Saving Profile...' : 'Save Profile'}
           </button>
         </form>
+
+        {/* Backup / Recovery Email Verification */}
+        <div className="my-5 border-t border-zinc-100" />
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-zinc-900">
+              <Mail className="h-3.5 w-3.5" />
+              Backup Email (Password Recovery)
+            </div>
+            {session.user.recoveryEmail && session.user.recoveryEmailVerified ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-zinc-950 px-2.5 py-0.5 text-[10px] font-semibold text-white">
+                <ShieldCheck className="h-3 w-3" />
+                Verified
+              </span>
+            ) : session.user.recoveryEmail ? (
+              <span className="rounded-full bg-zinc-200 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-700">
+                Unverified
+              </span>
+            ) : (
+              <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[10px] font-medium text-zinc-500">
+                Not set
+              </span>
+            )}
+          </div>
+
+          <p className="text-[11px] leading-relaxed text-zinc-500">
+            Save and verify an email with a 6-digit test code so you can reset a forgotten password later.
+          </p>
+
+          <form onSubmit={handleSendRecoveryCode} className="space-y-2">
+            <div className="flex gap-1.5">
+              <input
+                type="email"
+                required
+                maxLength={255}
+                value={recoveryEmailInput}
+                onChange={(e) => setRecoveryEmailInput(e.target.value)}
+                placeholder="backup@example.com"
+                className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={recoveryBusy || !recoveryEmailInput.trim()}
+                className="shrink-0 rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {recoveryBusy ? 'Sending...' : 'Send Code'}
+              </button>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              {recoveryEmailInput.trim().toLowerCase() !== session.user.email.toLowerCase() ? (
+                <button
+                  type="button"
+                  onClick={() => setRecoveryEmailInput(session.user.email)}
+                  className="font-medium text-zinc-600 underline underline-offset-2 hover:text-zinc-950"
+                >
+                  Use account email ({session.user.email})
+                </button>
+              ) : (
+                <span />
+              )}
+              {session.user.recoveryEmail && (
+                <button
+                  type="button"
+                  disabled={recoveryBusy}
+                  onClick={() => void handleClearRecoveryEmail()}
+                  className="font-medium text-zinc-500 hover:text-rose-600 disabled:opacity-50"
+                >
+                  Remove backup email
+                </button>
+              )}
+            </div>
+          </form>
+
+          {(recoveryCodeSentTo || (session.user.recoveryEmail && !session.user.recoveryEmailVerified)) && (
+            <form onSubmit={handleVerifyRecoveryEmail} className="flex gap-1.5 pt-0.5">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="\d{6}"
+                maxLength={6}
+                required
+                value={recoveryCodeInput}
+                onChange={(e) => setRecoveryCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="6-digit code"
+                className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-xs tracking-widest text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={recoveryBusy || recoveryCodeInput.trim().length !== 6}
+                className="shrink-0 rounded-lg border border-zinc-950 bg-white px-3.5 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:opacity-50"
+              >
+                Verify Email
+              </button>
+            </form>
+          )}
+
+          {recoveryError && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              {recoveryError}
+            </div>
+          )}
+          {recoveryNotice && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900">
+              <Check className="h-3.5 w-3.5 shrink-0" />
+              <span>{recoveryNotice}</span>
+            </div>
+          )}
+        </div>
 
         {/* Password Change Form */}
         <div className="my-5 border-t border-zinc-100" />

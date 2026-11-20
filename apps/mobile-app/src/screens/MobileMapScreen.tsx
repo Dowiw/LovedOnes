@@ -106,6 +106,15 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordBusy, setPasswordBusy] = useState(false);
 
+  const [recoveryEmailInput, setRecoveryEmailInput] = useState(
+    config.user?.recoveryEmail ?? '',
+  );
+  const [recoveryCodeInput, setRecoveryCodeInput] = useState('');
+  const [recoveryCodeSentTo, setRecoveryCodeSentTo] = useState<string | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
@@ -504,6 +513,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
+    setRecoveryEmailInput(userProfile?.recoveryEmail ?? '');
+    setRecoveryCodeInput('');
+    setRecoveryCodeSentTo(null);
+    setRecoveryError(null);
+    setRecoveryMessage(null);
     setAccountOpen(true);
   }
 
@@ -594,6 +608,105 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       setAccountError(err instanceof Error ? err.message : 'Unable to save profile');
     } finally {
       setAccountBusy(false);
+    }
+  }
+
+  async function handleSendRecoveryCode() {
+    if (!serverUrl || !accessToken) return;
+    const target = recoveryEmailInput.trim();
+    if (!target) {
+      setRecoveryError('Enter an email address to verify.');
+      return;
+    }
+    setRecoveryError(null);
+    setRecoveryMessage(null);
+    setRecoveryBusy(true);
+    try {
+      const res = await authedFetch('/api/auth/recovery-email/send-code', {
+        method: 'POST',
+        body: JSON.stringify({ recoveryEmail: target }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        recoveryEmail?: string;
+        user?: MobileStoredConfig['user'];
+      };
+      if (!res.ok || !data.user) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setUserProfile(data.user);
+      await saveStoredConfig({ user: data.user });
+      const sentEmail = data.recoveryEmail ?? target;
+      setRecoveryEmailInput(sentEmail);
+      setRecoveryCodeSentTo(sentEmail);
+      setRecoveryMessage(`6-digit code sent to ${sentEmail}`);
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'Failed to send code');
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
+
+  async function handleVerifyRecoveryEmail() {
+    if (!serverUrl || !accessToken) return;
+    const target = (recoveryCodeSentTo ?? recoveryEmailInput).trim();
+    if (!target || !recoveryCodeInput.trim()) return;
+    setRecoveryError(null);
+    setRecoveryMessage(null);
+    setRecoveryBusy(true);
+    try {
+      const res = await authedFetch('/api/auth/recovery-email/verify', {
+        method: 'POST',
+        body: JSON.stringify({
+          recoveryEmail: target,
+          code: recoveryCodeInput.trim(),
+        }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        user?: MobileStoredConfig['user'];
+      };
+      if (!res.ok || !data.user) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setUserProfile(data.user);
+      await saveStoredConfig({ user: data.user });
+      setRecoveryCodeInput('');
+      setRecoveryCodeSentTo(null);
+      setRecoveryMessage('Backup email verified!');
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'Failed to verify code');
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
+
+  async function handleClearRecoveryEmail() {
+    if (!serverUrl || !accessToken) return;
+    setRecoveryError(null);
+    setRecoveryMessage(null);
+    setRecoveryBusy(true);
+    try {
+      const res = await authedFetch('/api/auth/recovery-email', {
+        method: 'DELETE',
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        user?: MobileStoredConfig['user'];
+      };
+      if (!res.ok || !data.user) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setUserProfile(data.user);
+      await saveStoredConfig({ user: data.user });
+      setRecoveryEmailInput('');
+      setRecoveryCodeInput('');
+      setRecoveryCodeSentTo(null);
+      setRecoveryMessage('Backup email removed');
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'Unable to remove backup email');
+    } finally {
+      setRecoveryBusy(false);
     }
   }
 
@@ -1028,6 +1141,77 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   {accountBusy ? 'Saving...' : 'Save Profile'}
                 </Text>
               </TouchableOpacity>
+            </View>
+
+            <View style={styles.settingsCard}>
+              <Text style={styles.settingsSectionTitle}>
+                Backup Email ·{' '}
+                {userProfile?.recoveryEmail && userProfile?.recoveryEmailVerified
+                  ? 'Verified'
+                  : userProfile?.recoveryEmail
+                    ? 'Unverified'
+                    : 'Not Set'}
+              </Text>
+              <Text style={styles.settingsHint}>
+                Verify a backup email with a 6-digit code to enable Forgot Password recovery.
+              </Text>
+
+              <Text style={styles.fieldLabel}>Backup Email Address</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={recoveryEmailInput}
+                onChangeText={setRecoveryEmailInput}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                placeholder={userProfile?.email ?? 'backup@example.com'}
+                placeholderTextColor="#94a3b8"
+              />
+
+              <TouchableOpacity
+                style={styles.primaryBlackBtn}
+                disabled={recoveryBusy}
+                onPress={() => void handleSendRecoveryCode()}
+              >
+                <Text style={styles.primaryBlackText}>
+                  {recoveryBusy ? 'Sending...' : 'Send Verification Code'}
+                </Text>
+              </TouchableOpacity>
+
+              {(recoveryCodeSentTo ||
+                (userProfile?.recoveryEmail && !userProfile?.recoveryEmailVerified)) && (
+                <>
+                  <Text style={styles.fieldLabel}>6-Digit Code</Text>
+                  <TextInput
+                    style={styles.fieldInput}
+                    value={recoveryCodeInput}
+                    onChangeText={(t) => setRecoveryCodeInput(t.replace(/\D/g, '').slice(0, 6))}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    placeholder="123456"
+                    placeholderTextColor="#94a3b8"
+                  />
+                  <TouchableOpacity
+                    style={styles.outlineBlackBtn}
+                    disabled={recoveryBusy || recoveryCodeInput.trim().length !== 6}
+                    onPress={() => void handleVerifyRecoveryEmail()}
+                  >
+                    <Text style={styles.outlineBlackText}>Verify Email</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {Boolean(userProfile?.recoveryEmail) && (
+                <TouchableOpacity
+                  style={styles.removePhotoBtn}
+                  disabled={recoveryBusy}
+                  onPress={() => void handleClearRecoveryEmail()}
+                >
+                  <Text style={styles.removePhotoText}>Remove Backup Email</Text>
+                </TouchableOpacity>
+              )}
+
+              {recoveryError && <Text style={styles.errorText}>{recoveryError}</Text>}
+              {recoveryMessage && <Text style={styles.successText}>{recoveryMessage}</Text>}
             </View>
 
             <View style={styles.settingsCard}>

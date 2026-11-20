@@ -5,6 +5,8 @@ import {
   CreateGroupSchema,
   CreateInviteSchema,
   CreateTrackerTokenSchema,
+  ForgotPasswordRequestSchema,
+  ForgotPasswordResetSchema,
   GroupRole,
   JoinInviteSchema,
   JwtUserPayload,
@@ -13,6 +15,8 @@ import {
   PrivacyMode,
   QrInvitePayload,
   QrInvitePayloadSchema,
+  RecoveryEmailSendCodeSchema,
+  RecoveryEmailVerifySchema,
   RefreshSchema,
   RegisterSchema,
   SystemRole,
@@ -29,6 +33,8 @@ export interface AccountRecord {
   passwordHash: string;
   role: SystemRole;
   avatarUrl: string | null;
+  recoveryEmail: string | null;
+  recoveryEmailVerified: boolean;
   createdAt: Date;
 }
 
@@ -106,12 +112,18 @@ export interface AuthGroupStore {
     options?: { registrationLock?: boolean },
   ): Promise<T>;
   findAccountByEmail(email: string): Promise<AccountRecord | null>;
+  findAccountByVerifiedRecoveryEmail?(recoveryEmail: string): Promise<AccountRecord | null>;
   findAccountById(id: string): Promise<PublicAccountRecord | null>;
   findAccountWithPasswordById?(id: string): Promise<AccountRecord | null>;
   updateAccountProfile?(
     userId: string,
     patch: { email?: string; username?: string; avatarUrl?: string | null },
   ): Promise<{ status: 'ok'; account: PublicAccountRecord } | { status: 'email_conflict' } | { status: 'not_found' }>;
+  updateRecoveryEmail?(
+    userId: string,
+    recoveryEmail: string | null,
+    verified: boolean,
+  ): Promise<PublicAccountRecord | null>;
   updateAccountPassword?(userId: string, passwordHash: string): Promise<boolean>;
   listAccountMemberships(userId: string): Promise<MembershipSummaryRecord[]>;
   listGroupsWithMembers(userId: string): Promise<GroupWithMembers[]>;
@@ -144,6 +156,26 @@ export interface AuthGroupStore {
   deleteInvite?(token: string): Promise<boolean>;
 }
 
+export interface EmailChallengeRecord {
+  salt: string;
+  codeHash: string;
+  targetEmail: string;
+  createdAtMs: number;
+  attempts: number;
+}
+
+export interface EmailMessage {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+}
+
+export interface EmailSender {
+  isConfigured(): boolean;
+  sendMail(msg: EmailMessage): Promise<void>;
+}
+
 export interface SessionStore {
   saveSession(account: {
     id: string;
@@ -160,6 +192,13 @@ export interface SessionStore {
     avatarUrl: string | null;
     groupIds: string[];
   }): Promise<void>;
+  saveEmailChallenge?(
+    key: string,
+    record: EmailChallengeRecord,
+    ttlSeconds: number,
+  ): Promise<void>;
+  getEmailChallenge?(key: string): Promise<EmailChallengeRecord | null>;
+  deleteEmailChallenge?(key: string): Promise<void>;
 }
 
 export interface PasswordHasher {
@@ -171,6 +210,7 @@ export interface AuthGroupModuleOptions {
   store: AuthGroupStore;
   sessionStore: SessionStore;
   tokenService: TokenService;
+  emailSender?: EmailSender;
   publicServerUrl?: string;
   passwordHasher?: PasswordHasher;
   now?: () => number;
@@ -205,6 +245,8 @@ export interface AuthSuccessResult extends TokenPair {
     username: string;
     role: SystemRole;
     avatarUrl: string | null;
+    recoveryEmail: string | null;
+    recoveryEmailVerified: boolean;
     createdAt: string;
   };
 }
@@ -237,17 +279,97 @@ export class AuthGroupModule {
   private readonly store: AuthGroupStore;
   private readonly sessionStore: SessionStore;
   private readonly tokenService: TokenService;
+  private readonly emailSender?: EmailSender;
   private readonly publicServerUrl: string;
   private readonly passwordHasher: PasswordHasher;
   private readonly now: () => number;
+  private readonly fallbackChallenges = new Map<
+    string,
+    { record: EmailChallengeRecord; expiresAtMs: number }
+  >();
 
   constructor(options: AuthGroupModuleOptions) {
     this.store = options.store;
     this.sessionStore = options.sessionStore;
     this.tokenService = options.tokenService;
+    this.emailSender = options.emailSender;
     this.publicServerUrl = options.publicServerUrl ?? 'http://localhost:8080';
     this.passwordHasher = options.passwordHasher ?? defaultPasswordHasher;
     this.now = options.now ?? (() => Date.now());
+  }
+
+  private formatPublicUser(account: PublicAccountRecord): AuthSuccessResult['user'] {
+    return {
+      id: account.id,
+      email: account.email,
+      username: account.username,
+      role: account.role,
+      avatarUrl: account.avatarUrl,
+      recoveryEmail: account.recoveryEmail ?? null,
+      recoveryEmailVerified: Boolean(account.recoveryEmailVerified),
+      createdAt: account.createdAt.toISOString(),
+    };
+  }
+
+  private hashEmailCode(
+    purpose: 'verify' | 'reset',
+    salt: string,
+    userId: string,
+    targetEmail: string,
+    code: string,
+  ): string {
+    return crypto
+      .createHash('sha256')
+      .update(`${salt}:${purpose}:${userId}:${targetEmail.toLowerCase()}:${code}`)
+      .digest('hex');
+  }
+
+  private async saveChallenge(
+    key: string,
+    record: EmailChallengeRecord,
+    ttlSeconds: number,
+  ): Promise<void> {
+    if (this.sessionStore.saveEmailChallenge) {
+      await this.sessionStore.saveEmailChallenge(key, record, ttlSeconds);
+      return;
+    }
+    this.fallbackChallenges.set(key, {
+      record,
+      expiresAtMs: this.now() + ttlSeconds * 1000,
+    });
+  }
+
+  private async getChallenge(key: string): Promise<EmailChallengeRecord | null> {
+    if (this.sessionStore.getEmailChallenge) {
+      return this.sessionStore.getEmailChallenge(key);
+    }
+    const entry = this.fallbackChallenges.get(key);
+    if (!entry) return null;
+    if (entry.expiresAtMs <= this.now()) {
+      this.fallbackChallenges.delete(key);
+      return null;
+    }
+    return entry.record;
+  }
+
+  private async deleteChallenge(key: string): Promise<void> {
+    if (this.sessionStore.deleteEmailChallenge) {
+      await this.sessionStore.deleteEmailChallenge(key);
+      return;
+    }
+    this.fallbackChallenges.delete(key);
+  }
+
+  private async findRecoveryAccount(identifierEmail: string): Promise<AccountRecord | null> {
+    const clean = identifierEmail.trim().toLowerCase();
+    const byPrimary = await this.store.findAccountByEmail(clean);
+    if (byPrimary) {
+      return byPrimary;
+    }
+    if (this.store.findAccountByVerifiedRecoveryEmail) {
+      return this.store.findAccountByVerifiedRecoveryEmail(clean);
+    }
+    return null;
   }
 
   private async issueAndPersistSession(account: PublicAccountRecord): Promise<TokenPair> {
@@ -320,14 +442,7 @@ export class AuthGroupModule {
     const tokens = await this.issueAndPersistSession(createdUser);
     return {
       ...tokens,
-      user: {
-        id: createdUser.id,
-        email: createdUser.email,
-        username: createdUser.username,
-        role: createdUser.role,
-        avatarUrl: createdUser.avatarUrl,
-        createdAt: createdUser.createdAt.toISOString(),
-      },
+      user: this.formatPublicUser(createdUser),
       joinedGroup,
     };
   }
@@ -350,14 +465,7 @@ export class AuthGroupModule {
     const tokens = await this.issueAndPersistSession(account);
     return {
       ...tokens,
-      user: {
-        id: account.id,
-        email: account.email,
-        username: account.username,
-        role: account.role,
-        avatarUrl: account.avatarUrl,
-        createdAt: account.createdAt.toISOString(),
-      },
+      user: this.formatPublicUser(account),
     };
   }
 
@@ -392,14 +500,7 @@ export class AuthGroupModule {
     }
 
     return {
-      user: {
-        id: account.id,
-        email: account.email,
-        username: account.username,
-        role: account.role,
-        avatarUrl: account.avatarUrl,
-        createdAt: account.createdAt.toISOString(),
-      },
+      user: this.formatPublicUser(account),
       groups: memberships.map((g) => ({
         groupId: g.groupId,
         name: g.name,
@@ -451,14 +552,7 @@ export class AuthGroupModule {
 
     return {
       ...tokens,
-      user: {
-        id: updated.id,
-        email: updated.email,
-        username: updated.username,
-        role: updated.role,
-        avatarUrl: updated.avatarUrl,
-        createdAt: updated.createdAt.toISOString(),
-      },
+      user: this.formatPublicUser(updated),
     };
   }
 
@@ -483,6 +577,248 @@ export class AuthGroupModule {
     const nextHash = await this.passwordHasher.hash(parsed.data.newPassword);
     await this.store.updateAccountPassword(userId, nextHash);
     return { updated: true };
+  }
+
+  private async verifyChallengeCode(
+    key: string,
+    purpose: 'verify' | 'reset',
+    userId: string,
+    targetEmail: string,
+    code: string,
+  ): Promise<void> {
+    const challenge = await this.getChallenge(key);
+    if (!challenge || challenge.targetEmail !== targetEmail.toLowerCase()) {
+      throw new DomainError(400, 'Verification code expired or not requested');
+    }
+
+    const candidateHash = this.hashEmailCode(
+      purpose,
+      challenge.salt,
+      userId,
+      targetEmail,
+      code,
+    );
+    const a = Buffer.from(candidateHash, 'hex');
+    const b = Buffer.from(challenge.codeHash, 'hex');
+    const match = a.length === b.length && crypto.timingSafeEqual(a, b);
+
+    if (!match) {
+      const nextAttempts = challenge.attempts + 1;
+      if (nextAttempts >= 5) {
+        await this.deleteChallenge(key);
+        throw new DomainError(429, 'Too many invalid attempts. Please request a new code.');
+      }
+      const elapsedSec = Math.floor((this.now() - challenge.createdAtMs) / 1000);
+      const remainingSec = Math.max(60, 900 - Math.max(0, elapsedSec));
+      await this.saveChallenge(key, { ...challenge, attempts: nextAttempts }, remainingSec);
+      throw new DomainError(400, 'Invalid verification code');
+    }
+
+    await this.deleteChallenge(key);
+  }
+
+  async sendRecoveryVerificationCode(
+    userId: string,
+    rawInput: unknown,
+  ): Promise<{ sent: true; recoveryEmail: string; expiresInSeconds: number; user: AuthSuccessResult['user'] }> {
+    const parsed = RecoveryEmailSendCodeSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      throw new DomainError(400, 'Enter a valid backup email address', parsed.error.flatten());
+    }
+    if (!this.store.updateRecoveryEmail) {
+      throw new DomainError(501, 'Recovery email is not supported by store');
+    }
+    if (!this.emailSender?.isConfigured()) {
+      throw new DomainError(
+        503,
+        'Email delivery is not configured on the server (set SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM).',
+      );
+    }
+
+    const account = await this.store.findAccountById(userId);
+    if (!account) {
+      throw new DomainError(404, 'User not found');
+    }
+
+    const targetEmail = parsed.data.recoveryEmail.toLowerCase();
+    const challengeKey = `verify:${userId}`;
+    const existing = await this.getChallenge(challengeKey);
+    if (existing && this.now() - existing.createdAtMs < 30_000) {
+      throw new DomainError(429, 'Please wait 30 seconds before requesting another code');
+    }
+
+    const keepVerified =
+      account.recoveryEmail?.toLowerCase() === targetEmail && account.recoveryEmailVerified;
+    const saved = keepVerified
+      ? account
+      : await this.store.updateRecoveryEmail(userId, targetEmail, false);
+    if (!saved) {
+      throw new DomainError(404, 'User not found');
+    }
+
+    const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const salt = crypto.randomBytes(16).toString('hex');
+    const codeHash = this.hashEmailCode('verify', salt, userId, targetEmail, code);
+
+    await this.saveChallenge(
+      challengeKey,
+      {
+        salt,
+        codeHash,
+        targetEmail,
+        createdAtMs: this.now(),
+        attempts: 0,
+      },
+      900,
+    );
+
+    try {
+      await this.emailSender.sendMail({
+        to: targetEmail,
+        subject: 'LovedOnes — Verify your backup email',
+        text: `Hi ${saved.username},\n\nYour LovedOnes backup email verification code is: ${code}\n\nThis code expires in 15 minutes. Once verified, you can use this email to recover a forgotten password.`,
+      });
+    } catch (err) {
+      await this.deleteChallenge(challengeKey);
+      const reason = err instanceof Error ? err.message : 'SMTP delivery failed';
+      throw new DomainError(502, `Could not send verification email: ${reason}`);
+    }
+
+    return {
+      sent: true,
+      recoveryEmail: targetEmail,
+      expiresInSeconds: 900,
+      user: this.formatPublicUser(saved),
+    };
+  }
+
+  async verifyRecoveryEmail(
+    userId: string,
+    rawInput: unknown,
+  ): Promise<{ verified: true; user: AuthSuccessResult['user'] }> {
+    const parsed = RecoveryEmailVerifySchema.safeParse(rawInput);
+    if (!parsed.success) {
+      throw new DomainError(400, 'Enter a valid email and 6-digit code', parsed.error.flatten());
+    }
+    if (!this.store.updateRecoveryEmail) {
+      throw new DomainError(501, 'Recovery email is not supported by store');
+    }
+
+    const targetEmail = parsed.data.recoveryEmail.toLowerCase();
+    await this.verifyChallengeCode(`verify:${userId}`, 'verify', userId, targetEmail, parsed.data.code);
+
+    const updated = await this.store.updateRecoveryEmail(userId, targetEmail, true);
+    if (!updated) {
+      throw new DomainError(404, 'User not found');
+    }
+    await this.sessionStore.saveSession(updated);
+
+    return {
+      verified: true,
+      user: this.formatPublicUser(updated),
+    };
+  }
+
+  async clearRecoveryEmail(userId: string): Promise<{ cleared: true; user: AuthSuccessResult['user'] }> {
+    if (!this.store.updateRecoveryEmail) {
+      throw new DomainError(501, 'Recovery email is not supported by store');
+    }
+    await this.deleteChallenge(`verify:${userId}`);
+    const updated = await this.store.updateRecoveryEmail(userId, null, false);
+    if (!updated) {
+      throw new DomainError(404, 'User not found');
+    }
+    await this.sessionStore.saveSession(updated);
+    return {
+      cleared: true,
+      user: this.formatPublicUser(updated),
+    };
+  }
+
+  async requestPasswordReset(
+    rawInput: unknown,
+  ): Promise<{ ok: true; message: string }> {
+    const parsed = ForgotPasswordRequestSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      throw new DomainError(400, 'Enter a valid email address', parsed.error.flatten());
+    }
+
+    const genericMessage =
+      'If that account has a verified backup email, a 6-digit reset code has been sent.';
+    const lookupEmail = parsed.data.email.toLowerCase();
+    const account = await this.findRecoveryAccount(lookupEmail);
+
+    if (
+      !account ||
+      !account.recoveryEmail ||
+      !account.recoveryEmailVerified ||
+      !this.emailSender?.isConfigured()
+    ) {
+      return { ok: true, message: genericMessage };
+    }
+
+    const challengeKey = `reset:${account.id}`;
+    const existing = await this.getChallenge(challengeKey);
+    if (existing && this.now() - existing.createdAtMs < 30_000) {
+      return { ok: true, message: genericMessage };
+    }
+
+    const targetEmail = account.recoveryEmail.toLowerCase();
+    const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const salt = crypto.randomBytes(16).toString('hex');
+    const codeHash = this.hashEmailCode('reset', salt, account.id, targetEmail, code);
+
+    await this.saveChallenge(
+      challengeKey,
+      {
+        salt,
+        codeHash,
+        targetEmail,
+        createdAtMs: this.now(),
+        attempts: 0,
+      },
+      900,
+    );
+
+    try {
+      await this.emailSender.sendMail({
+        to: targetEmail,
+        subject: 'LovedOnes — Password reset code',
+        text: `Hi ${account.username},\n\nYour LovedOnes password reset code is: ${code}\n\nThis code expires in 15 minutes. If you did not request a password reset, you can ignore this email.`,
+      });
+    } catch {
+      await this.deleteChallenge(challengeKey);
+    }
+
+    return { ok: true, message: genericMessage };
+  }
+
+  async resetPasswordWithCode(rawInput: unknown): Promise<{ reset: true }> {
+    const parsed = ForgotPasswordResetSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      throw new DomainError(400, 'Enter a valid email, 6-digit code, and 8+ character password', parsed.error.flatten());
+    }
+    if (!this.store.updateAccountPassword) {
+      throw new DomainError(501, 'Password updates not supported by store');
+    }
+
+    const lookupEmail = parsed.data.email.toLowerCase();
+    const account = await this.findRecoveryAccount(lookupEmail);
+    if (!account || !account.recoveryEmail || !account.recoveryEmailVerified) {
+      throw new DomainError(400, 'Invalid or expired reset code');
+    }
+
+    await this.verifyChallengeCode(
+      `reset:${account.id}`,
+      'reset',
+      account.id,
+      account.recoveryEmail.toLowerCase(),
+      parsed.data.code,
+    );
+
+    const nextHash = await this.passwordHasher.hash(parsed.data.newPassword);
+    await this.store.updateAccountPassword(account.id, nextHash);
+    return { reset: true };
   }
 
   async previewInvite(token: string) {
