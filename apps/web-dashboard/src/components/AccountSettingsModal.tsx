@@ -187,12 +187,12 @@ export function AccountSettingsModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/35 p-4 backdrop-blur-sm"
+      className="lo-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/35 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Account Settings"
     >
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.22)]">
+      <div className="lo-modal-in max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.22)]">
         <div className="mb-5 flex items-center justify-between">
           <div>
             <h2 className="text-base font-bold tracking-tight text-zinc-950">Account Settings</h2>

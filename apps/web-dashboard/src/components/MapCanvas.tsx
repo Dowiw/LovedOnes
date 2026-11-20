@@ -112,6 +112,7 @@ export function MapCanvas({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const styleReadyRef = useRef(false);
   const markersRef = useRef<Map<string, { marker: maplibregl.Marker; signature: string }>>(new Map());
+  const markerAnimFramesRef = useRef<Map<string, number>>(new Map());
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const draftPlaceMarkerRef = useRef<maplibregl.Marker | null>(null);
   const selfMarkerRef = useRef<maplibregl.Marker | null>(null);
@@ -120,6 +121,53 @@ export function MapCanvas({
   labelLanguageRef.current = labelLanguage;
   const onSelectCoordsRef = useRef(onMapSelectCoords);
   onSelectCoordsRef.current = onMapSelectCoords;
+
+  function glideMarker(key: string, marker: maplibregl.Marker, targetLng: number, targetLat: number) {
+    const frames = markerAnimFramesRef.current;
+    const prevFrame = frames.get(key);
+    if (prevFrame !== undefined) {
+      cancelAnimationFrame(prevFrame);
+      frames.delete(key);
+    }
+
+    if (
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    ) {
+      marker.setLngLat([targetLng, targetLat]);
+      return;
+    }
+
+    const start = marker.getLngLat();
+    const dLng = targetLng - start.lng;
+    const dLat = targetLat - start.lat;
+
+    if (
+      (Math.abs(dLng) < 1e-7 && Math.abs(dLat) < 1e-7) ||
+      Math.abs(dLng) > 0.5 ||
+      Math.abs(dLat) > 0.5
+    ) {
+      marker.setLngLat([targetLng, targetLat]);
+      return;
+    }
+
+    const durationMs = 600;
+    const startedAt = performance.now();
+
+    const step = (now: number) => {
+      const elapsed = now - startedAt;
+      const t = Math.min(1, elapsed / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3);
+      marker.setLngLat([start.lng + dLng * eased, start.lat + dLat * eased]);
+      if (t < 1) {
+        frames.set(key, requestAnimationFrame(step));
+      } else {
+        frames.delete(key);
+      }
+    };
+
+    frames.set(key, requestAnimationFrame(step));
+  }
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -182,6 +230,10 @@ export function MapCanvas({
 
     return () => {
       styleReadyRef.current = false;
+      for (const frameId of markerAnimFramesRef.current.values()) {
+        cancelAnimationFrame(frameId);
+      }
+      markerAnimFramesRef.current.clear();
       for (const entry of markersRef.current.values()) {
         entry.marker.remove();
       }
@@ -233,13 +285,17 @@ export function MapCanvas({
       `;
 
       if (existing && existing.signature === signature) {
-        existing.marker.setLngLat([loc.longitude, loc.latitude]);
+        glideMarker(loc.userId, existing.marker, loc.longitude, loc.latitude);
         existing.marker.getPopup()?.setHTML(popupHtml);
       } else {
         existing?.marker.remove();
 
         const el = document.createElement('div');
-        el.className = 'flex flex-col items-center cursor-pointer select-none';
+        el.className = 'cursor-pointer select-none';
+
+        const innerWrap = document.createElement('div');
+        innerWrap.className =
+          'lo-pin-drop flex flex-col items-center transition-transform duration-200 ease-out hover:scale-110';
 
         const pill = document.createElement('div');
         pill.className =
@@ -272,7 +328,7 @@ export function MapCanvas({
           }`;
 
           avatarWrap.append(clip, statusDot);
-          el.append(pill, avatarWrap);
+          innerWrap.append(pill, avatarWrap);
         } else {
           const ring = document.createElement('div');
           ring.className = `flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg ring-4 ${
@@ -284,8 +340,10 @@ export function MapCanvas({
             loc.isFuzzed ? 'bg-amber-500' : 'bg-zinc-900'
           }`;
           ring.appendChild(core);
-          el.append(pill, ring);
+          innerWrap.append(pill, ring);
         }
+
+        el.appendChild(innerWrap);
 
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([loc.longitude, loc.latitude])
@@ -297,6 +355,11 @@ export function MapCanvas({
 
     for (const [uid, entry] of markersRef.current.entries()) {
       if (!activeIds.has(uid)) {
+        const frameId = markerAnimFramesRef.current.get(uid);
+        if (frameId !== undefined) {
+          cancelAnimationFrame(frameId);
+          markerAnimFramesRef.current.delete(uid);
+        }
         entry.marker.remove();
         markersRef.current.delete(uid);
       }
@@ -306,16 +369,28 @@ export function MapCanvas({
       const target = locations.find((l) => l.userId === selectedUserId);
       if (target) {
         hasAutoFramedRef.current = true;
-        map.flyTo({ center: [target.longitude, target.latitude], zoom: 13.5, duration: 700 });
+        map.flyTo({
+          center: [target.longitude, target.latitude],
+          zoom: 13.5,
+          duration: 850,
+          curve: 1.35,
+          essential: true,
+        });
       }
     } else if (locations.length === 0) {
       hasAutoFramedRef.current = false;
     } else if (!hasAutoFramedRef.current) {
       hasAutoFramedRef.current = true;
       if (locations.length === 1) {
-        map.flyTo({ center: [locations[0].longitude, locations[0].latitude], zoom: 13.5, duration: 600 });
+        map.flyTo({
+          center: [locations[0].longitude, locations[0].latitude],
+          zoom: 13.5,
+          duration: 850,
+          curve: 1.35,
+          essential: true,
+        });
       } else {
-        map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 600 });
+        map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 800, essential: true });
       }
     }
   }, [locations, selectedUserId, currentUserId, currentUserAvatarUrl]);
@@ -349,14 +424,18 @@ export function MapCanvas({
     // Rebuild cleanly when label visibility switches so exact server pin and self puck don't double-label
     selfMarkerRef.current?.remove();
     const el = document.createElement('div');
-    el.className = 'flex flex-col items-center cursor-pointer select-none z-10';
+    el.className = 'cursor-pointer select-none z-10';
+
+    const innerWrap = document.createElement('div');
+    innerWrap.className =
+      'lo-pin-drop flex flex-col items-center transition-transform duration-200 ease-out hover:scale-110';
 
     if (!hasExactServerMarker) {
       const pill = document.createElement('div');
       pill.className =
         'mb-1.5 rounded-full border border-zinc-900 bg-zinc-900 px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-md';
       pill.textContent = 'You';
-      el.appendChild(pill);
+      innerWrap.appendChild(pill);
     }
 
     const safeSelfAvatar =
@@ -387,7 +466,8 @@ export function MapCanvas({
       puck.appendChild(dot);
       pulseWrap.append(halo, puck);
     }
-    el.appendChild(pulseWrap);
+    innerWrap.appendChild(pulseWrap);
+    el.appendChild(innerWrap);
 
     selfMarkerRef.current = new maplibregl.Marker({ element: el })
       .setLngLat([selfLocation.longitude, selfLocation.latitude])
@@ -402,7 +482,9 @@ export function MapCanvas({
     map.flyTo({
       center: [focusCoords.longitude, focusCoords.latitude],
       zoom: focusCoords.zoom ?? 15,
-      duration: 750,
+      duration: 850,
+      curve: 1.35,
+      essential: true,
     });
   }, [focusCoords]);
 
@@ -426,7 +508,10 @@ export function MapCanvas({
         existing.getPopup()?.setHTML(popupHtml);
       } else {
         const el = document.createElement('div');
-        el.className = 'flex flex-col items-center cursor-pointer select-none';
+        el.className = 'cursor-pointer select-none';
+        const innerWrap = document.createElement('div');
+        innerWrap.className =
+          'lo-pin-drop flex flex-col items-center transition-transform duration-200 ease-out hover:scale-110';
         const label = document.createElement('div');
         label.className =
           'rounded-full border border-slate-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-800 shadow-sm backdrop-blur';
@@ -437,7 +522,8 @@ export function MapCanvas({
         const inner = document.createElement('div');
         inner.className = 'h-1.5 w-1.5 rounded-full bg-zinc-900';
         dot.appendChild(inner);
-        el.append(label, dot);
+        innerWrap.append(label, dot);
+        el.appendChild(innerWrap);
 
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([place.longitude, place.latitude])
@@ -457,7 +543,13 @@ export function MapCanvas({
     if (selectedPlaceId) {
       const target = places.find((p) => p.id === selectedPlaceId);
       if (target) {
-        map.flyTo({ center: [target.longitude, target.latitude], zoom: 14, duration: 700 });
+        map.flyTo({
+          center: [target.longitude, target.latitude],
+          zoom: 14,
+          duration: 850,
+          curve: 1.35,
+          essential: true,
+        });
       }
     }
   }, [places, selectedPlaceId]);
@@ -499,7 +591,10 @@ export function MapCanvas({
     }
 
     const el = document.createElement('div');
-    el.className = 'flex flex-col items-center cursor-grab active:cursor-grabbing select-none z-20';
+    el.className = 'cursor-grab active:cursor-grabbing select-none z-20';
+
+    const innerWrap = document.createElement('div');
+    innerWrap.className = 'lo-pin-drop flex flex-col items-center';
 
     const pill = document.createElement('div');
     pill.setAttribute('data-draft-pill', 'true');
@@ -508,7 +603,8 @@ export function MapCanvas({
     pill.textContent = labelText;
 
     const pinWrap = document.createElement('div');
-    pinWrap.className = 'relative flex flex-col items-center';
+    pinWrap.className =
+      'lo-bob relative flex flex-col items-center transition-transform duration-150 ease-out hover:scale-105';
     pinWrap.innerHTML = `
       <svg width="32" height="38" viewBox="0 0 32 38" fill="none" xmlns="http://www.w3.org/2000/svg" class="drop-shadow-[0_6px_10px_rgba(9,9,11,0.35)]">
         <path d="M16 2C8.82 2 3 7.82 3 15C3 24.4 16 36 16 36C16 36 29 24.4 29 15C29 7.82 23.18 2 16 2Z" fill="#09090b" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round"/>
@@ -517,7 +613,8 @@ export function MapCanvas({
       <span class="mt-0.5 h-2 w-2 rounded-full bg-zinc-950/35"></span>
     `;
 
-    el.append(pill, pinWrap);
+    innerWrap.append(pill, pinWrap);
+    el.appendChild(innerWrap);
 
     const marker = new maplibregl.Marker({
       element: el,
@@ -527,7 +624,14 @@ export function MapCanvas({
       .setLngLat([draftPlace.longitude, draftPlace.latitude])
       .addTo(map);
 
+    marker.on('dragstart', () => {
+      pinWrap.classList.remove('lo-bob');
+      pinWrap.classList.add('scale-105');
+    });
+
     marker.on('dragend', () => {
+      pinWrap.classList.remove('scale-105');
+      pinWrap.classList.add('lo-bob');
       const lngLat = marker.getLngLat();
       onSelectCoordsRef.current?.(
         Number(lngLat.lat.toFixed(6)),

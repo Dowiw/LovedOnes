@@ -767,10 +767,10 @@ export default function HomePage() {
   if (!session) {
     return (
       <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f4f4f5] px-4">
-        <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl" />
+        <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl" />
+        <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl" />
 
-        <div className="relative w-full max-w-md rounded-3xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
+        <div className="lo-float-in relative w-full max-w-md rounded-3xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
           <div className="mb-6 flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white">
               <MapPin className="h-5 w-5" />
@@ -856,7 +856,7 @@ export default function HomePage() {
             <button
               type="submit"
               disabled={authLoading}
-              className="w-full rounded-full bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
+              className="lo-press w-full rounded-full bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
             >
               {authLoading
                 ? 'Please wait...'
@@ -890,7 +890,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setPreAuthQrOpen(true)}
-                className="flex w-full items-center justify-center gap-2 rounded-full border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50"
+                className="lo-press flex w-full items-center justify-center gap-2 rounded-full border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50"
               >
                 <QrCode className="h-3.5 w-3.5" />
                 Have an invite QR or link? Scan or paste
@@ -940,7 +940,7 @@ export default function HomePage() {
       {/* Top-Left Floating Dock & Controls */}
       <div className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col gap-2.5 sm:left-4 sm:top-4 sm:w-[300px]">
         {/* Compact Icon Bar */}
-        <div className="pointer-events-auto flex items-center justify-between rounded-full border border-white/75 bg-white/88 px-2.5 py-1.5 shadow-[0_8px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+        <div className="lo-float-in pointer-events-auto flex items-center justify-between rounded-full border border-white/75 bg-white/88 px-2.5 py-1.5 shadow-[0_8px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl">
           <div className="flex items-center gap-1.5">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-950 text-white">
               <MapPin className="h-4 w-4" />
@@ -1012,7 +1012,7 @@ export default function HomePage() {
         {leftOpen && (
           <>
             {/* Group & Privacy Floating Card */}
-            <div className="pointer-events-auto rounded-3xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+            <div className="lo-float-in pointer-events-auto rounded-3xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
               <div className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                   <Users className="h-3.5 w-3.5" />
@@ -1025,7 +1025,7 @@ export default function HomePage() {
                       setJoinQrOnboardingPrompt(false);
                       setJoinQrOpen(true);
                     }}
-                    className="flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100"
+                    className="lo-press flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100"
                   >
                     <QrCode className="h-3 w-3" />
                     Join QR
@@ -1033,7 +1033,7 @@ export default function HomePage() {
                   <button
                     type="button"
                     onClick={() => setShowNewGroupForm((v) => !v)}
-                    className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-slate-200"
+                    className="lo-press flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-slate-200"
                   >
                     <Plus className="h-3 w-3" />
                     New
@@ -1047,7 +1047,7 @@ export default function HomePage() {
                     key={g.id}
                     type="button"
                     onClick={() => setActiveGroupId(g.id)}
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${activeGroup?.id === g.id
+                    className={`lo-press rounded-full px-3 py-1 text-xs font-medium transition ${activeGroup?.id === g.id
                       ? 'bg-zinc-900 text-white shadow-sm'
                       : 'bg-slate-100 text-zinc-700 hover:bg-slate-200'
                       }`}
@@ -1066,7 +1066,7 @@ export default function HomePage() {
                         setJoinQrOnboardingPrompt(false);
                         setJoinQrOpen(true);
                       }}
-                      className="flex w-full items-center justify-center gap-1.5 rounded-full bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800"
+                      className="lo-press flex w-full items-center justify-center gap-1.5 rounded-full bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800"
                     >
                       <QrCode className="h-3.5 w-3.5" />
                       Scan or Paste QR Invite
@@ -1087,7 +1087,7 @@ export default function HomePage() {
                   <button
                     type="submit"
                     disabled={creatingGroup || !newGroupName.trim()}
-                    className="rounded-full bg-zinc-900 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                    className="lo-press rounded-full bg-zinc-900 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
                   >
                     Add
                   </button>
@@ -1108,7 +1108,7 @@ export default function HomePage() {
                         key={mode}
                         type="button"
                         onClick={() => void handlePrivacyChange(mode)}
-                        className={`flex items-center justify-center gap-1 rounded-full py-1.5 text-[11px] font-semibold transition ${activeGroup.myPrivacy === mode
+                        className={`lo-press flex items-center justify-center gap-1 rounded-full py-1.5 text-[11px] font-semibold transition ${activeGroup.myPrivacy === mode
                           ? 'bg-zinc-900 text-white shadow-sm'
                           : 'text-zinc-600 hover:text-zinc-900'
                           }`}
@@ -1131,12 +1131,12 @@ export default function HomePage() {
             </div>
 
             {/* Live Beacon Card */}
-            <div className="pointer-events-auto rounded-3xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+            <div className="lo-float-in pointer-events-auto rounded-3xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setGeoSharing((s) => !s)}
-                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition ${geoSharing
+                  className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition ${geoSharing
                     ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100'
                     : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800'
                     }`}
@@ -1260,14 +1260,14 @@ export default function HomePage() {
 
       {/* Top-Right Action Pills & Floating Tabbed Inspector */}
       <div className="pointer-events-none absolute bottom-16 left-3 right-3 z-20 flex flex-col items-end gap-2.5 md:bottom-auto md:left-auto md:right-4 md:top-4 md:w-[350px]">
-        <div className="pointer-events-auto hidden items-center gap-2 md:flex">
+        <div className="lo-float-in pointer-events-auto hidden items-center gap-2 md:flex">
           <button
             type="button"
             onClick={() => {
               setRightOpen(true);
               setInspectorTab('requests');
             }}
-            className="flex items-center gap-1.5 rounded-full border border-white/75 bg-white/90 px-3.5 py-2 text-xs font-medium text-zinc-800 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl hover:bg-white"
+            className="lo-press flex items-center gap-1.5 rounded-full border border-white/75 bg-white/90 px-3.5 py-2 text-xs font-medium text-zinc-800 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:bg-white"
           >
             <BellRing className="h-3.5 w-3.5" />
             Check-In
@@ -1284,7 +1284,7 @@ export default function HomePage() {
                 setRightOpen(true);
                 setInspectorTab('places');
               }}
-              className="flex items-center gap-1 rounded-full bg-zinc-900 px-3.5 py-2 text-xs font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,0.12)] hover:bg-zinc-800"
+              className="lo-press flex items-center gap-1 rounded-full bg-zinc-900 px-3.5 py-2 text-xs font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,0.12)] transition hover:bg-zinc-800"
             >
               <Plus className="h-3.5 w-3.5 text-white" />
               New Place
@@ -1294,14 +1294,14 @@ export default function HomePage() {
             type="button"
             onClick={() => setRightOpen((v) => !v)}
             title="Toggle inspector"
-            className="rounded-full border border-white/75 bg-white/90 p-2 text-zinc-700 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl hover:bg-white"
+            className="lo-press rounded-full border border-white/75 bg-white/90 p-2 text-zinc-700 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:bg-white"
           >
             <PanelRight className="h-4 w-4" />
           </button>
         </div>
 
         {rightOpen && (
-          <div className="pointer-events-auto flex max-h-[44vh] w-full flex-col overflow-hidden rounded-3xl border border-white/75 bg-white/90 shadow-[0_16px_44px_rgba(15,23,42,0.1)] backdrop-blur-xl md:max-h-[calc(100vh-140px)]">
+          <div className="lo-float-in pointer-events-auto flex max-h-[44vh] w-full flex-col overflow-hidden rounded-3xl border border-white/75 bg-white/90 shadow-[0_16px_44px_rgba(15,23,42,0.1)] backdrop-blur-xl md:max-h-[calc(100vh-140px)]">
             {/* Segmented Pill Tabs (matching screenshot reference) */}
             <div className="border-b border-slate-100 p-2">
               <div className="grid grid-cols-4 gap-1 rounded-full bg-slate-100 p-1 text-[11px] font-semibold">
@@ -1317,7 +1317,7 @@ export default function HomePage() {
                     key={tab}
                     type="button"
                     onClick={() => setInspectorTab(tab)}
-                    className={`rounded-full py-1.5 transition ${inspectorTab === tab
+                    className={`lo-press rounded-full py-1.5 transition ${inspectorTab === tab
                       ? 'bg-zinc-900 text-white shadow-sm'
                       : 'text-zinc-600 hover:text-zinc-900'
                       }`}
@@ -1330,7 +1330,7 @@ export default function HomePage() {
 
             {/* People Tab */}
             {inspectorTab === 'people' && (
-              <div className="flex-1 space-y-1.5 overflow-y-auto p-3">
+              <div key="tab-people" className="lo-tab-enter flex-1 space-y-1.5 overflow-y-auto p-3">
                 {locations.map((loc) => (
                   <div
                     key={loc.userId}
@@ -1381,7 +1381,7 @@ export default function HomePage() {
 
             {/* Chat Tab */}
             {inspectorTab === 'chat' && (
-              <div className="flex min-h-[260px] flex-1 flex-col overflow-hidden">
+              <div key="tab-chat" className="lo-tab-enter flex min-h-[260px] flex-1 flex-col overflow-hidden">
                 <div className="flex-1 space-y-2 overflow-y-auto p-3">
                   {messages.map((m) => {
                     const mine = m.senderId === session.user.id;
@@ -1426,7 +1426,7 @@ export default function HomePage() {
                   <button
                     type="submit"
                     disabled={!activeGroup || !chatInput.trim()}
-                    className="flex shrink-0 items-center justify-center rounded-full bg-zinc-900 px-3.5 py-2 text-white hover:bg-zinc-800 disabled:opacity-50"
+                    className="lo-press flex shrink-0 items-center justify-center rounded-full bg-zinc-900 px-3.5 py-2 text-white hover:bg-zinc-800 disabled:opacity-50"
                   >
                     <Send className="h-3.5 w-3.5" />
                   </button>
@@ -1436,7 +1436,7 @@ export default function HomePage() {
 
             {/* Places Tab */}
             {inspectorTab === 'places' && (
-              <div className="flex-1 space-y-3 overflow-y-auto p-3">
+              <div key="tab-places" className="lo-tab-enter flex-1 space-y-3 overflow-y-auto p-3">
                 {activeGroup?.myRole === 'ADMIN' && (
                   <form
                     onSubmit={handleCreatePlace}
@@ -1572,7 +1572,7 @@ export default function HomePage() {
 
             {/* Check-Ins Tab */}
             {inspectorTab === 'requests' && (
-              <div className="flex-1 space-y-3 overflow-y-auto p-3">
+              <div key="tab-requests" className="lo-tab-enter flex-1 space-y-3 overflow-y-auto p-3">
                 {activeGroup && activeGroup.members.some((m) => m.userId !== session.user.id) ? (
                   <form onSubmit={handleSendCheckInRequest} className="flex gap-1.5">
                     <select
@@ -1668,12 +1668,12 @@ export default function HomePage() {
 
       {/* Bottom-Left Floating Profile Pill & Map Credits */}
       <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-end gap-2 sm:bottom-4 sm:left-4 sm:flex">
-        <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/75 bg-white/90 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+        <div className="lo-float-in pointer-events-auto flex items-center gap-2 rounded-full border border-white/75 bg-white/90 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl">
           <button
             type="button"
             onClick={() => setAccountSettingsOpen(true)}
             title="Account settings & profile photo"
-            className="flex items-center gap-2.5 rounded-full pr-1 text-left transition hover:opacity-85"
+            className="lo-press flex items-center gap-2.5 rounded-full pr-1 text-left transition hover:opacity-85"
           >
             <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-900 text-xs font-bold text-white">
               {isSafeAvatarUrl(session.user.avatarUrl) ? (
@@ -1697,7 +1697,7 @@ export default function HomePage() {
             type="button"
             onClick={() => setAccountSettingsOpen(true)}
             title="Account settings"
-            className="rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
+            className="lo-press rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
           >
             <Settings className="h-3.5 w-3.5" />
           </button>
@@ -1705,7 +1705,7 @@ export default function HomePage() {
             type="button"
             onClick={handleSignOut}
             title="Sign out"
-            className="rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
+            className="lo-press rounded-full p-1.5 text-zinc-500 transition hover:bg-slate-100 hover:text-zinc-900"
           >
             <LogOut className="h-3.5 w-3.5" />
           </button>
@@ -1713,7 +1713,7 @@ export default function HomePage() {
 
         <div className="pointer-events-auto relative">
           {creditsOpen && (
-            <div className="mb-2 w-60 rounded-2xl border border-white/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+            <div className="lo-float-in mb-2 w-60 rounded-2xl border border-white/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(15,23,42,0.12)] backdrop-blur-xl">
               <div className="mb-1 font-semibold text-zinc-900">Map Credits</div>
               <p>
                 Icons:{' '}
@@ -1745,7 +1745,7 @@ export default function HomePage() {
           <button
             type="button"
             onClick={() => setCreditsOpen((v) => !v)}
-            className="rounded-full border border-white/75 bg-white/85 px-2.5 py-1.5 text-[10px] font-medium text-zinc-500 shadow-sm backdrop-blur-xl transition hover:bg-white hover:text-zinc-900"
+            className="lo-press rounded-full border border-white/75 bg-white/85 px-2.5 py-1.5 text-[10px] font-medium text-zinc-500 shadow-sm backdrop-blur-xl transition hover:bg-white hover:text-zinc-900"
           >
             © Maki · OSM
           </button>
@@ -1753,8 +1753,8 @@ export default function HomePage() {
       </div>
 
       {/* Bottom-Center Floating Map View Mode Switcher */}
-      <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full border border-white/75 bg-white/90 p-1 shadow-[0_8px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl sm:bottom-4">
-        <div className="flex items-center gap-1 text-xs font-semibold">
+      <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 sm:bottom-4">
+        <div className="lo-float-in flex items-center gap-1 rounded-full border border-white/75 bg-white/90 p-1 text-xs font-semibold shadow-[0_8px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl">
           {(
             [
               ['live', 'Live', MapPin],
@@ -1766,7 +1766,7 @@ export default function HomePage() {
               key={mode}
               type="button"
               onClick={() => setMapViewMode(mode)}
-              className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition ${mapViewMode === mode
+              className={`lo-press flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition ${mapViewMode === mode
                 ? 'bg-zinc-900 text-white shadow-sm'
                 : 'text-zinc-600 hover:text-zinc-900'
                 }`}
@@ -1781,7 +1781,7 @@ export default function HomePage() {
       {/* Bottom-Right Map Label Language Toggle */}
       <div
         title="Switch map label language between English and local street/landmark names"
-        className="pointer-events-auto absolute bottom-[5.25rem] right-2.5 z-20 flex items-center gap-1 rounded-full border border-white/75 bg-white/90 p-1 shadow-[0_8px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl sm:bottom-4 sm:right-14"
+        className="lo-float-in pointer-events-auto absolute bottom-[5.25rem] right-2.5 z-20 flex items-center gap-1 rounded-full border border-white/75 bg-white/90 p-1 shadow-[0_8px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl sm:bottom-4 sm:right-14"
       >
         <Globe className="ml-2 mr-0.5 h-3 w-3 text-zinc-500" />
         {(
@@ -1794,7 +1794,7 @@ export default function HomePage() {
             key={lang}
             type="button"
             onClick={() => handleChangeLabelLanguage(lang)}
-            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${labelLanguage === lang
+            className={`lo-press rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${labelLanguage === lang
               ? 'bg-zinc-900 text-white shadow-sm'
               : 'text-zinc-600 hover:text-zinc-900'
               }`}

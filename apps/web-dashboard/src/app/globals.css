@@ -5,8 +5,147 @@
 html,
 body {
   height: 100%;
-  background-color: #eef3f6;
+  background-color: #f4f4f5;
   color: #18181b;
+}
+
+@keyframes lo-float-in {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes lo-modal-in {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes lo-backdrop-in {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes lo-tab-in {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lo-pin-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.84);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes lo-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes lo-orb-drift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(18px, -14px, 0) scale(1.06);
+  }
+}
+
+.lo-float-in {
+  animation: lo-float-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lo-modal-in {
+  animation: lo-modal-in 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.lo-backdrop-in {
+  animation: lo-backdrop-in 220ms ease-out both;
+}
+
+.lo-tab-enter {
+  animation: lo-tab-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lo-pin-drop {
+  animation: lo-pin-drop 440ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lo-bob {
+  animation: lo-bob 3.2s ease-in-out infinite;
+}
+
+.lo-orb-drift {
+  animation: lo-orb-drift 14s ease-in-out infinite alternate;
+}
+
+.lo-press {
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+.lo-press:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.lo-press:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lo-float-in,
+  .lo-modal-in,
+  .lo-backdrop-in,
+  .lo-tab-enter,
+  .lo-pin-drop,
+  .lo-bob,
+  .lo-orb-drift {
+    animation: none !important;
+  }
+  .lo-press,
+  .lo-press:hover:not(:disabled),
+  .lo-press:active:not(:disabled) {
+    transition: none !important;
+    transform: none !important;
+  }
 }
 
 .maplibregl-popup-content {
@@ -17,6 +156,7 @@ body {
   border-radius: 1rem !important;
   padding: 0.65rem 0.85rem !important;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12) !important;
+  animation: lo-tab-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .maplibregl-popup-tip {
@@ -26,6 +166,7 @@ body {
 .maplibregl-popup-close-button {
   color: #71717a !important;
   padding: 2px 6px !important;
+  transition: color 160ms ease, background-color 160ms ease;
 }
 
 .maplibregl-ctrl-group {
@@ -35,6 +176,11 @@ body {
   border-radius: 1rem !important;
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08) !important;
   overflow: hidden;
+  transition: box-shadow 220ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.maplibregl-ctrl-group button {
+  transition: background-color 160ms ease !important;
 }
 
 .maplibregl-ctrl-group button + button {

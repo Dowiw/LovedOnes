@@ -226,12 +226,12 @@ export function QrJoinModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4 backdrop-blur-sm"
+      className="lo-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Join a Group via QR"
     >
-      <div className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-3xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.24)]">
+      <div className="lo-modal-in max-h-[92vh] w-full max-w-md overflow-y-auto rounded-3xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.24)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white">
