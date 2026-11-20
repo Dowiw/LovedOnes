@@ -628,13 +628,13 @@ export default function HomePage() {
 
   if (!session) {
     return (
-      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#e8eff4] px-4">
-        <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-[#80f15a]/25 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-sky-300/30 blur-3xl" />
+      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f4f4f5] px-4">
+        <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl" />
 
         <div className="relative w-full max-w-md rounded-3xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
           <div className="mb-6 flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 text-[#80f15a]">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white">
               <MapPin className="h-5 w-5" />
             </span>
             <div>
@@ -763,7 +763,7 @@ export default function HomePage() {
         {/* Compact Icon Bar */}
         <div className="pointer-events-auto flex items-center justify-between rounded-full border border-white/75 bg-white/88 px-2.5 py-1.5 shadow-[0_8px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl">
           <div className="flex items-center gap-1.5">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-[#80f15a]">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-950 text-white">
               <MapPin className="h-4 w-4" />
             </span>
             <span className="pr-1 text-xs font-bold tracking-tight text-zinc-900">LovedOnes</span>
@@ -910,7 +910,7 @@ export default function HomePage() {
                     ))}
                   </div>
                   {myPrivacyOverrideUntil && Date.parse(myPrivacyOverrideUntil) > Date.now() && (
-                    <div className="mt-2 rounded-2xl bg-[#80f15a]/25 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900">
+                    <div className="mt-2 rounded-2xl border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900">
                       Exact check-in active until{' '}
                       {new Date(myPrivacyOverrideUntil).toLocaleTimeString()}
                     </div>
@@ -927,8 +927,8 @@ export default function HomePage() {
                   onClick={() => setGeoSharing((s) => !s)}
                   className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition ${
                     geoSharing
-                      ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
-                      : 'bg-[#80f15a] text-zinc-950 shadow-sm hover:bg-[#72e34d]'
+                      ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100'
+                      : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800'
                   }`}
                 >
                   <Radio className="h-3.5 w-3.5" />
@@ -971,7 +971,7 @@ export default function HomePage() {
                       HTTP Tracker Token
                     </span>
                     {trackerActive && (
-                      <span className="rounded-full bg-[#80f15a]/35 px-2 py-0.5 text-[10px] font-semibold text-zinc-900">
+                      <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-900">
                         {Math.max(1, Math.ceil(trackerTtlSeconds / 86400))}d left
                       </span>
                     )}
@@ -1031,7 +1031,7 @@ export default function HomePage() {
                               className="shrink-0 rounded-lg border border-slate-200 bg-white p-1.5 text-zinc-700 hover:bg-slate-100"
                             >
                               {copiedField === key ? (
-                                <Check className="h-3 w-3 text-emerald-600" />
+                                <Check className="h-3 w-3 text-zinc-900" />
                               ) : (
                                 <Copy className="h-3 w-3" />
                               )}
@@ -1062,7 +1062,7 @@ export default function HomePage() {
             <BellRing className="h-3.5 w-3.5" />
             Check-In
             {pendingIncomingCount > 0 && (
-              <span className="rounded-full bg-[#80f15a] px-1.5 py-0.2 text-[10px] font-bold text-zinc-950">
+              <span className="rounded-full bg-zinc-950 px-1.5 py-0.2 text-[10px] font-bold text-white">
                 {pendingIncomingCount}
               </span>
             )}
@@ -1076,7 +1076,7 @@ export default function HomePage() {
               }}
               className="flex items-center gap-1 rounded-full bg-zinc-900 px-3.5 py-2 text-xs font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,0.12)] hover:bg-zinc-800"
             >
-              <Plus className="h-3.5 w-3.5 text-[#80f15a]" />
+              <Plus className="h-3.5 w-3.5 text-white" />
               New Place
             </button>
           )}
@@ -1148,7 +1148,7 @@ export default function HomePage() {
                       className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                         loc.isFuzzed
                           ? 'bg-amber-100 text-amber-800'
-                          : 'bg-[#80f15a]/35 text-zinc-900'
+                          : 'bg-zinc-900 text-white'
                       }`}
                     >
                       {loc.privacyMode}
@@ -1402,7 +1402,7 @@ export default function HomePage() {
                               type="button"
                               disabled={checkinBusy}
                               onClick={() => void handleRespondCheckIn(req.id, 'accept')}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-full bg-[#80f15a] py-1.5 text-[11px] font-semibold text-zinc-950 hover:bg-[#72e34d]"
+                              className="flex flex-1 items-center justify-center gap-1 rounded-full bg-zinc-950 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
                             >
                               <Check className="h-3 w-3" /> Accept
                             </button>

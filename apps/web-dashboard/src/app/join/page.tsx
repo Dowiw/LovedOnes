@@ -102,7 +102,7 @@ function JoinInviteInner() {
           ) : preview ? (
             <div className="space-y-4">
               <div className="flex items-center gap-2.5">
-                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-[#80f15a]">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-950 text-white">
                   <UserPlus className="h-4 w-4" />
                 </span>
                 <h1 className="text-lg font-bold tracking-tight text-zinc-900">Group Invite</h1>
@@ -117,7 +117,7 @@ function JoinInviteInner() {
                   Status:{' '}
                   <span
                     className={
-                      preview.valid ? 'font-medium text-emerald-700' : 'font-medium text-rose-600'
+                      preview.valid ? 'font-medium text-zinc-900' : 'font-medium text-rose-600'
                     }
                   >
                     {preview.valid ? 'Active' : 'Expired / Exhausted'}
@@ -136,9 +136,9 @@ function JoinInviteInner() {
                   type="button"
                   disabled={!preview.valid || submitting}
                   onClick={() => void handleJoinExisting()}
-                  className="flex w-full items-center justify-center gap-2 rounded-full bg-zinc-900 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                  className="flex w-full items-center justify-center gap-2 rounded-full bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
                 >
-                  <CheckCircle2 className="h-4 w-4 text-[#80f15a]" />
+                  <CheckCircle2 className="h-4 w-4 text-white" />
                   {submitting ? 'Joining...' : `Join as ${session.user.username}`}
                 </button>
               ) : (

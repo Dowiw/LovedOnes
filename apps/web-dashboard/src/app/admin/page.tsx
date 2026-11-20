@@ -120,9 +120,9 @@ export default function AdminDashboardPage() {
             <button
               type="button"
               onClick={() => setShowInviteModal((v) => !v)}
-              className="flex items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800"
+              className="flex items-center gap-1.5 rounded-full bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800"
             >
-              <QrCode className="h-3.5 w-3.5 text-[#80f15a]" />
+              <QrCode className="h-3.5 w-3.5 text-white" />
               New Invite
             </button>
           </div>
@@ -170,7 +170,7 @@ export default function AdminDashboardPage() {
           <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
             <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
               <span>Spatial Database</span>
-              <Database className="h-4 w-4 text-emerald-600" />
+              <Database className="h-4 w-4 text-zinc-900" />
             </div>
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900">
               {telemetry ? formatBytes(telemetry.databaseBytes) : '—'}
@@ -229,7 +229,7 @@ export default function AdminDashboardPage() {
                       <div className="font-medium text-zinc-900">{u.username}</div>
                       <div className="text-[11px] text-zinc-400">{u.email}</div>
                     </td>
-                    <td className="px-5 py-3 font-mono text-emerald-700">
+                    <td className="px-5 py-3 font-mono text-zinc-900">
                       {u.cpuMsPerMin.toFixed(2)} ms
                     </td>
                     <td className="px-5 py-3 font-mono text-sky-700">{u.pingsPerMin}</td>

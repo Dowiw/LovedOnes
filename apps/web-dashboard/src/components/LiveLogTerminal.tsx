@@ -29,8 +29,8 @@ function parseLogLine(raw: string): ParsedLogLine {
 
 function getLevelMeta(level?: number): { label: string; color: string } {
   if (!level || level < 30) return { label: 'DEBUG', color: 'text-zinc-400' };
-  if (level < 40) return { label: 'INFO ', color: 'text-[#80f15a]' };
-  if (level < 50) return { label: 'WARN ', color: 'text-amber-400' };
+  if (level < 40) return { label: 'INFO ', color: 'text-zinc-100' };
+  if (level < 50) return { label: 'WARN ', color: 'text-amber-300' };
   return { label: 'ERROR', color: 'text-rose-400' };
 }
 
@@ -97,13 +97,13 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
               connected
-                ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
-                : 'bg-slate-100 text-zinc-500'
+                ? 'bg-zinc-900 text-white'
+                : 'bg-zinc-100 text-zinc-500'
             }`}
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                connected ? 'bg-emerald-500' : 'bg-zinc-400'
+                connected ? 'bg-white' : 'bg-zinc-400'
               }`}
             />
             {connected ? 'Live' : 'Disconnected'}

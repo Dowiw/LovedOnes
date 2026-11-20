@@ -179,7 +179,7 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
                   onClick={handleCopy}
                   className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-800"
                 >
-                  {copied ? <Check className="h-3.5 w-3.5 text-[#80f15a]" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copied ? <Check className="h-3.5 w-3.5 text-white" /> : <Copy className="h-3.5 w-3.5" />}
                   {copied ? 'Copied' : 'Copy'}
                 </button>
               </div>

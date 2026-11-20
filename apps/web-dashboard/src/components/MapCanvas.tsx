@@ -221,7 +221,7 @@ export function MapCanvas({
 
         const ring = document.createElement('div');
         ring.className = `flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg ring-4 ${
-          loc.isFuzzed ? 'ring-amber-400/35' : 'ring-[#80f15a]/45'
+          loc.isFuzzed ? 'ring-amber-400/35' : 'ring-zinc-900/20'
         }`;
 
         const core = document.createElement('div');
@@ -298,7 +298,7 @@ export function MapCanvas({
     if (!hasExactServerMarker) {
       const pill = document.createElement('div');
       pill.className =
-        'mb-1.5 rounded-full border border-zinc-900 bg-zinc-900 px-2.5 py-0.5 text-[11px] font-semibold text-[#80f15a] shadow-md';
+        'mb-1.5 rounded-full border border-zinc-900 bg-zinc-900 px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-md';
       pill.textContent = 'You';
       el.appendChild(pill);
     }
@@ -306,12 +306,12 @@ export function MapCanvas({
     const pulseWrap = document.createElement('div');
     pulseWrap.className = 'relative flex h-7 w-7 items-center justify-center';
     const halo = document.createElement('div');
-    halo.className = 'absolute inset-0 animate-ping rounded-full bg-[#80f15a]/55';
+    halo.className = 'absolute inset-0 animate-ping rounded-full bg-zinc-900/35';
     const puck = document.createElement('div');
     puck.className =
-      'relative flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-[#80f15a] shadow-lg ring-4 ring-[#80f15a]/35';
+      'relative flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-zinc-950 shadow-lg ring-4 ring-zinc-900/20';
     const dot = document.createElement('div');
-    dot.className = 'h-2 w-2 rounded-full bg-zinc-950';
+    dot.className = 'h-2 w-2 rounded-full bg-white';
     puck.appendChild(dot);
     pulseWrap.append(halo, puck);
     el.appendChild(pulseWrap);
@@ -449,7 +449,7 @@ export function MapCanvas({
         filter: ['==', ['geometry-type'], 'Point'],
         paint: {
           'circle-radius': 4,
-          'circle-color': '#80f15a',
+          'circle-color': '#ffffff',
           'circle-stroke-color': '#18181b',
           'circle-stroke-width': 1.5,
         },

@@ -18,7 +18,7 @@ export function NavBar({ user, onSignOut }: NavBarProps) {
       <div className="mx-auto flex max-w-7xl items-center justify-between rounded-full border border-slate-200/80 bg-white/85 px-4 py-2 shadow-[0_8px_28px_rgba(15,23,42,0.06)] backdrop-blur-xl">
         <div className="flex items-center gap-4">
           <Link href="/" className="flex items-center gap-2 text-sm font-semibold tracking-tight text-zinc-900">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-[#80f15a]">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-950 text-white">
               <MapPin className="h-4 w-4" />
             </span>
             <span>LovedOnes</span>
