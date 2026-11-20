@@ -231,7 +231,7 @@ export function QrJoinModal({
       aria-modal="true"
       aria-label="Join a Group via QR"
     >
-      <div className="lo-modal-in max-h-[92vh] w-full max-w-md overflow-y-auto rounded-3xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.24)]">
+      <div className="lo-modal-in max-h-[92vh] w-full max-w-md overflow-y-auto rounded-xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.24)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white">
@@ -290,7 +290,7 @@ export function QrJoinModal({
             {tab === 'camera' && (
               <div className="space-y-3">
                 {cameraError ? (
-                  <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-center text-xs text-zinc-600">
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-center text-xs text-zinc-600">
                     <p>{cameraError}</p>
                     <div className="mt-3 flex justify-center gap-2">
                       <button
@@ -310,14 +310,14 @@ export function QrJoinModal({
                     </div>
                   </div>
                 ) : (
-                  <div className="relative aspect-square w-full overflow-hidden rounded-2xl bg-zinc-950">
+                  <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-zinc-950">
                     <video
                       ref={videoRef}
                       playsInline
                       muted
                       className="h-full w-full object-cover"
                     />
-                    <div className="pointer-events-none absolute inset-8 rounded-2xl border-2 border-white/75" />
+                    <div className="pointer-events-none absolute inset-8 rounded-lg border-2 border-white/75" />
                     <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-zinc-950/80 px-3 py-1 text-[11px] font-medium text-white backdrop-blur">
                       Point camera at invite QR code
                     </div>
@@ -339,7 +339,7 @@ export function QrJoinModal({
                   type="button"
                   disabled={loadingPreview}
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex w-full flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-zinc-300 bg-zinc-50/70 px-4 py-10 text-center transition hover:border-zinc-900 hover:bg-zinc-100/70 disabled:opacity-50"
+                  className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-zinc-300 bg-zinc-50/70 px-4 py-10 text-center transition hover:border-zinc-900 hover:bg-zinc-100/70 disabled:opacity-50"
                 >
                   <ImageUp className="h-6 w-6 text-zinc-700" />
                   <span className="text-xs font-semibold text-zinc-900">
@@ -367,7 +367,7 @@ export function QrJoinModal({
                     value={pasteText}
                     onChange={(e) => setPasteText(e.target.value)}
                     placeholder="https://.../join?token=inv_... or inv_..."
-                    className="mt-1.5 w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 font-mono text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    className="mt-1.5 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 font-mono text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
                   />
                 </label>
                 <button
@@ -382,7 +382,7 @@ export function QrJoinModal({
           </>
         ) : (
           <div className="space-y-4">
-            <div className="space-y-1.5 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-xs">
+            <div className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-xs">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                 Invite Preview
               </div>
@@ -401,7 +401,7 @@ export function QrJoinModal({
             </div>
 
             {!preview.valid && (
-              <div className="flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+              <div className="flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
                 <ShieldAlert className="h-4 w-4 shrink-0" />
                 This invite has expired or reached its max uses. Ask an admin for a new QR.
               </div>
@@ -436,7 +436,7 @@ export function QrJoinModal({
         )}
 
         {error && (
-          <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
             {error}
           </div>
         )}

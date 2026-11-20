@@ -89,7 +89,7 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
   }, [lines, filter]);
 
   return (
-    <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
+    <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3.5">
         <div className="flex items-center gap-2.5">
           <Terminal className="h-4 w-4 text-zinc-900" />

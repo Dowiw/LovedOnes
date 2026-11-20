@@ -69,7 +69,7 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
   }
 
   return (
-    <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur-xl">
+    <div className="rounded-xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur-xl">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-zinc-900">
@@ -160,8 +160,8 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
       )}
 
       {invite && qrDataUrl && (
-        <div className="mt-5 grid gap-5 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 md:grid-cols-[220px_1fr]">
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="mt-5 grid gap-5 rounded-lg border border-slate-200/80 bg-slate-50/70 p-4 md:grid-cols-[220px_1fr]">
+          <div className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <img src={qrDataUrl} alt="Onboarding QR code" className="h-48 w-48" />
           </div>
           <div className="space-y-3">

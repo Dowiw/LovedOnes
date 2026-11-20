@@ -70,7 +70,7 @@ export default function AdminDashboardPage() {
           }}
         />
         <main className="mx-auto max-w-md px-4 py-16 text-center">
-          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-8 shadow-sm backdrop-blur-xl">
+          <div className="rounded-xl border border-slate-200/80 bg-white/90 p-8 shadow-sm backdrop-blur-xl">
             <h1 className="text-lg font-bold tracking-tight text-zinc-900">
               Host Admin Access Required
             </h1>
@@ -129,13 +129,13 @@ export default function AdminDashboardPage() {
         </div>
 
         {error && (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
             {error}
           </div>
         )}
 
         {telemetry?.logStorageAlert && (
-          <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+          <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
             <span>
               Log directory ({telemetry.logDir}) is at {telemetry.logStoragePercent}% of configured
@@ -153,7 +153,7 @@ export default function AdminDashboardPage() {
         )}
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
+          <div className="rounded-xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
             <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
               <span>Log Disk Usage</span>
               <HardDrive className="h-4 w-4 text-amber-500" />
@@ -167,7 +167,7 @@ export default function AdminDashboardPage() {
             </div>
           </div>
 
-          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
+          <div className="rounded-xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
             <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
               <span>Spatial Database</span>
               <Database className="h-4 w-4 text-zinc-900" />
@@ -180,7 +180,7 @@ export default function AdminDashboardPage() {
             </div>
           </div>
 
-          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
+          <div className="rounded-xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
             <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
               <span>Active Connections</span>
               <Radio className="h-4 w-4 text-sky-600" />
@@ -191,7 +191,7 @@ export default function AdminDashboardPage() {
             <div className="mt-1 text-[11px] text-zinc-400">Open live WebSocket clients</div>
           </div>
 
-          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
+          <div className="rounded-xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur-xl">
             <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
               <span>Accounts</span>
               <Cpu className="h-4 w-4 text-zinc-900" />
@@ -203,7 +203,7 @@ export default function AdminDashboardPage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
+        <section className="overflow-hidden rounded-xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
           <div className="border-b border-slate-100 px-5 py-3.5 text-sm font-semibold text-zinc-900">
             Account Resource Usage
           </div>

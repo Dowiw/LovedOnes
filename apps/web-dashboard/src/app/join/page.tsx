@@ -91,7 +91,7 @@ function JoinInviteInner() {
         }}
       />
       <main className="mx-auto max-w-md px-4 py-14">
-        <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-7 shadow-[0_12px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+        <div className="rounded-xl border border-slate-200/80 bg-white/90 p-7 shadow-[0_12px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl">
           {loading ? (
             <div className="text-sm text-zinc-500">Verifying invite token...</div>
           ) : error && !preview ? (
@@ -108,7 +108,7 @@ function JoinInviteInner() {
                 <h1 className="text-lg font-bold tracking-tight text-zinc-900">Group Invite</h1>
               </div>
 
-              <div className="space-y-1.5 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 text-xs">
+              <div className="space-y-1.5 rounded-lg border border-slate-200/80 bg-slate-50/80 p-4 text-xs">
                 <div className="text-sm font-semibold text-zinc-900">{preview.groupName}</div>
                 <div className="text-zinc-500">
                   Role: <span className="font-medium text-zinc-900">{preview.assignedRole}</span>

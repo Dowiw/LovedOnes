@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
 import {
   Activity,
+  Bell,
+  BellOff,
   BellRing,
   Check,
   Compass,
@@ -75,6 +77,42 @@ import {
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
 type MapViewMode = 'live' | 'trails' | 'places';
 
+function playChatChime() {
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.exponentialRampToValueAtTime(0.06, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+    gain.connect(ctx.destination);
+
+    const osc1 = ctx.createOscillator();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(587.33, now);
+    osc1.connect(gain);
+    osc1.start(now);
+    osc1.stop(now + 0.11);
+
+    const osc2 = ctx.createOscillator();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(880, now + 0.09);
+    osc2.connect(gain);
+    osc2.start(now + 0.09);
+    osc2.stop(now + 0.24);
+
+    window.setTimeout(() => {
+      void ctx.close().catch(() => { });
+    }, 350);
+  } catch {
+    // Ignore blocked autoplay or unsupported Web Audio environments
+  }
+}
+
 export default function HomePage() {
   const [session, setSession] = useState<StoredSession | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -143,9 +181,25 @@ export default function HomePage() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('people');
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [chatToast, setChatToast] = useState<ChatMessage | null>(null);
+  const [chatAlertsEnabled, setChatAlertsEnabled] = useState(true);
+  const [browserNotifyPermission, setBrowserNotifyPermission] = useState<
+    NotificationPermission | 'unsupported'
+  >('unsupported');
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+
+  const rightOpenRef = useRef(rightOpen);
+  rightOpenRef.current = rightOpen;
+  const inspectorTabRef = useRef(inspectorTab);
+  inspectorTabRef.current = inspectorTab;
+  const chatAlertsEnabledRef = useRef(chatAlertsEnabled);
+  chatAlertsEnabledRef.current = chatAlertsEnabled;
+  const chatToastTimerRef = useRef<number | null>(null);
+  const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
+  const chatBottomRef = useRef<HTMLDivElement | null>(null);
 
   const [preAuthInvite, setPreAuthInvite] = useState<InvitePreview | null>(null);
   const [preAuthQrOpen, setPreAuthQrOpen] = useState(false);
@@ -161,8 +215,16 @@ export default function HomePage() {
       if (savedLang === 'en' || savedLang === 'local') {
         setLabelLanguage(savedLang);
       }
+      const savedAlerts = window.localStorage.getItem('lovedones_chat_alerts_v1');
+      if (savedAlerts === 'off') {
+        setChatAlertsEnabled(false);
+      }
     } catch {
       // ignore storage failures
+    }
+
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setBrowserNotifyPermission(Notification.permission);
     }
 
     const onSessionSync = (event: Event) => {
@@ -176,7 +238,12 @@ export default function HomePage() {
       });
     };
     window.addEventListener(SESSION_UPDATED_EVENT, onSessionSync);
-    return () => window.removeEventListener(SESSION_UPDATED_EVENT, onSessionSync);
+    return () => {
+      window.removeEventListener(SESSION_UPDATED_EVENT, onSessionSync);
+      if (chatToastTimerRef.current !== null) {
+        window.clearTimeout(chatToastTimerRef.current);
+      }
+    };
   }, []);
 
   function handleChangeLabelLanguage(lang: MapLabelLanguage) {
@@ -188,10 +255,80 @@ export default function HomePage() {
     }
   }
 
+  function handleToggleChatAlerts() {
+    setChatAlertsEnabled((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem('lovedones_chat_alerts_v1', next ? 'on' : 'off');
+      } catch {
+        // ignore storage failures
+      }
+      return next;
+    });
+  }
+
+  async function handleEnableBrowserNotifications() {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    try {
+      const result = await Notification.requestPermission();
+      setBrowserNotifyPermission(result);
+    } catch {
+      // ignore unsupported environments
+    }
+  }
+
+  function openChatTab() {
+    setRightOpen(true);
+    setInspectorTab('chat');
+    setUnreadChatCount(0);
+    setChatToast(null);
+  }
+
   const activeGroup = useMemo(
     () => groups.find((g) => g.id === activeGroupId) ?? groups[0] ?? null,
     [groups, activeGroupId],
   );
+  const activeGroupNameRef = useRef<string>('');
+  activeGroupNameRef.current = activeGroup?.name ?? 'Group Chat';
+
+  useEffect(() => {
+    const clearIfViewingChat = () => {
+      if (
+        typeof document !== 'undefined' &&
+        !document.hidden &&
+        rightOpenRef.current &&
+        inspectorTabRef.current === 'chat'
+      ) {
+        setUnreadChatCount(0);
+        setChatToast(null);
+      }
+    };
+
+    clearIfViewingChat();
+    window.addEventListener('focus', clearIfViewingChat);
+    document.addEventListener('visibilitychange', clearIfViewingChat);
+    return () => {
+      window.removeEventListener('focus', clearIfViewingChat);
+      document.removeEventListener('visibilitychange', clearIfViewingChat);
+    };
+  }, [rightOpen, inspectorTab, activeGroup?.id]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.title =
+      unreadChatCount > 0
+        ? `(${unreadChatCount}) LovedOnes — Private Group Map`
+        : 'LovedOnes — Private Group Map';
+    return () => {
+      document.title = 'LovedOnes — Private Group Map';
+    };
+  }, [unreadChatCount]);
+
+  useEffect(() => {
+    if (rightOpen && inspectorTab === 'chat') {
+      chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages.length, rightOpen, inspectorTab]);
 
   const isPickingPlace =
     rightOpen && inspectorTab === 'places' && activeGroup?.myRole === 'ADMIN';
@@ -321,11 +458,60 @@ export default function HomePage() {
     });
 
     socket.on('chat:message', (msg: ChatMessage) => {
+      const isMatchingGroup = !activeGroup || msg.groupId === activeGroup.id;
       setMessages((prev) => {
-        if (activeGroup && msg.groupId !== activeGroup.id) return prev;
+        if (!isMatchingGroup) return prev;
         if (prev.some((m) => m.id === msg.id)) return prev;
         return [...prev, msg];
       });
+
+      if (!isMatchingGroup) return;
+      if (msg.senderId === session.user.id) return;
+      if (notifiedMessageIdsRef.current.has(msg.id)) return;
+      notifiedMessageIdsRef.current.add(msg.id);
+
+      const viewingChatRightNow =
+        typeof document !== 'undefined' &&
+        !document.hidden &&
+        rightOpenRef.current &&
+        inspectorTabRef.current === 'chat';
+
+      if (viewingChatRightNow) return;
+
+      setUnreadChatCount((c) => c + 1);
+      setChatToast(msg);
+      if (chatToastTimerRef.current !== null) {
+        window.clearTimeout(chatToastTimerRef.current);
+      }
+      chatToastTimerRef.current = window.setTimeout(() => {
+        setChatToast((prev) => (prev?.id === msg.id ? null : prev));
+      }, 6000);
+
+      if (chatAlertsEnabledRef.current) {
+        playChatChime();
+        if (
+          typeof window !== 'undefined' &&
+          'Notification' in window &&
+          Notification.permission === 'granted'
+        ) {
+          try {
+            const note = new Notification(
+              `${msg.senderUsername} · ${activeGroupNameRef.current || 'Group Chat'}`,
+              {
+                body: msg.content,
+                tag: `lovedones-chat-${msg.groupId}`,
+              },
+            );
+            note.onclick = () => {
+              window.focus();
+              openChatTab();
+              note.close();
+            };
+          } catch {
+            // Ignore browser Notification failures
+          }
+        }
+      }
     });
 
     socket.on('checkin:request', (req: LocationRequestItem) => {
@@ -404,6 +590,8 @@ export default function HomePage() {
 
   // Fetch snapshots when active group changes
   useEffect(() => {
+    setUnreadChatCount(0);
+    setChatToast(null);
     if (!session || !activeGroup) {
       setLocations([]);
       setTrails([]);
@@ -677,6 +865,8 @@ export default function HomePage() {
     setLocations([]);
     setTrails([]);
     setMessages([]);
+    setUnreadChatCount(0);
+    setChatToast(null);
     setLocationRequests([]);
     setMyPrivacyOverrideUntil(null);
     setPlaces([]);
@@ -770,7 +960,7 @@ export default function HomePage() {
         <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl" />
         <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl" />
 
-        <div className="lo-float-in relative w-full max-w-md rounded-3xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
+        <div className="lo-float-in relative w-full max-w-md rounded-xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
           <div className="mb-6 flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white">
               <MapPin className="h-5 w-5" />
@@ -781,14 +971,14 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="mb-5 flex rounded-full bg-slate-100 p-1 text-xs font-medium">
+          <div className="mb-5 flex rounded-lg bg-slate-100 p-1 text-xs font-medium">
             <button
               type="button"
               onClick={() => {
                 setAuthMode('login');
                 setAuthError(null);
               }}
-              className={`flex-1 rounded-full py-2 transition ${authMode === 'login' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+              className={`flex-1 rounded-md py-2 transition ${authMode === 'login' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
                 }`}
             >
               Sign in
@@ -799,7 +989,7 @@ export default function HomePage() {
                 setAuthMode('register');
                 setAuthError(null);
               }}
-              className={`flex-1 rounded-full py-2 transition ${authMode === 'register' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+              className={`flex-1 rounded-md py-2 transition ${authMode === 'register' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
                 }`}
             >
               Create account
@@ -814,7 +1004,7 @@ export default function HomePage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
                 placeholder="you@example.com"
               />
             </label>
@@ -828,7 +1018,7 @@ export default function HomePage() {
                   minLength={2}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
                   placeholder="Alex"
                 />
               </label>
@@ -842,13 +1032,13 @@ export default function HomePage() {
                 minLength={8}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
                 placeholder="••••••••"
               />
             </label>
 
             {authError && (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
                 {authError}
               </div>
             )}
@@ -856,7 +1046,7 @@ export default function HomePage() {
             <button
               type="submit"
               disabled={authLoading}
-              className="lo-press w-full rounded-full bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
+              className="lo-press w-full rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
             >
               {authLoading
                 ? 'Please wait...'
@@ -868,7 +1058,7 @@ export default function HomePage() {
 
           <div className="mt-4 border-t border-zinc-100 pt-4">
             {preAuthInvite ? (
-              <div className="flex items-center justify-between gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 text-xs">
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 text-xs">
                 <div className="min-w-0">
                   <div className="truncate font-semibold text-zinc-900">
                     Joining: {preAuthInvite.groupName}
@@ -937,6 +1127,49 @@ export default function HomePage() {
         }}
       />
 
+      {/* Incoming Chat Toast Notification */}
+      {chatToast && (
+        <div className="pointer-events-none fixed left-1/2 top-3 z-30 w-[calc(100vw-1.5rem)] max-w-sm -translate-x-1/2 sm:top-4">
+          <div className="lo-float-in pointer-events-auto flex items-start gap-2.5 rounded-xl border border-zinc-200/90 bg-white/95 p-3 shadow-[0_14px_38px_rgba(15,23,42,0.16)] backdrop-blur-xl">
+            <button
+              type="button"
+              onClick={openChatTab}
+              className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+            >
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
+                {isSafeAvatarUrl(chatToast.senderAvatarUrl) ? (
+                  <img
+                    src={chatToast.senderAvatarUrl}
+                    alt={chatToast.senderUsername}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  chatToast.senderUsername.slice(0, 1).toUpperCase()
+                )}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-900">
+                  <MessageSquare className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{chatToast.senderUsername}</span>
+                  <span className="text-[10px] font-normal text-zinc-400">
+                    · {activeGroup?.name ?? 'Chat'}
+                  </span>
+                </div>
+                <p className="mt-0.5 line-clamp-2 text-xs text-zinc-600">{chatToast.content}</p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatToast(null)}
+              aria-label="Dismiss chat notification"
+              className="shrink-0 rounded-md p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top-Left Floating Dock & Controls */}
       <div className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col gap-2.5 sm:left-4 sm:top-4 sm:w-[300px]">
         {/* Compact Icon Bar */}
@@ -1001,10 +1234,15 @@ export default function HomePage() {
               type="button"
               onClick={() => setRightOpen((v) => !v)}
               title="Toggle inspector panel"
-              className={`rounded-full p-2 transition md:hidden ${rightOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+              className={`relative rounded-full p-2 transition md:hidden ${rightOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
                 }`}
             >
               <PanelRight className="h-3.5 w-3.5" />
+              {unreadChatCount > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1 text-[9px] font-bold text-white ring-2 ring-white">
+                  {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -1012,7 +1250,7 @@ export default function HomePage() {
         {leftOpen && (
           <>
             {/* Group & Privacy Floating Card */}
-            <div className="lo-float-in pointer-events-auto rounded-3xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+            <div className="lo-float-in pointer-events-auto rounded-xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
               <div className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                   <Users className="h-3.5 w-3.5" />
@@ -1121,7 +1359,7 @@ export default function HomePage() {
                     ))}
                   </div>
                   {myPrivacyOverrideUntil && Date.parse(myPrivacyOverrideUntil) > Date.now() && (
-                    <div className="mt-2 rounded-2xl border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900">
+                    <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900">
                       Exact check-in active until{' '}
                       {new Date(myPrivacyOverrideUntil).toLocaleTimeString()}
                     </div>
@@ -1131,7 +1369,7 @@ export default function HomePage() {
             </div>
 
             {/* Live Beacon Card */}
-            <div className="lo-float-in pointer-events-auto rounded-3xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+            <div className="lo-float-in pointer-events-auto rounded-xl border border-white/75 bg-white/88 p-3.5 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1219,7 +1457,7 @@ export default function HomePage() {
                   </div>
 
                   {trackerIssued && (
-                    <div className="space-y-1.5 rounded-2xl bg-slate-50 p-2.5 text-[10px]">
+                    <div className="space-y-1.5 rounded-lg bg-slate-50 p-2.5 text-[10px]">
                       {(
                         [
                           ['owntracks', 'OwnTracks URL', trackerIssued.owntracksUrl],
@@ -1263,6 +1501,22 @@ export default function HomePage() {
         <div className="lo-float-in pointer-events-auto hidden items-center gap-2 md:flex">
           <button
             type="button"
+            onClick={openChatTab}
+            className={`lo-press flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition ${unreadChatCount > 0
+              ? 'bg-zinc-950 text-white hover:bg-zinc-800'
+              : 'border border-white/75 bg-white/90 text-zinc-800 hover:bg-white'
+              }`}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            Chat
+            {unreadChatCount > 0 && (
+              <span className="rounded-full bg-white px-1.5 py-0.2 text-[10px] font-bold text-zinc-950">
+                {unreadChatCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => {
               setRightOpen(true);
               setInspectorTab('requests');
@@ -1294,21 +1548,26 @@ export default function HomePage() {
             type="button"
             onClick={() => setRightOpen((v) => !v)}
             title="Toggle inspector"
-            className="lo-press rounded-full border border-white/75 bg-white/90 p-2 text-zinc-700 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:bg-white"
+            className="lo-press relative rounded-full border border-white/75 bg-white/90 p-2 text-zinc-700 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:bg-white"
           >
             <PanelRight className="h-4 w-4" />
+            {!rightOpen && unreadChatCount > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1 text-[9px] font-bold text-white ring-2 ring-white">
+                {unreadChatCount > 9 ? '9+' : unreadChatCount}
+              </span>
+            )}
           </button>
         </div>
 
         {rightOpen && (
-          <div className="lo-float-in pointer-events-auto flex max-h-[44vh] w-full flex-col overflow-hidden rounded-3xl border border-white/75 bg-white/90 shadow-[0_16px_44px_rgba(15,23,42,0.1)] backdrop-blur-xl md:max-h-[calc(100vh-140px)]">
+          <div className="lo-float-in pointer-events-auto flex max-h-[44vh] w-full flex-col overflow-hidden rounded-xl border border-white/75 bg-white/90 shadow-[0_16px_44px_rgba(15,23,42,0.1)] backdrop-blur-xl md:max-h-[calc(100vh-140px)]">
             {/* Segmented Pill Tabs (matching screenshot reference) */}
             <div className="border-b border-slate-100 p-2">
-              <div className="grid grid-cols-4 gap-1 rounded-full bg-slate-100 p-1 text-[11px] font-semibold">
+              <div className="grid grid-cols-4 gap-1 rounded-lg bg-slate-100 p-1 text-[11px] font-semibold">
                 {(
                   [
                     ['people', `People (${locations.length})`],
-                    ['chat', `Chat`],
+                    ['chat', unreadChatCount > 0 ? `Chat (${unreadChatCount})` : 'Chat'],
                     ['places', `Places`],
                     ['requests', pendingIncomingCount > 0 ? `Ask (${pendingIncomingCount})` : 'Ask'],
                   ] as const
@@ -1316,8 +1575,14 @@ export default function HomePage() {
                   <button
                     key={tab}
                     type="button"
-                    onClick={() => setInspectorTab(tab)}
-                    className={`lo-press rounded-full py-1.5 transition ${inspectorTab === tab
+                    onClick={() => {
+                      if (tab === 'chat') {
+                        openChatTab();
+                      } else {
+                        setInspectorTab(tab);
+                      }
+                    }}
+                    className={`lo-press rounded-md py-1.5 transition ${inspectorTab === tab
                       ? 'bg-zinc-900 text-white shadow-sm'
                       : 'text-zinc-600 hover:text-zinc-900'
                       }`}
@@ -1334,7 +1599,7 @@ export default function HomePage() {
                 {locations.map((loc) => (
                   <div
                     key={loc.userId}
-                    className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-2.5 transition hover:bg-white"
+                    className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2.5 transition hover:bg-white"
                   >
                     <button
                       type="button"
@@ -1382,6 +1647,37 @@ export default function HomePage() {
             {/* Chat Tab */}
             {inspectorTab === 'chat' && (
               <div key="tab-chat" className="lo-tab-enter flex min-h-[260px] flex-1 flex-col overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-100 px-3 py-1.5 text-[11px] text-zinc-500">
+                  <button
+                    type="button"
+                    onClick={handleToggleChatAlerts}
+                    className="lo-press flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-zinc-700 transition hover:bg-slate-100"
+                    title={chatAlertsEnabled ? 'Mute chat sound and desktop alerts' : 'Unmute chat alerts'}
+                  >
+                    {chatAlertsEnabled ? (
+                      <Bell className="h-3 w-3 text-zinc-900" />
+                    ) : (
+                      <BellOff className="h-3 w-3 text-zinc-400" />
+                    )}
+                    {chatAlertsEnabled ? 'Alerts on' : 'Muted'}
+                  </button>
+                  {browserNotifyPermission === 'default' && (
+                    <button
+                      type="button"
+                      onClick={() => void handleEnableBrowserNotifications()}
+                      className="lo-press rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-zinc-800"
+                    >
+                      Enable desktop alerts
+                    </button>
+                  )}
+                  {browserNotifyPermission === 'granted' && (
+                    <span className="text-[10px] text-zinc-400">Desktop alerts ready</span>
+                  )}
+                  {browserNotifyPermission === 'denied' && (
+                    <span className="text-[10px] text-zinc-400">Desktop blocked</span>
+                  )}
+                </div>
+
                 <div className="flex-1 space-y-2 overflow-y-auto p-3">
                   {messages.map((m) => {
                     const mine = m.senderId === session.user.id;
@@ -1394,7 +1690,7 @@ export default function HomePage() {
                           {m.senderUsername} · {new Date(m.createdAt).toLocaleTimeString()}
                         </div>
                         <div
-                          className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs ${mine
+                          className={`max-w-[85%] rounded-lg px-3 py-2 text-xs ${mine
                             ? 'bg-zinc-900 text-white'
                             : 'border border-slate-200/80 bg-slate-50 text-zinc-900'
                             }`}
@@ -1409,6 +1705,7 @@ export default function HomePage() {
                       No messages yet.
                     </div>
                   )}
+                  <div ref={chatBottomRef} />
                 </div>
 
                 <form
@@ -1421,12 +1718,12 @@ export default function HomePage() {
                     onChange={(e) => setChatInput(e.target.value)}
                     disabled={!activeGroup}
                     placeholder={activeGroup ? 'Message group...' : 'Select a group'}
-                    className="min-w-0 flex-1 rounded-full border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none disabled:opacity-50"
+                    className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none disabled:opacity-50"
                   />
                   <button
                     type="submit"
                     disabled={!activeGroup || !chatInput.trim()}
-                    className="lo-press flex shrink-0 items-center justify-center rounded-full bg-zinc-900 px-3.5 py-2 text-white hover:bg-zinc-800 disabled:opacity-50"
+                    className="lo-press flex shrink-0 items-center justify-center rounded-lg bg-zinc-900 px-3.5 py-2 text-white hover:bg-zinc-800 disabled:opacity-50"
                   >
                     <Send className="h-3.5 w-3.5" />
                   </button>
@@ -1440,7 +1737,7 @@ export default function HomePage() {
                 {activeGroup?.myRole === 'ADMIN' && (
                   <form
                     onSubmit={handleCreatePlace}
-                    className="space-y-2 rounded-2xl border border-slate-100 bg-slate-50/80 p-2.5"
+                    className="space-y-2 rounded-lg border border-slate-100 bg-slate-50/80 p-2.5"
                   >
                     <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-600">
                       <span className="flex items-center gap-1 font-medium">
@@ -1511,7 +1808,7 @@ export default function HomePage() {
                   {places.map((p) => (
                     <div
                       key={p.id}
-                      className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-2 text-xs hover:bg-white"
+                      className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2 text-xs hover:bg-white"
                     >
                       <button
                         type="button"
@@ -1619,7 +1916,7 @@ export default function HomePage() {
                     return (
                       <div
                         key={req.id}
-                        className="rounded-2xl border border-slate-100 bg-slate-50/70 p-2.5 text-xs"
+                        className="rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 text-xs"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-medium text-zinc-900">
@@ -1713,7 +2010,7 @@ export default function HomePage() {
 
         <div className="pointer-events-auto relative">
           {creditsOpen && (
-            <div className="lo-float-in mb-2 w-60 rounded-2xl border border-white/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+            <div className="lo-float-in mb-2 w-60 rounded-xl border border-white/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(15,23,42,0.12)] backdrop-blur-xl">
               <div className="mb-1 font-semibold text-zinc-900">Map Credits</div>
               <p>
                 Icons:{' '}

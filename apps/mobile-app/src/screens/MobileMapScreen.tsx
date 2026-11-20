@@ -67,6 +67,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatText, setChatText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [chatBanner, setChatBanner] = useState<ChatMessage | null>(null);
+  const chatOpenRef = useRef(false);
+  const chatBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notifiedMsgIdsRef = useRef<Set<string>>(new Set());
+  chatOpenRef.current = chatOpen;
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [joinQrOpen, setJoinQrOpen] = useState(false);
@@ -214,11 +220,28 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     });
 
     socket.on('chat:message', (msg: ChatMessage) => {
+      const isMatchingGroup = !activeGroup || msg.groupId === activeGroup.id;
       setMessages((prev) => {
-        if (activeGroup && msg.groupId !== activeGroup.id) return prev;
+        if (!isMatchingGroup) return prev;
         if (prev.some((m) => m.id === msg.id)) return prev;
         return [...prev, msg];
       });
+
+      if (!isMatchingGroup) return;
+      if (msg.senderId === userProfile?.id) return;
+      if (notifiedMsgIdsRef.current.has(msg.id)) return;
+      notifiedMsgIdsRef.current.add(msg.id);
+
+      if (!chatOpenRef.current) {
+        setUnreadChatCount((c) => c + 1);
+        setChatBanner(msg);
+        if (chatBannerTimerRef.current) {
+          clearTimeout(chatBannerTimerRef.current);
+        }
+        chatBannerTimerRef.current = setTimeout(() => {
+          setChatBanner((prev) => (prev?.id === msg.id ? null : prev));
+        }, 5500);
+      }
     });
 
     socket.on(
@@ -253,6 +276,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   }, [serverUrl, accessToken, activeGroup]);
 
   useEffect(() => {
+    setUnreadChatCount(0);
+    setChatBanner(null);
     if (!serverUrl || !accessToken || !activeGroup) return;
     socketRef.current?.emit('group:join', activeGroup.id);
 
@@ -737,6 +762,28 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             </Text>
           </View>
         )}
+
+        {chatBanner && !chatOpen && (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={styles.chatToastBanner}
+            onPress={() => {
+              setUnreadChatCount(0);
+              setChatBanner(null);
+              setChatOpen(true);
+            }}
+          >
+            <View style={styles.chatToastTextWrap}>
+              <Text style={styles.chatToastSender} numberOfLines={1}>
+                New chat · {chatBanner.senderUsername}
+              </Text>
+              <Text style={styles.chatToastBody} numberOfLines={1}>
+                {chatBanner.content}
+              </Text>
+            </View>
+            <Text style={styles.chatToastAction}>Open</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Right-Side Floating Stacked Map Controls */}
@@ -833,8 +880,24 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               <Text style={styles.tabLabel}>Sync ({queuedCount})</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.tabItem} onPress={() => setChatOpen(true)}>
-              <Text style={styles.tabLabel}>Chat ({messages.length})</Text>
+            <TouchableOpacity
+              style={styles.tabItem}
+              onPress={() => {
+                setUnreadChatCount(0);
+                setChatBanner(null);
+                setChatOpen(true);
+              }}
+            >
+              <View style={styles.chatTabRow}>
+                <Text style={styles.tabLabel}>Chat ({messages.length})</Text>
+                {unreadChatCount > 0 && (
+                  <View style={styles.unreadBadge}>
+                    <Text style={styles.unreadBadgeText}>
+                      {unreadChatCount > 99 ? '99+' : unreadChatCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
             </TouchableOpacity>
           </View>
         </View>
@@ -1388,7 +1451,7 @@ const styles = StyleSheet.create({
     right: 14,
     top: 168,
     backgroundColor: 'rgba(255, 255, 255, 0.94)',
-    borderRadius: 18,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     shadowColor: '#0f172a',
@@ -1398,6 +1461,38 @@ const styles = StyleSheet.create({
     elevation: 5,
     overflow: 'hidden',
   },
+  chatToastBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    backgroundColor: 'rgba(24, 24, 27, 0.95)',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  chatToastTextWrap: { flex: 1 },
+  chatToastSender: { color: '#e4e4e7', fontSize: 11, fontWeight: '700' },
+  chatToastBody: { color: '#ffffff', fontSize: 13, fontWeight: '500', marginTop: 1 },
+  chatToastAction: { color: '#ffffff', fontSize: 12, fontWeight: '700' },
+  chatTabRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  unreadBadge: {
+    backgroundColor: '#18181b',
+    borderRadius: 999,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: '700' },
   stackBtn: {
     paddingHorizontal: 12,
     paddingVertical: 11,
@@ -1484,8 +1579,8 @@ const styles = StyleSheet.create({
   },
   bottomSheet: {
     backgroundColor: '#ffffff',
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
     paddingTop: 10,
     paddingHorizontal: 16,
     paddingBottom: 24,
@@ -1584,7 +1679,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderColor: '#e2e8f0',
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
@@ -1621,7 +1716,7 @@ const styles = StyleSheet.create({
   settingsScroll: { padding: 16, gap: 14, paddingBottom: 40 },
   settingsCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 22,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e4e4e7',
     padding: 16,
@@ -1661,7 +1756,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fafafa',
     borderColor: '#e4e4e7',
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 10,
     color: '#18181b',
@@ -1703,7 +1798,7 @@ const styles = StyleSheet.create({
     left: 20,
     right: 20,
     backgroundColor: 'rgba(24, 24, 27, 0.92)',
-    borderRadius: 20,
+    borderRadius: 12,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',

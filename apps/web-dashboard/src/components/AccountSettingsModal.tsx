@@ -192,7 +192,7 @@ export function AccountSettingsModal({
       aria-modal="true"
       aria-label="Account Settings"
     >
-      <div className="lo-modal-in max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.22)]">
+      <div className="lo-modal-in max-h-[90vh] w-full max-w-md overflow-y-auto rounded-xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.22)]">
         <div className="mb-5 flex items-center justify-between">
           <div>
             <h2 className="text-base font-bold tracking-tight text-zinc-950">Account Settings</h2>
@@ -212,7 +212,7 @@ export function AccountSettingsModal({
 
         {/* Profile Form */}
         <form onSubmit={handleSaveProfile} className="space-y-4">
-          <div className="flex items-center gap-4 rounded-2xl border border-zinc-200/80 bg-zinc-50/70 p-3.5">
+          <div className="flex items-center gap-4 rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-3.5">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -282,12 +282,12 @@ export function AccountSettingsModal({
                 value={imageUrlInput}
                 onChange={(e) => setImageUrlInput(e.target.value)}
                 placeholder="https://example.com/avatar.jpg"
-                className="min-w-0 flex-1 rounded-2xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
               />
               <button
                 type="button"
                 onClick={handleApplyUrl}
-                className="rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-900 hover:bg-zinc-100"
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-900 hover:bg-zinc-100"
               >
                 Apply
               </button>
@@ -305,7 +305,7 @@ export function AccountSettingsModal({
               maxLength={64}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
             />
           </div>
 
@@ -319,17 +319,17 @@ export function AccountSettingsModal({
               maxLength={255}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
             />
           </div>
 
           {profileError && (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
               {profileError}
             </div>
           )}
           {profileSaved && (
-            <div className="flex items-center gap-1.5 rounded-2xl border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900">
+            <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900">
               <Check className="h-3.5 w-3.5" />
               {profileSaved}
             </div>
@@ -359,7 +359,7 @@ export function AccountSettingsModal({
             value={currentPassword}
             onChange={(e) => setCurrentPassword(e.target.value)}
             placeholder="Current password"
-            className="w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+            className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
           />
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <input
@@ -369,7 +369,7 @@ export function AccountSettingsModal({
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="New password (8+)"
-              className="w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
             />
             <input
               type="password"
@@ -378,17 +378,17 @@ export function AccountSettingsModal({
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Confirm new password"
-              className="w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
             />
           </div>
 
           {passwordError && (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
               {passwordError}
             </div>
           )}
           {passwordSaved && (
-            <div className="flex items-center gap-1.5 rounded-2xl border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900">
+            <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900">
               <Check className="h-3.5 w-3.5" />
               {passwordSaved}
             </div>

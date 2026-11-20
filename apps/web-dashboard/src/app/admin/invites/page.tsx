@@ -74,7 +74,7 @@ export default function AdminInvitesPage() {
       <div className="min-h-screen bg-[#f4f4f5]">
         <NavBar user={null} onSignOut={() => {}} />
         <main className="mx-auto max-w-md px-4 py-16 text-center">
-          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-8 shadow-sm backdrop-blur-xl">
+          <div className="rounded-xl border border-slate-200/80 bg-white/90 p-8 shadow-sm backdrop-blur-xl">
             <Link href="/" className="text-sm font-medium text-zinc-900 hover:underline">
               Sign in on the main map to manage invites
             </Link>
@@ -108,7 +108,7 @@ export default function AdminInvitesPage() {
           onCreated={() => void refresh(session.accessToken)}
         />
 
-        <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
+        <section className="overflow-hidden rounded-xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
             <span className="text-sm font-semibold text-zinc-900">
               Active &amp; Recent Invites ({invites.length})
