@@ -64,6 +64,7 @@ import {
   GroupItem,
   loadSession,
   saveSession,
+  SESSION_UPDATED_EVENT,
   StoredSession,
   TrackerTokenResponse,
 } from '@/lib/api';
@@ -153,6 +154,19 @@ export default function HomePage() {
     } catch {
       // ignore storage failures
     }
+
+    const onSessionSync = (event: Event) => {
+      const custom = event as CustomEvent<StoredSession | null>;
+      setSession((prev) => {
+        if (!custom.detail && prev) {
+          setAccountSettingsOpen(false);
+          setAuthError('Session expired — please sign in again.');
+        }
+        return custom.detail ?? null;
+      });
+    };
+    window.addEventListener(SESSION_UPDATED_EVENT, onSessionSync);
+    return () => window.removeEventListener(SESSION_UPDATED_EVENT, onSessionSync);
   }, []);
 
   function handleChangeLabelLanguage(lang: MapLabelLanguage) {
@@ -173,8 +187,8 @@ export default function HomePage() {
     () =>
       session
         ? locationRequests.filter(
-            (r) => r.targetUserId === session.user.id && r.status === 'pending',
-          ).length
+          (r) => r.targetUserId === session.user.id && r.status === 'pending',
+        ).length
         : 0,
     [locationRequests, session],
   );
@@ -188,7 +202,7 @@ export default function HomePage() {
   useEffect(() => {
     if (!session) return;
     const token = session.accessToken;
-    void refreshGroups(token).catch(() => {});
+    void refreshGroups(token).catch(() => { });
     void apiGetMe(token)
       .then((res) => {
         setSession((prev) => {
@@ -198,13 +212,13 @@ export default function HomePage() {
           return next;
         });
       })
-      .catch(() => {});
+      .catch(() => { });
     void apiGetTrackerTokenStatus(token)
       .then((st) => {
         setTrackerActive(st.active);
         setTrackerTtlSeconds(st.ttlSeconds);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [session?.accessToken, refreshGroups]);
 
   function handleCopyText(key: string, value: string) {
@@ -485,7 +499,7 @@ export default function HomePage() {
           },
         );
       } else {
-        void apiSendLocationBatch(session.accessToken, [point]).catch(() => {});
+        void apiSendLocationBatch(session.accessToken, [point]).catch(() => { });
       }
 
       setGeoStatus(
@@ -498,7 +512,7 @@ export default function HomePage() {
       setGeoStatus(`Geolocation error: ${err.message}`);
     };
 
-    navigator.geolocation.getCurrentPosition(handleGeoPosition, () => {}, {
+    navigator.geolocation.getCurrentPosition(handleGeoPosition, () => { }, {
       enableHighAccuracy: true,
       maximumAge: 10000,
       timeout: 10000,
@@ -705,9 +719,8 @@ export default function HomePage() {
                 setAuthMode('login');
                 setAuthError(null);
               }}
-              className={`flex-1 rounded-full py-2 transition ${
-                authMode === 'login' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
-              }`}
+              className={`flex-1 rounded-full py-2 transition ${authMode === 'login' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+                }`}
             >
               Sign in
             </button>
@@ -717,9 +730,8 @@ export default function HomePage() {
                 setAuthMode('register');
                 setAuthError(null);
               }}
-              className={`flex-1 rounded-full py-2 transition ${
-                authMode === 'register' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
-              }`}
+              className={`flex-1 rounded-full py-2 transition ${authMode === 'register' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+                }`}
             >
               Create account
             </button>
@@ -830,9 +842,8 @@ export default function HomePage() {
               type="button"
               onClick={() => setLeftOpen((v) => !v)}
               title="Toggle workspace controls"
-              className={`rounded-full p-2 transition ${
-                leftOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
-              }`}
+              className={`rounded-full p-2 transition ${leftOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+                }`}
             >
               <PanelLeft className="h-3.5 w-3.5" />
             </button>
@@ -843,9 +854,8 @@ export default function HomePage() {
                 setTrackerOpen((v) => !v);
               }}
               title="HTTP Tracker Setup"
-              className={`rounded-full p-2 transition ${
-                trackerOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
-              }`}
+              className={`rounded-full p-2 transition ${trackerOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+                }`}
             >
               <KeyRound className="h-3.5 w-3.5" />
             </button>
@@ -853,9 +863,8 @@ export default function HomePage() {
               type="button"
               onClick={() => setAccountSettingsOpen(true)}
               title="Account Settings"
-              className={`rounded-full p-2 transition ${
-                accountSettingsOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
-              }`}
+              className={`rounded-full p-2 transition ${accountSettingsOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+                }`}
             >
               <Settings className="h-3.5 w-3.5" />
             </button>
@@ -881,9 +890,8 @@ export default function HomePage() {
               type="button"
               onClick={() => setRightOpen((v) => !v)}
               title="Toggle inspector panel"
-              className={`rounded-full p-2 transition md:hidden ${
-                rightOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
-              }`}
+              className={`rounded-full p-2 transition md:hidden ${rightOpen ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-slate-100'
+                }`}
             >
               <PanelRight className="h-3.5 w-3.5" />
             </button>
@@ -915,11 +923,10 @@ export default function HomePage() {
                     key={g.id}
                     type="button"
                     onClick={() => setActiveGroupId(g.id)}
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                      activeGroup?.id === g.id
-                        ? 'bg-zinc-900 text-white shadow-sm'
-                        : 'bg-slate-100 text-zinc-700 hover:bg-slate-200'
-                    }`}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${activeGroup?.id === g.id
+                      ? 'bg-zinc-900 text-white shadow-sm'
+                      : 'bg-slate-100 text-zinc-700 hover:bg-slate-200'
+                      }`}
                   >
                     {g.name}
                   </button>
@@ -962,11 +969,10 @@ export default function HomePage() {
                         key={mode}
                         type="button"
                         onClick={() => void handlePrivacyChange(mode)}
-                        className={`flex items-center justify-center gap-1 rounded-full py-1.5 text-[11px] font-semibold transition ${
-                          activeGroup.myPrivacy === mode
-                            ? 'bg-zinc-900 text-white shadow-sm'
-                            : 'text-zinc-600 hover:text-zinc-900'
-                        }`}
+                        className={`flex items-center justify-center gap-1 rounded-full py-1.5 text-[11px] font-semibold transition ${activeGroup.myPrivacy === mode
+                          ? 'bg-zinc-900 text-white shadow-sm'
+                          : 'text-zinc-600 hover:text-zinc-900'
+                          }`}
                       >
                         {mode === 'EXACT' && <LocateFixed className="h-3 w-3" />}
                         {mode === 'FUZZED' && <Compass className="h-3 w-3" />}
@@ -991,11 +997,10 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => setGeoSharing((s) => !s)}
-                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition ${
-                    geoSharing
-                      ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100'
-                      : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800'
-                  }`}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition ${geoSharing
+                    ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100'
+                    : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800'
+                    }`}
                 >
                   <Radio className="h-3.5 w-3.5" />
                   {geoSharing ? 'Stop Live GPS' : 'Share Live GPS'}
@@ -1173,11 +1178,10 @@ export default function HomePage() {
                     key={tab}
                     type="button"
                     onClick={() => setInspectorTab(tab)}
-                    className={`rounded-full py-1.5 transition ${
-                      inspectorTab === tab
-                        ? 'bg-zinc-900 text-white shadow-sm'
-                        : 'text-zinc-600 hover:text-zinc-900'
-                    }`}
+                    className={`rounded-full py-1.5 transition ${inspectorTab === tab
+                      ? 'bg-zinc-900 text-white shadow-sm'
+                      : 'text-zinc-600 hover:text-zinc-900'
+                      }`}
                   >
                     {label}
                   </button>
@@ -1219,11 +1223,10 @@ export default function HomePage() {
                       </div>
                     </button>
                     <span
-                      className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        loc.isFuzzed
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-zinc-900 text-white'
-                      }`}
+                      className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${loc.isFuzzed
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-zinc-900 text-white'
+                        }`}
                     >
                       {loc.privacyMode}
                     </span>
@@ -1252,11 +1255,10 @@ export default function HomePage() {
                           {m.senderUsername} · {new Date(m.createdAt).toLocaleTimeString()}
                         </div>
                         <div
-                          className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs ${
-                            mine
-                              ? 'bg-zinc-900 text-white'
-                              : 'border border-slate-200/80 bg-slate-50 text-zinc-900'
-                          }`}
+                          className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs ${mine
+                            ? 'bg-zinc-900 text-white'
+                            : 'border border-slate-200/80 bg-slate-50 text-zinc-900'
+                            }`}
                         >
                           {m.content}
                         </div>
@@ -1605,11 +1607,10 @@ export default function HomePage() {
               key={mode}
               type="button"
               onClick={() => setMapViewMode(mode)}
-              className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition ${
-                mapViewMode === mode
-                  ? 'bg-zinc-900 text-white shadow-sm'
-                  : 'text-zinc-600 hover:text-zinc-900'
-              }`}
+              className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition ${mapViewMode === mode
+                ? 'bg-zinc-900 text-white shadow-sm'
+                : 'text-zinc-600 hover:text-zinc-900'
+                }`}
             >
               <Icon className="h-3.5 w-3.5" />
               {label}
@@ -1634,11 +1635,10 @@ export default function HomePage() {
             key={lang}
             type="button"
             onClick={() => handleChangeLabelLanguage(lang)}
-            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
-              labelLanguage === lang
-                ? 'bg-zinc-900 text-white shadow-sm'
-                : 'text-zinc-600 hover:text-zinc-900'
-            }`}
+            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${labelLanguage === lang
+              ? 'bg-zinc-900 text-white shadow-sm'
+              : 'text-zinc-600 hover:text-zinc-900'
+              }`}
           >
             {label}
           </button>

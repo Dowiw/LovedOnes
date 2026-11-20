@@ -54,7 +54,8 @@ interface MobileMapScreenProps {
 
 export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const serverUrl = (config.serverUrl ?? '').replace(/\/$/, '');
-  const accessToken = config.accessToken ?? '';
+  const [accessToken, setAccessToken] = useState(config.accessToken ?? '');
+  const [refreshToken, setRefreshToken] = useState(config.refreshToken ?? '');
 
   const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [activeGroupId, setActiveGroupId] = useState<string>(config.activeGroupId ?? '');
@@ -358,6 +359,45 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     setAccountOpen(true);
   }
 
+  async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const send = (token: string) => {
+      const headers = new Headers(init.headers);
+      headers.set('Authorization', `Bearer ${token}`);
+      if (init.body && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+      }
+      return fetch(`${serverUrl}${path}`, { ...init, headers });
+    };
+
+    let res = await send(accessToken);
+    if (res.status === 401 && refreshToken) {
+      const refreshRes = await fetch(`${serverUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (refreshRes.ok) {
+        const tokens = (await refreshRes.json()) as {
+          accessToken?: string;
+          refreshToken?: string;
+        };
+        if (tokens.accessToken && tokens.refreshToken) {
+          setAccessToken(tokens.accessToken);
+          setRefreshToken(tokens.refreshToken);
+          await saveStoredConfig({
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+          });
+          res = await send(tokens.accessToken);
+        }
+      } else if (refreshRes.status === 400 || refreshRes.status === 401) {
+        await clearStoredConfig();
+        onSignedOut();
+      }
+    }
+    return res;
+  }
+
   async function handleSaveProfile() {
     if (!serverUrl || !accessToken) return;
     setAccountError(null);
@@ -369,12 +409,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     }
     setAccountBusy(true);
     try {
-      const res = await fetch(`${serverUrl}/api/auth/me`, {
+      const res = await authedFetch('/api/auth/me', {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
         body: JSON.stringify({
           username: editUsername.trim(),
           email: editEmail.trim(),
@@ -391,9 +427,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         throw new Error(data.error ?? `HTTP ${res.status}`);
       }
       setUserProfile(data.user);
+      if (data.accessToken) setAccessToken(data.accessToken);
+      if (data.refreshToken) setRefreshToken(data.refreshToken);
       await saveStoredConfig({
         accessToken: data.accessToken ?? accessToken,
-        refreshToken: data.refreshToken ?? config.refreshToken,
+        refreshToken: data.refreshToken ?? refreshToken,
         user: data.user,
       });
       setLocations((prev) =>
@@ -425,12 +463,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     }
     setPasswordBusy(true);
     try {
-      const res = await fetch(`${serverUrl}/api/auth/password`, {
+      const res = await authedFetch('/api/auth/password', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
         body: JSON.stringify({ currentPassword, newPassword }),
       });
       const data = (await res.json()) as { error?: string; updated?: boolean };

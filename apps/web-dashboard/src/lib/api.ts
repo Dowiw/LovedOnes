@@ -78,6 +78,7 @@ export interface TrackerTokenStatusResponse {
 }
 
 const SESSION_STORAGE_KEY = 'lovedones_session_v1';
+export const SESSION_UPDATED_EVENT = 'lovedones:session-updated';
 
 export function getServiceBaseUrls(): {
   authBase: string;
@@ -131,9 +132,12 @@ export function saveSession(session: StoredSession | null): void {
   if (typeof window === 'undefined') return;
   if (!session) {
     window.localStorage.removeItem(SESSION_STORAGE_KEY);
-    return;
+  } else {
+    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
   }
-  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.dispatchEvent(
+    new CustomEvent<StoredSession | null>(SESSION_UPDATED_EVENT, { detail: session }),
+  );
 }
 
 export function formatBytes(bytes: number): string {
@@ -142,6 +146,68 @@ export function formatBytes(bytes: number): string {
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const val = bytes / 1024 ** i;
   return `${val.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+}
+
+let inFlightRefresh: Promise<StoredSession | null> | null = null;
+
+/**
+ * Exchanges the stored 7-day refreshToken for a new token pair, deduplicating
+ * concurrent 401 refreshes. Clears the stored session if refresh is rejected.
+ */
+export async function refreshStoredSession(): Promise<StoredSession | null> {
+  if (inFlightRefresh) return inFlightRefresh;
+  inFlightRefresh = (async () => {
+    const current = loadSession();
+    if (!current?.refreshToken) {
+      saveSession(null);
+      return null;
+    }
+    const { authBase } = getServiceBaseUrls();
+    try {
+      const res = await fetch(`${authBase}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: current.refreshToken }),
+      });
+      if (!res.ok) {
+        if (res.status === 400 || res.status === 401) {
+          saveSession(null);
+        }
+        return null;
+      }
+      const tokens = (await res.json()) as { accessToken?: string; refreshToken?: string };
+      if (!tokens.accessToken || !tokens.refreshToken) {
+        saveSession(null);
+        return null;
+      }
+      const next: StoredSession = {
+        ...current,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      };
+      saveSession(next);
+      return next;
+    } catch {
+      return null;
+    } finally {
+      inFlightRefresh = null;
+    }
+  })();
+  return inFlightRefresh;
+}
+
+async function parseErrorMessage(res: Response): Promise<string> {
+  const text = await res.text();
+  if (!text) return `HTTP ${res.status}`;
+  try {
+    const data = JSON.parse(text) as unknown;
+    if (typeof data === 'object' && data && 'error' in data) {
+      return String((data as { error: unknown }).error);
+    }
+  } catch {
+    // plain text fallback
+  }
+  return `HTTP ${res.status}`;
 }
 
 async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -160,6 +226,39 @@ async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
     throw new Error(errMsg);
   }
   return data as T;
+}
+
+async function requestAuthedJson<T>(
+  url: string,
+  accessToken: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const sendWithToken = async (token: string): Promise<Response> => {
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${token}`);
+    if (init.body && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    return fetch(url, { ...init, headers });
+  };
+
+  const latestStoredToken = loadSession()?.accessToken;
+  let res = await sendWithToken(latestStoredToken || accessToken);
+
+  if (res.status === 401) {
+    const refreshed = await refreshStoredSession();
+    if (refreshed?.accessToken) {
+      res = await sendWithToken(refreshed.accessToken);
+    } else {
+      throw new Error('Session expired — please sign in again.');
+    }
+  }
+
+  if (!res.ok) {
+    throw new Error(await parseErrorMessage(res));
+  }
+  const text = await res.text();
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 export async function apiLogin(email: string, password: string): Promise<StoredSession> {
@@ -185,9 +284,7 @@ export async function apiRegister(input: {
 
 export async function apiGetMe(accessToken: string): Promise<{ user: AuthUser }> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson<{ user: AuthUser }>(`${authBase}/api/auth/me`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  return requestAuthedJson<{ user: AuthUser }>(`${authBase}/api/auth/me`, accessToken);
 }
 
 export async function apiUpdateProfile(
@@ -195,9 +292,8 @@ export async function apiUpdateProfile(
   input: { username?: string; email?: string; avatarUrl?: string | null },
 ): Promise<StoredSession> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson<StoredSession>(`${authBase}/api/auth/me`, {
+  return requestAuthedJson<StoredSession>(`${authBase}/api/auth/me`, accessToken, {
     method: 'PATCH',
-    headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify(input),
   });
 }
@@ -207,28 +303,31 @@ export async function apiChangePassword(
   input: { currentPassword: string; newPassword: string },
 ): Promise<{ updated: boolean }> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson<{ updated: boolean }>(`${authBase}/api/auth/password`, {
+  return requestAuthedJson<{ updated: boolean }>(`${authBase}/api/auth/password`, accessToken, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify(input),
   });
 }
 
 export async function apiFetchGroups(token: string): Promise<GroupItem[]> {
   const { authBase } = getServiceBaseUrls();
-  const res = await requestJson<{ groups: GroupItem[] }>(`${authBase}/api/auth/groups`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await requestAuthedJson<{ groups: GroupItem[] }>(
+    `${authBase}/api/auth/groups`,
+    token,
+  );
   return res.groups;
 }
 
 export async function apiCreateGroup(token: string, name: string): Promise<GroupItem> {
   const { authBase } = getServiceBaseUrls();
-  const created = await requestJson<Omit<GroupItem, 'members'>>(`${authBase}/api/auth/groups`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ name }),
-  });
+  const created = await requestAuthedJson<Omit<GroupItem, 'members'>>(
+    `${authBase}/api/auth/groups`,
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    },
+  );
   return { ...created, members: [] };
 }
 
@@ -238,9 +337,8 @@ export async function apiUpdatePrivacy(
   privacy: PrivacyMode,
 ): Promise<{ groupId: string; privacy: PrivacyMode }> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson(`${authBase}/api/auth/groups/${groupId}/privacy`, {
+  return requestAuthedJson(`${authBase}/api/auth/groups/${groupId}/privacy`, token, {
     method: 'PATCH',
-    headers: { Authorization: `Bearer ${token}` },
     body: JSON.stringify({ privacy }),
   });
 }
@@ -255,9 +353,8 @@ export async function apiJoinInvite(
   inviteToken: string,
 ): Promise<{ groupId: string; groupName: string; role: GroupRole; privacy: PrivacyMode }> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson(`${authBase}/api/auth/join`, {
+  return requestAuthedJson(`${authBase}/api/auth/join`, accessToken, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ inviteToken }),
   });
 }
@@ -267,9 +364,8 @@ export async function apiCreateInvite(
   input: { groupId: string; assignedRole: GroupRole; maxUses: number; expiresInHours: number },
 ): Promise<CreatedInviteResponse> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson<CreatedInviteResponse>(`${authBase}/api/admin/invites`, {
+  return requestAuthedJson<CreatedInviteResponse>(`${authBase}/api/admin/invites`, accessToken, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify(input),
   });
 }
@@ -286,7 +382,7 @@ export async function apiListInvites(accessToken: string): Promise<
   }>
 > {
   const { authBase } = getServiceBaseUrls();
-  const res = await requestJson<{
+  const res = await requestAuthedJson<{
     invites: Array<{
       token: string;
       groupId: string;
@@ -296,24 +392,21 @@ export async function apiListInvites(accessToken: string): Promise<
       uses: number;
       expiresAt: string;
     }>;
-  }>(`${authBase}/api/admin/invites`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  }>(`${authBase}/api/admin/invites`, accessToken);
   return res.invites;
 }
 
 export async function apiFetchTelemetry(accessToken: string): Promise<SystemTelemetry> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson<SystemTelemetry>(`${authBase}/api/admin/telemetry`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  return requestAuthedJson<SystemTelemetry>(`${authBase}/api/admin/telemetry`, accessToken);
 }
 
 export async function apiFetchRecentLogs(accessToken: string): Promise<string[]> {
   const { authBase } = getServiceBaseUrls();
-  const res = await requestJson<{ logs: string[] }>(`${authBase}/api/admin/logs/recent`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const res = await requestAuthedJson<{ logs: string[] }>(
+    `${authBase}/api/admin/logs/recent`,
+    accessToken,
+  );
   return res.logs;
 }
 
@@ -322,9 +415,9 @@ export async function apiFetchGroupLocations(
   groupId: string,
 ): Promise<LocationBroadcast[]> {
   const { realtimeBase } = getServiceBaseUrls();
-  const res = await requestJson<{ locations: LocationBroadcast[] }>(
+  const res = await requestAuthedJson<{ locations: LocationBroadcast[] }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/locations`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
+    accessToken,
   );
   return res.locations;
 }
@@ -334,9 +427,9 @@ export async function apiFetchGroupMessages(
   groupId: string,
 ): Promise<ChatMessage[]> {
   const { realtimeBase } = getServiceBaseUrls();
-  const res = await requestJson<{ messages: ChatMessage[] }>(
+  const res = await requestAuthedJson<{ messages: ChatMessage[] }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/messages`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
+    accessToken,
   );
   return res.messages;
 }
@@ -346,20 +439,24 @@ export async function apiSendLocationBatch(
   points: LocationPoint[],
 ): Promise<{ inserted: number }> {
   const { realtimeBase } = getServiceBaseUrls();
-  return requestJson<{ inserted: number }>(`${realtimeBase}/api/realtime/locations`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({ points }),
-  });
+  return requestAuthedJson<{ inserted: number }>(
+    `${realtimeBase}/api/realtime/locations`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify({ points }),
+    },
+  );
 }
 
 export async function apiGetTrackerTokenStatus(
   accessToken: string,
 ): Promise<TrackerTokenStatusResponse> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson<TrackerTokenStatusResponse>(`${authBase}/api/auth/tracker-token`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  return requestAuthedJson<TrackerTokenStatusResponse>(
+    `${authBase}/api/auth/tracker-token`,
+    accessToken,
+  );
 }
 
 export async function apiCreateTrackerToken(
@@ -367,9 +464,8 @@ export async function apiCreateTrackerToken(
   expiresInDays: number,
 ): Promise<TrackerTokenResponse> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson<TrackerTokenResponse>(`${authBase}/api/auth/tracker-token`, {
+  return requestAuthedJson<TrackerTokenResponse>(`${authBase}/api/auth/tracker-token`, accessToken, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ expiresInDays }),
   });
 }
@@ -378,10 +474,11 @@ export async function apiRevokeTrackerToken(
   accessToken: string,
 ): Promise<{ revoked: boolean }> {
   const { authBase } = getServiceBaseUrls();
-  return requestJson<{ revoked: boolean }>(`${authBase}/api/auth/tracker-token`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  return requestAuthedJson<{ revoked: boolean }>(
+    `${authBase}/api/auth/tracker-token`,
+    accessToken,
+    { method: 'DELETE' },
+  );
 }
 
 export async function apiFetchLocationRequests(
@@ -389,9 +486,9 @@ export async function apiFetchLocationRequests(
   groupId: string,
 ): Promise<{ requests: LocationRequestItem[]; myPrivacyOverrideUntil: string | null }> {
   const { realtimeBase } = getServiceBaseUrls();
-  return requestJson<{ requests: LocationRequestItem[]; myPrivacyOverrideUntil: string | null }>(
+  return requestAuthedJson<{ requests: LocationRequestItem[]; myPrivacyOverrideUntil: string | null }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/location-requests`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
+    accessToken,
   );
 }
 
@@ -401,11 +498,11 @@ export async function apiCreateLocationRequest(
   payload: { targetUserId: string; suggestedDurationMinutes?: number; message?: string },
 ): Promise<LocationRequestItem> {
   const { realtimeBase } = getServiceBaseUrls();
-  const res = await requestJson<{ request: LocationRequestItem }>(
+  const res = await requestAuthedJson<{ request: LocationRequestItem }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/location-requests`,
+    accessToken,
     {
       method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(payload),
     },
   );
@@ -420,11 +517,11 @@ export async function apiRespondLocationRequest(
   durationMinutes?: number,
 ): Promise<{ request: LocationRequestItem; privacyOverrideUntil: string | null }> {
   const { realtimeBase } = getServiceBaseUrls();
-  return requestJson<{ request: LocationRequestItem; privacyOverrideUntil: string | null }>(
+  return requestAuthedJson<{ request: LocationRequestItem; privacyOverrideUntil: string | null }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/location-requests/${requestId}/respond`,
+    accessToken,
     {
       method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ action, durationMinutes }),
     },
   );
@@ -435,9 +532,9 @@ export async function apiFetchGroupPlaces(
   groupId: string,
 ): Promise<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }> {
   const { realtimeBase } = getServiceBaseUrls();
-  return requestJson<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }>(
+  return requestAuthedJson<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/places`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
+    accessToken,
   );
 }
 
@@ -447,11 +544,11 @@ export async function apiCreateGroupPlace(
   payload: { name: string; latitude: number; longitude: number; radiusMeters: number },
 ): Promise<GroupPlace> {
   const { realtimeBase } = getServiceBaseUrls();
-  const res = await requestJson<{ place: GroupPlace }>(
+  const res = await requestAuthedJson<{ place: GroupPlace }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/places`,
+    accessToken,
     {
       method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(payload),
     },
   );
@@ -464,12 +561,10 @@ export async function apiDeleteGroupPlace(
   placeId: string,
 ): Promise<void> {
   const { realtimeBase } = getServiceBaseUrls();
-  await requestJson<{ ok: boolean }>(
+  await requestAuthedJson<{ ok: boolean }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/places/${placeId}`,
-    {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    },
+    accessToken,
+    { method: 'DELETE' },
   );
 }
 
@@ -484,9 +579,9 @@ export async function apiFetchGroupTrails(
   if (options.to) params.set('to', options.to);
   if (options.limit) params.set('limit', String(options.limit));
   const qs = params.toString();
-  const res = await requestJson<{ trails: LocationBroadcast[] }>(
+  const res = await requestAuthedJson<{ trails: LocationBroadcast[] }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/trails${qs ? `?${qs}` : ''}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
+    accessToken,
   );
   return res.trails;
 }
