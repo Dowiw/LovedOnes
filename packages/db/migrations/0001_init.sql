@@ -204,3 +204,25 @@ CREATE INDEX IF NOT EXISTS idx_registration_requests_ip_status
 
 CREATE INDEX IF NOT EXISTS idx_registration_requests_status_created
     ON registration_requests (status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS push_vapid_config (
+    id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    public_key TEXT NOT NULL,
+    private_key TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT 'mailto:admin@lovedones.local',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+    ON push_subscriptions (user_id);

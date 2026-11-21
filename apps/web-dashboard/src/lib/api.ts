@@ -873,3 +873,56 @@ export async function apiFetchAppVersion(
   }
   return (await res.json()) as AppVersionInfo;
 }
+
+export async function apiFetchVapidPublicKey(accessToken: string): Promise<string> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ publicKey: string }>(
+    `${realtimeBase}/api/realtime/push/vapid-public-key`,
+    accessToken,
+  );
+  return res.publicKey;
+}
+
+export async function apiSubscribeWebPush(
+  accessToken: string,
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
+): Promise<{ subscribed: boolean }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ subscribed: boolean }>(
+    `${realtimeBase}/api/realtime/push/subscribe`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify(subscription),
+    },
+  );
+}
+
+export async function apiUnsubscribeWebPush(
+  accessToken: string,
+  endpoint: string,
+): Promise<{ unsubscribed: boolean }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ unsubscribed: boolean }>(
+    `${realtimeBase}/api/realtime/push/subscribe`,
+    accessToken,
+    {
+      method: 'DELETE',
+      body: JSON.stringify({ endpoint }),
+    },
+  );
+}
+
+export async function apiTestWebPush(
+  accessToken: string,
+): Promise<{ sent: number; failed: number }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ sent: number; failed: number }>(
+    `${realtimeBase}/api/realtime/push/test`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  );
+}

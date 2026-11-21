@@ -972,3 +972,142 @@ export async function resolveAuditContext(
   await Promise.all(tasks);
   return snapshot;
 }
+
+export interface StoredPushVapidConfig {
+  publicKey: string;
+  privateKey: string;
+  subject: string;
+}
+
+export interface StoredPushSubscription {
+  id: string;
+  userId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+export async function getOrCreatePushVapidConfig(
+  pool: pg.Pool,
+  generateKeys: () => StoredPushVapidConfig,
+): Promise<StoredPushVapidConfig> {
+  const existing = await pool.query<{
+    public_key: string;
+    private_key: string;
+    subject: string;
+  }>('SELECT public_key, private_key, subject FROM push_vapid_config WHERE id = 1 LIMIT 1');
+
+  if (existing.rows[0]) {
+    return {
+      publicKey: existing.rows[0].public_key,
+      privateKey: existing.rows[0].private_key,
+      subject: existing.rows[0].subject,
+    };
+  }
+
+  const fresh = generateKeys();
+  await pool.query(
+    `INSERT INTO push_vapid_config (id, public_key, private_key, subject)
+     VALUES (1, $1, $2, $3)
+     ON CONFLICT (id) DO NOTHING`,
+    [fresh.publicKey, fresh.privateKey, fresh.subject],
+  );
+
+  const resolved = await pool.query<{
+    public_key: string;
+    private_key: string;
+    subject: string;
+  }>('SELECT public_key, private_key, subject FROM push_vapid_config WHERE id = 1 LIMIT 1');
+
+  const row = resolved.rows[0];
+  if (!row) {
+    return fresh;
+  }
+  return {
+    publicKey: row.public_key,
+    privateKey: row.private_key,
+    subject: row.subject,
+  };
+}
+
+export async function upsertPushSubscription(
+  pool: pg.Pool,
+  input: {
+    userId: string;
+    endpoint: string;
+    p256dh: string;
+    auth: string;
+    userAgent?: string | null;
+  },
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent, updated_at)
+     VALUES ($1::uuid, $2, $3, $4, $5, NOW())
+     ON CONFLICT (endpoint) DO UPDATE
+       SET user_id = EXCLUDED.user_id,
+           p256dh = EXCLUDED.p256dh,
+           auth = EXCLUDED.auth,
+           user_agent = EXCLUDED.user_agent,
+           updated_at = NOW()`,
+    [input.userId, input.endpoint, input.p256dh, input.auth, input.userAgent ?? null],
+  );
+}
+
+export async function deletePushSubscription(
+  pool: pg.Pool,
+  userId: string,
+  endpoint: string,
+): Promise<boolean> {
+  const res = await pool.query(
+    'DELETE FROM push_subscriptions WHERE user_id = $1::uuid AND endpoint = $2',
+    [userId, endpoint],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function deletePushSubscriptionByEndpoint(
+  pool: pg.Pool,
+  endpoint: string,
+): Promise<void> {
+  await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [endpoint]);
+}
+
+export async function listPushSubscriptionsForUsers(
+  pool: pg.Pool,
+  userIds: string[],
+): Promise<StoredPushSubscription[]> {
+  if (userIds.length === 0) return [];
+  const res = await pool.query<{
+    id: string;
+    user_id: string;
+    endpoint: string;
+    p256dh: string;
+    auth: string;
+  }>(
+    `SELECT id, user_id, endpoint, p256dh, auth
+     FROM push_subscriptions
+     WHERE user_id = ANY($1::uuid[])`,
+    [userIds],
+  );
+  return res.rows.map((row) => ({
+    id: row.id,
+    userId: row.user_id,
+    endpoint: row.endpoint,
+    p256dh: row.p256dh,
+    auth: row.auth,
+  }));
+}
+
+export async function listGroupMemberUserIds(
+  pool: pg.Pool,
+  groupId: string,
+  excludeUserId?: string,
+): Promise<string[]> {
+  const res = await pool.query<{ user_id: string }>(
+    excludeUserId
+      ? 'SELECT user_id FROM group_memberships WHERE group_id = $1::uuid AND user_id <> $2::uuid'
+      : 'SELECT user_id FROM group_memberships WHERE group_id = $1::uuid',
+    excludeUserId ? [groupId, excludeUserId] : [groupId],
+  );
+  return res.rows.map((r) => r.user_id);
+}

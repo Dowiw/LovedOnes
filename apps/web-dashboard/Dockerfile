@@ -14,5 +14,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/apps/web-dashboard/.next/standalone ./
 COPY --from=builder /app/apps/web-dashboard/.next/static ./apps/web-dashboard/.next/static
+COPY --from=builder /app/apps/web-dashboard/public ./apps/web-dashboard/public
 EXPOSE 3000
 CMD ["node", "apps/web-dashboard/server.js"]

@@ -37,6 +37,11 @@ import {
   PostgresRealtimeStore,
   SocketIoBroadcaster,
 } from './adapters/postgres-socketio-adapters.js';
+import {
+  PostgresPushSubscriptionStore,
+  WebPushTransport,
+} from './adapters/web-push-adapter.js';
+import { PushNotificationsModule } from './domain/push-notifications-module.js';
 import { matchesIfNoneMatch, RealtimeModule } from './domain/realtime-module.js';
 
 export interface RealtimeServiceOptions {
@@ -161,6 +166,11 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     adapter: createAdapter(pubClient, subClient),
   });
 
+  const pushNotifications = new PushNotificationsModule({
+    store: new PostgresPushSubscriptionStore(pool),
+    transport: new WebPushTransport(),
+  });
+
   const realtime = new RealtimeModule({
     store: new PostgresRealtimeStore(pool),
     broadcaster: new SocketIoBroadcaster(io),
@@ -181,6 +191,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
             },
             `${evt.username} ${evt.transition === 'enter' ? 'entered' : 'exited'} place "${evt.placeName}" in group "${groupName}"`,
           );
+          void pushNotifications.notifyPlaceTransition(evt, groupName).catch(() => {});
         })
         .catch(() => {});
     },
@@ -232,6 +243,44 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   app.get('/health', async () => {
     return { status: 'ok', service: 'realtime-service' };
   });
+
+  app.get(
+    '/api/realtime/push/vapid-public-key',
+    { preHandler: [requireAuth] },
+    async () => {
+      const publicKey = await pushNotifications.getPublicKey();
+      return { publicKey };
+    },
+  );
+
+  app.post(
+    '/api/realtime/push/subscribe',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const userAgent =
+        typeof request.headers['user-agent'] === 'string' ? request.headers['user-agent'] : null;
+      return pushNotifications.subscribe(user.id, request.body, userAgent);
+    },
+  );
+
+  app.delete(
+    '/api/realtime/push/subscribe',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      return pushNotifications.unsubscribe(user.id, request.body);
+    },
+  );
+
+  app.post(
+    '/api/realtime/push/test',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      return pushNotifications.sendTestNotification(user.id, user.username);
+    },
+  );
 
   app.post(
     '/api/realtime/locations',
@@ -356,6 +405,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       });
       const groupName = await resolveGroupName(groupId);
       const preview = truncatePreview(message.content);
+      void pushNotifications.notifyChatMessage(message, groupName).catch(() => {});
       loggerHandle.logger.info(
         {
           action: 'chat.message_sent',
@@ -395,6 +445,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         request.body,
       );
       const groupName = await resolveGroupName(groupId);
+      void pushNotifications.notifyCheckInRequest(created, groupName).catch(() => {});
       loggerHandle.logger.info(
         {
           action: 'checkin.requested',
@@ -430,6 +481,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         request.body,
       );
       const groupName = await resolveGroupName(groupId);
+      void pushNotifications.notifyCheckInResponse(res.request, groupName).catch(() => {});
       loggerHandle.logger.info(
         {
           action: 'checkin.responded',
@@ -639,6 +691,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
           await recordUserTelemetry(redis, user.id, elapsedMs, 1);
           const groupName = await resolveGroupName(message.groupId);
           const preview = truncatePreview(message.content);
+          void pushNotifications.notifyChatMessage(message, groupName).catch(() => {});
           loggerHandle.logger.info(
             {
               action: 'chat.message_sent',
@@ -670,6 +723,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
           const groupId = typeof payload?.groupId === 'string' ? payload.groupId : '';
           const created = await realtime.createCheckInRequest(user, groupId, payload);
           const groupName = await resolveGroupName(groupId);
+          void pushNotifications.notifyCheckInRequest(created, groupName).catch(() => {});
           loggerHandle.logger.info(
             {
               action: 'checkin.requested',
@@ -706,6 +760,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
           const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
           const res = await realtime.respondToCheckInRequest(user, groupId, requestId, payload);
           const groupName = await resolveGroupName(groupId);
+          void pushNotifications.notifyCheckInResponse(res.request, groupName).catch(() => {});
           loggerHandle.logger.info(
             {
               action: 'checkin.responded',

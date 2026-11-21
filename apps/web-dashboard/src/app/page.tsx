@@ -12,6 +12,7 @@ import {
   CloudDownload,
   Compass,
   Copy,
+  Download,
   EyeOff,
   Globe,
   KeyRound,
@@ -29,6 +30,7 @@ import {
   Route,
   Send,
   Settings,
+  Smartphone,
   Trash2,
   Users,
   X,
@@ -78,6 +80,7 @@ import {
   apiRespondLocationRequest,
   apiRevokeTrackerToken,
   apiSendLocationBatch,
+  apiTestWebPush,
   apiUpdatePrivacy,
   formatBytes,
   getServiceBaseUrls,
@@ -90,6 +93,15 @@ import {
   TrackerTokenResponse,
   triggerAccountRemovedNotification,
 } from '@/lib/api';
+import {
+  type BeforeInstallPromptEvent,
+  getExistingPushSubscription,
+  isIosSafariNeedingInstall,
+  isWebPushSupported,
+  registerServiceWorker,
+  subscribeToWebPush,
+  unsubscribeFromWebPush,
+} from '@/lib/pwaPush';
 
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
 type MapViewMode = 'live' | 'trails' | 'places';
@@ -226,6 +238,15 @@ export default function HomePage() {
   const [browserNotifyPermission, setBrowserNotifyPermission] = useState<
     NotificationPermission | 'unsupported'
   >('unsupported');
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushFeedback, setPushFeedback] = useState<string | null>(null);
+  const [pushError, setPushError] = useState<string | null>(null);
+  const [installPromptEvent, setInstallPromptEvent] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [isStandalonePwa, setIsStandalonePwa] = useState(false);
+  const [needsIosInstallForPush, setNeedsIosInstallForPush] = useState(false);
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
   const [mapRegionsLoaded, setMapRegionsLoaded] = useState(false);
@@ -281,6 +302,55 @@ export default function HomePage() {
       setBrowserNotifyPermission(Notification.permission);
     }
 
+    const standalone =
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(display-mode: standalone)').matches ||
+        Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
+    setIsStandalonePwa(standalone);
+    setNeedsIosInstallForPush(isIosSafariNeedingInstall(navigator.userAgent, standalone));
+    setPushSupported(isWebPushSupported());
+
+    void registerServiceWorker().then(async () => {
+      const existing = await getExistingPushSubscription();
+      setPushSubscribed(Boolean(existing));
+    });
+
+    const onBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallPromptEvent(e as BeforeInstallPromptEvent);
+    };
+    const onAppInstalled = () => {
+      setInstallPromptEvent(null);
+      setIsStandalonePwa(true);
+      setNeedsIosInstallForPush(false);
+    };
+    const onServiceWorkerMessage = (event: MessageEvent) => {
+      const data = event.data as
+        | { type?: string; groupId?: string; tab?: InspectorTab }
+        | undefined;
+      if (data?.type !== 'LO_OPEN_NOTIFICATION') return;
+      if (data.groupId) {
+        setActiveGroupId(data.groupId);
+      }
+      if (
+        data.tab === 'people' ||
+        data.tab === 'chat' ||
+        data.tab === 'places' ||
+        data.tab === 'requests'
+      ) {
+        setRightOpen(true);
+        setInspectorTab(data.tab);
+        if (data.tab === 'chat') {
+          setUnreadChatCount(0);
+          setChatToast(null);
+        }
+      }
+    };
+
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+    window.addEventListener('appinstalled', onAppInstalled);
+    navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage);
+
     const onSessionSync = (event: Event) => {
       const custom = event as CustomEvent<StoredSession | null>;
       setSession((prev) => {
@@ -301,9 +371,31 @@ export default function HomePage() {
       handleSignOut();
     };
     const params = new URLSearchParams(window.location.search);
+    const initialGroupId = params.get('groupId');
+    const initialTab = params.get('tab');
+    let searchChanged = false;
     if (params.get('removed') === '1') {
       setRemovedToast(ACCOUNT_REMOVED_DEFAULT_MESSAGE);
       params.delete('removed');
+      searchChanged = true;
+    }
+    if (initialGroupId) {
+      setActiveGroupId(initialGroupId);
+      params.delete('groupId');
+      searchChanged = true;
+    }
+    if (
+      initialTab === 'people' ||
+      initialTab === 'chat' ||
+      initialTab === 'places' ||
+      initialTab === 'requests'
+    ) {
+      setRightOpen(true);
+      setInspectorTab(initialTab);
+      params.delete('tab');
+      searchChanged = true;
+    }
+    if (searchChanged) {
       const nextSearch = params.toString();
       window.history.replaceState(
         {},
@@ -316,6 +408,9 @@ export default function HomePage() {
     return () => {
       window.removeEventListener(SESSION_UPDATED_EVENT, onSessionSync);
       window.removeEventListener(ACCOUNT_REMOVED_EVENT, onAccountRemoved);
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', onAppInstalled);
+      navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage);
       if (chatToastTimerRef.current !== null) {
         window.clearTimeout(chatToastTimerRef.current);
       }
@@ -346,10 +441,75 @@ export default function HomePage() {
   async function handleEnableBrowserNotifications() {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
     try {
+      if (pushSupported && session?.accessToken) {
+        await subscribeToWebPush(session.accessToken);
+        setPushSubscribed(true);
+        setBrowserNotifyPermission(Notification.permission);
+        return;
+      }
       const result = await Notification.requestPermission();
       setBrowserNotifyPermission(result);
     } catch {
-      // ignore unsupported environments
+      if ('Notification' in window) {
+        setBrowserNotifyPermission(Notification.permission);
+      }
+    }
+  }
+
+  async function handleToggleWebPush() {
+    if (!session) return;
+    setPushError(null);
+    setPushFeedback(null);
+    setPushBusy(true);
+    try {
+      if (pushSubscribed) {
+        await unsubscribeFromWebPush(session.accessToken);
+        setPushSubscribed(false);
+        setPushFeedback('Push alerts disabled');
+      } else {
+        await subscribeToWebPush(session.accessToken);
+        setPushSubscribed(true);
+        if (typeof window !== 'undefined' && 'Notification' in window) {
+          setBrowserNotifyPermission(Notification.permission);
+        }
+        setPushFeedback('Background push alerts enabled');
+      }
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'Failed to update push alerts');
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function handleTestWebPush() {
+    if (!session) return;
+    setPushError(null);
+    setPushFeedback(null);
+    setPushBusy(true);
+    try {
+      const res = await apiTestWebPush(session.accessToken);
+      if (res.sent > 0) {
+        setPushFeedback(`Test notification sent (${res.sent})`);
+      } else {
+        setPushError('No active push subscription delivered — try re-enabling alerts.');
+      }
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'Failed to send test push');
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function handleInstallPwa() {
+    if (!installPromptEvent) return;
+    try {
+      await installPromptEvent.prompt();
+      const choice = await installPromptEvent.userChoice;
+      if (choice.outcome === 'accepted') {
+        setInstallPromptEvent(null);
+      }
+    } catch {
+      // ignore cancelled install prompt
     }
   }
 
@@ -1145,6 +1305,9 @@ export default function HomePage() {
   }
 
   function handleSignOut() {
+    const token = loadSession()?.accessToken;
+    void unsubscribeFromWebPush(token);
+    setPushSubscribed(false);
     setGeoSharing(false);
     saveSession(null);
     setSession(null);
@@ -2374,6 +2537,88 @@ export default function HomePage() {
                     </div>
                   )}
                 </div>
+              )}
+            </div>
+
+            {/* Install App & Background Push Alerts (PWA) */}
+            <div className="space-y-2 border-t border-zinc-100 pt-2.5">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                  <Smartphone className="h-3.5 w-3.5 text-zinc-500" />
+                  App &amp; Push Alerts
+                </span>
+                {isStandalonePwa && (
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700">
+                    Installed
+                  </span>
+                )}
+              </div>
+
+              {installPromptEvent && !isStandalonePwa && (
+                <button
+                  type="button"
+                  onClick={() => void handleInstallPwa()}
+                  className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-100"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Install LovedOnes App
+                </button>
+              )}
+
+              {needsIosInstallForPush && (
+                <p className="rounded-lg border border-zinc-200/80 bg-zinc-50 px-2.5 py-2 text-[11px] leading-snug text-zinc-600">
+                  On iOS Safari, tap <span className="font-semibold text-zinc-900">Share</span> →{' '}
+                  <span className="font-semibold text-zinc-900">Add to Home Screen</span> to unlock
+                  background push alerts.
+                </p>
+              )}
+
+              {pushSupported && !needsIosInstallForPush && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={pushBusy}
+                    onClick={() => void handleToggleWebPush()}
+                    className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold transition disabled:opacity-60 ${
+                      pushSubscribed
+                        ? 'border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50'
+                        : 'bg-zinc-950 text-white hover:bg-zinc-800'
+                    }`}
+                  >
+                    {pushBusy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : pushSubscribed ? (
+                      <BellOff className="h-3 w-3" />
+                    ) : (
+                      <Bell className="h-3 w-3" />
+                    )}
+                    {pushSubscribed ? 'Disable Push' : 'Enable Push Alerts'}
+                  </button>
+                  {pushSubscribed && (
+                    <button
+                      type="button"
+                      disabled={pushBusy}
+                      onClick={() => void handleTestWebPush()}
+                      className="lo-press rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+                    >
+                      Test
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {!pushSupported && !needsIosInstallForPush && (
+                <p className="text-[11px] text-zinc-400">
+                  Push alerts require HTTPS and Service Worker support.
+                </p>
+              )}
+
+              {pushError && <p className="lo-feedback-in text-[11px] text-rose-600">{pushError}</p>}
+              {pushFeedback && (
+                <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                  <Check className="h-3 w-3" />
+                  {pushFeedback}
+                </p>
               )}
             </div>
 

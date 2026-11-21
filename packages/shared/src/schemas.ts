@@ -873,3 +873,26 @@ export function formatCountdownRemaining(expiresAtIso: string, nowMs = Date.now(
   }
   return `${minutes}m ${pad(seconds)}s`;
 }
+
+export const PushSubscriptionInputSchema = z.object({
+  endpoint: z.string().trim().url().max(2048),
+  keys: z.object({
+    p256dh: z.string().trim().min(16).max(512),
+    auth: z.string().trim().min(8).max(256),
+  }),
+});
+export type PushSubscriptionInput = z.infer<typeof PushSubscriptionInputSchema>;
+
+export const PushUnsubscribeInputSchema = z.object({
+  endpoint: z.string().trim().url().max(2048),
+});
+export type PushUnsubscribeInput = z.infer<typeof PushUnsubscribeInputSchema>;
+
+export interface WebPushNotificationPayload {
+  title: string;
+  body: string;
+  tag: string;
+  url: string;
+  groupId?: string;
+  tab?: 'people' | 'chat' | 'places' | 'requests';
+}
