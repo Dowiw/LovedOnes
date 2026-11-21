@@ -256,10 +256,11 @@ describe('@loved-ones/mobile-app', () => {
   it('computes safe-area insets for Android 3-button/gesture nav bars and iOS', () => {
     const android3Btn = computeSafeAreaInsets('android', 24, 800, 728);
     expect(android3Btn.top).toBe(28);
-    expect(android3Btn.bottom).toBe(48);
+    expect(android3Btn.bottom).toBe(72);
 
-    const androidGesture = computeSafeAreaInsets('android', 28, 844, 816);
-    expect(androidGesture.bottom).toBe(28);
+    const androidEdgeToEdge = computeSafeAreaInsets('android', 33, 832, 832);
+    expect(androidEdgeToEdge.top).toBe(33);
+    expect(androidEdgeToEdge.bottom).toBe(48);
 
     const iosInsets = computeSafeAreaInsets('ios', null, 844, 844);
     expect(iosInsets.top).toBe(48);

@@ -892,7 +892,7 @@ export function QrOnboardingScreen({
   }
 
   const topPad = Math.max(insets.top + 16, 48);
-  const bottomPad = Math.max(insets.bottom + 24, 34);
+  const bottomPad = 20;
   const hostLabel = formatServerHostLabel(serverUrl);
   const activePending = isPendingRecordActive(pendingReg, nowMs) ? pendingReg : null;
   const currentServerPing = serverUrl
@@ -935,7 +935,7 @@ export function QrOnboardingScreen({
             {
               backgroundColor: palette.surface,
               borderTopColor: palette.border,
-              paddingBottom: Math.max(insets.bottom + 20, 32),
+              paddingBottom: 22,
             },
           ]}
         >

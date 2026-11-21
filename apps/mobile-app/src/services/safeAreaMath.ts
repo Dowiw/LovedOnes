@@ -17,11 +17,11 @@ export function computeSafeAreaInsets(
 ): EdgeInsets {
   if (platform === 'android') {
     const status = Math.max(statusBarHeight ?? 0, 28);
-    const navDelta = Math.max(0, screenHeight - windowHeight - (statusBarHeight ?? 0));
+    const navDelta = Math.max(0, screenHeight - windowHeight);
     return {
       top: status,
       right: 0,
-      bottom: Math.max(navDelta, 28),
+      bottom: Math.max(navDelta, 48),
       left: 0,
     };
   }

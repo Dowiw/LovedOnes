@@ -16,6 +16,7 @@ import {
   hsvToHex,
   type OnboardingPalette,
 } from '../services/onboardingTheme';
+import { useSafeAreaInsets } from '../services/safeArea';
 
 export { hexToHsv, type HsvColor, hsvToHex };
 
@@ -43,6 +44,7 @@ export function ColorPickerSheet({
   onApply,
   onClose,
 }: ColorPickerSheetProps) {
+  const insets = useSafeAreaInsets();
   const startHex = initialHex && isSafeHexColor(initialHex) ? initialHex : '#0ea5e9';
   const [hsv, setHsv] = useState<HsvColor>(() => hexToHsv(startHex));
   const [hexInput, setHexInput] = useState<string>(startHex);
@@ -85,7 +87,8 @@ export function ColorPickerSheet({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
+      <View pointerEvents="box-none" style={styles.modalOuter}>
+        <View style={[styles.backdrop, { marginBottom: insets.bottom }]}>
         <View
           style={[
             styles.card,
@@ -220,11 +223,15 @@ export function ColorPickerSheet({
           </View>
         </View>
       </View>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  modalOuter: {
+    flex: 1,
+  },
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(9, 9, 11, 0.55)',

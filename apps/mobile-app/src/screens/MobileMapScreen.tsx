@@ -1551,7 +1551,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         <View
           style={[
             styles.bottomSheet,
-            { paddingBottom: Math.max(insets.bottom, 12) + 8 },
+            { paddingBottom: 14 },
           ]}
         >
           <View style={styles.sheetHandle} />
@@ -1618,7 +1618,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
       {/* Redesigned Group Chat Sheet Modal (Desktop Web Dashboard Parity) */}
       <Modal visible={chatOpen} animationType="slide" onRequestClose={() => setChatOpen(false)}>
-        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48) }]}>
+        <View pointerEvents="box-none" style={styles.flexOne}>
+        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48), marginBottom: insets.bottom }]}>
           <View style={styles.modalHeader}>
             <View>
               <Text style={styles.modalTitle}>{activeGroup?.name ?? 'Group'} Chat</Text>
@@ -1727,7 +1728,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             <View
               style={[
                 styles.chatComposer,
-                { paddingBottom: Math.max(insets.bottom, 12) + 8 },
+                { paddingBottom: 14 },
               ]}
             >
               <TextInput
@@ -1753,6 +1754,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             </View>
           </KeyboardAvoidingView>
         </View>
+        </View>
       </Modal>
 
       {/* Account Settings Modal */}
@@ -1761,7 +1763,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         animationType="slide"
         onRequestClose={() => setAccountOpen(false)}
       >
-        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48) }]}>
+        <View pointerEvents="box-none" style={styles.flexOne}>
+        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48), marginBottom: insets.bottom }]}>
           <View style={styles.modalHeader}>
             <View>
               <Text style={styles.modalTitle}>Account Settings</Text>
@@ -1775,7 +1778,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           <ScrollView
             contentContainerStyle={[
               styles.settingsScroll,
-              { paddingBottom: Math.max(insets.bottom, 16) + 28 },
+              { paddingBottom: 24 },
             ]}
           >
             <View style={styles.settingsCard}>
@@ -2058,6 +2061,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             </TouchableOpacity>
           </ScrollView>
         </View>
+        </View>
       </Modal>
 
       {/* Privacy Mode Popover Sheet Modal */}
@@ -2067,11 +2071,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         animationType="fade"
         onRequestClose={() => setPrivacySheetOpen(false)}
       >
-        <View style={styles.sheetBackdrop}>
+        <View pointerEvents="box-none" style={styles.flexOne}>
+        <View style={[styles.sheetBackdrop, { marginBottom: insets.bottom }]}>
           <View
             style={[
               styles.sheetCard,
-              { paddingBottom: Math.max(insets.bottom, 16) + 8 },
+              { paddingBottom: 20 },
             ]}
           >
             <View style={styles.sheetHeaderRow}>
@@ -2128,6 +2133,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             })}
           </View>
         </View>
+        </View>
       </Modal>
 
       {/* Progressive Disclosure Quick Menu Sheet */}
@@ -2137,11 +2143,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         animationType="fade"
         onRequestClose={() => setMenuModalOpen(false)}
       >
-        <View style={styles.sheetBackdrop}>
+        <View pointerEvents="box-none" style={styles.flexOne}>
+        <View style={[styles.sheetBackdrop, { marginBottom: insets.bottom }]}>
           <View
             style={[
               styles.sheetCard,
-              { paddingBottom: Math.max(insets.bottom, 16) + 8 },
+              { paddingBottom: 20 },
             ]}
           >
             <View style={styles.sheetHeaderRow}>
@@ -2243,6 +2250,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             </TouchableOpacity>
           </View>
         </View>
+        </View>
       </Modal>
 
       {/* Offline Map Cache Modal with Size Preview & Live Progress */}
@@ -2252,11 +2260,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         animationType="fade"
         onRequestClose={() => setOfflineModalOpen(false)}
       >
-        <View style={styles.sheetBackdrop}>
+        <View pointerEvents="box-none" style={styles.flexOne}>
+        <View style={[styles.sheetBackdrop, { marginBottom: insets.bottom }]}>
           <View
             style={[
               styles.sheetCard,
-              { paddingBottom: Math.max(insets.bottom, 16) + 8 },
+              { paddingBottom: 20 },
             ]}
           >
             <View style={styles.sheetHeaderRow}>
@@ -2351,11 +2360,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             )}
           </View>
         </View>
+        </View>
       </Modal>
 
       {/* Join Group via QR Modal */}
       <Modal visible={joinQrOpen} animationType="slide" onRequestClose={closeJoinQrModal}>
-        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48) }]}>
+        <View pointerEvents="box-none" style={styles.flexOne}>
+        <View style={[styles.modalWrap, { paddingTop: Math.max(insets.top + 8, 48), marginBottom: insets.bottom }]}>
           {qrScanning ? (
             <View style={styles.scannerFull}>
               <CameraView
@@ -2366,7 +2377,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               <View
                 style={[
                   styles.scannerOverlayBar,
-                  { bottom: Math.max(insets.bottom + 24, 48) },
+                  { bottom: 24 },
                 ]}
               >
                 <Text style={styles.scannerOverlayText}>Point camera at Admin Invite QR</Text>
@@ -2478,6 +2489,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               </ScrollView>
             </>
           )}
+        </View>
         </View>
       </Modal>
     </View>
