@@ -226,3 +226,31 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
     ON push_subscriptions (user_id);
+
+CREATE TABLE IF NOT EXISTS location_share_links (
+    token VARCHAR(96) PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    label VARCHAR(80) NULL,
+    allow_guest_sharing BOOLEAN NOT NULL DEFAULT TRUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_location_share_links_user_active
+    ON location_share_links (user_id, expires_at DESC);
+
+CREATE TABLE IF NOT EXISTS location_share_guests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    share_token VARCHAR(96) NOT NULL REFERENCES location_share_links(token) ON DELETE CASCADE,
+    guest_secret VARCHAR(96) NOT NULL,
+    display_name VARCHAR(40) NOT NULL,
+    latitude DOUBLE PRECISION NOT NULL,
+    longitude DOUBLE PRECISION NOT NULL,
+    accuracy DOUBLE PRECISION NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_location_share_guests_token_updated
+    ON location_share_guests (share_token, updated_at DESC);

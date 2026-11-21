@@ -9,6 +9,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -38,6 +39,7 @@ import {
   type ChatMessage,
   type GroupRole,
   type LocationBroadcast,
+  type LocationShareLinkItem,
   type MapDownloadJob,
   type MapRegion,
   type PrivacyMode,
@@ -88,6 +90,12 @@ import {
   saveMapThemePreference,
   saveStoredConfig,
 } from '../services/secureConfig';
+import {
+  createMobileShareLink,
+  listMobileShareLinks,
+  resolveMobileShareUrl,
+  revokeMobileShareLink,
+} from '../services/shareLinks';
 import { sendLocalNotification } from '../services/notifications';
 import { Vibration } from 'react-native';
 
@@ -184,6 +192,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [downloadProgress, setDownloadProgress] = useState<OfflineDownloadProgress | null>(null);
   const [menuModalOpen, setMenuModalOpen] = useState(false);
   const [privacySheetOpen, setPrivacySheetOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareLinks, setShareLinks] = useState<LocationShareLinkItem[]>([]);
+  const [shareDurationMinutes, setShareDurationMinutes] = useState(60);
+  const [shareLabelInput, setShareLabelInput] = useState('');
+  const [shareAllowMutual, setShareAllowMutual] = useState(true);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
 
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
@@ -246,6 +261,75 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       }
     }
   }, []);
+
+  const refreshShareLinks = useCallback(async () => {
+    if (!serverUrl || !accessToken) return;
+    try {
+      const list = await listMobileShareLinks(serverUrl, accessToken);
+      setShareLinks(list);
+    } catch {
+      // ignore background refresh error
+    }
+  }, [serverUrl, accessToken]);
+
+  const handleOpenShareLinksModal = useCallback(() => {
+    setMenuModalOpen(false);
+    setShareError(null);
+    setShareModalOpen(true);
+    void refreshShareLinks();
+  }, [refreshShareLinks]);
+
+  const handleCreateMobileShareLink = useCallback(async () => {
+    if (!serverUrl || !accessToken || !activeGroup) return;
+    setShareError(null);
+    setShareBusy(true);
+    try {
+      const created = await createMobileShareLink(serverUrl, accessToken, {
+        groupId: activeGroup.id,
+        durationMinutes: shareDurationMinutes,
+        label: shareLabelInput.trim() || undefined,
+        allowGuestSharing: shareAllowMutual,
+      });
+      setShareLinks((prev) => [created, ...prev]);
+      setShareLabelInput('');
+    } catch (err) {
+      setShareError(formatUserError(err, 'Failed to create share link'));
+    } finally {
+      setShareBusy(false);
+    }
+  }, [serverUrl, accessToken, activeGroup, shareDurationMinutes, shareLabelInput, shareAllowMutual]);
+
+  const handleShareNativeLink = useCallback(
+    async (item: LocationShareLinkItem) => {
+      const url = resolveMobileShareUrl(serverUrl, item);
+      try {
+        await Share.share({
+          message: item.label ? `${item.label}: ${url}` : url,
+          url,
+        });
+      } catch (err) {
+        setShareError(formatUserError(err, 'Unable to open share sheet'));
+      }
+    },
+    [serverUrl],
+  );
+
+  const handleRevokeMobileShareLink = useCallback(
+    async (token: string) => {
+      if (!serverUrl || !accessToken) return;
+      setShareError(null);
+      setShareBusy(true);
+      try {
+        await revokeMobileShareLink(serverUrl, accessToken, token);
+        setShareLinks((prev) => prev.filter((l) => l.token !== token));
+      } catch (err) {
+        setShareError(formatUserError(err, 'Failed to revoke share link'));
+      } finally {
+        setShareBusy(false);
+      }
+    },
+    [serverUrl, accessToken],
+  );
 
   const useCompositeServerTiles = useMemo(() => {
     const operational = mapRegions.filter((r) => !r.isStub);
@@ -2282,6 +2366,21 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
             <TouchableOpacity
               style={styles.menuRow}
+              onPress={handleOpenShareLinksModal}
+            >
+              <View style={styles.flexOne}>
+                <Text style={styles.settingsSectionTitle}>Guest Share Links</Text>
+                <Text style={styles.settingsHint}>
+                  Temporary meetup links (isolated from your group)
+                </Text>
+              </View>
+              <Text style={styles.menuRowAction}>
+                {shareLinks.length > 0 ? `${shareLinks.length} active →` : 'Create →'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
               onPress={() => {
                 setMenuModalOpen(false);
                 void openOfflineCacheModal();
@@ -2415,6 +2514,139 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             </TouchableOpacity>
           </View>
         </View>
+        </View>
+      </Modal>
+
+      {/* Guest Share Links Modal */}
+      <Modal
+        visible={shareModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShareModalOpen(false)}
+      >
+        <View pointerEvents="box-none" style={styles.flexOne}>
+          <View style={[styles.sheetBackdrop, { marginBottom: insets.bottom }]}>
+            <View style={[styles.sheetCard, { paddingBottom: 20 }]}>
+              <View style={styles.sheetHeaderRow}>
+                <Text style={styles.modalTitle}>Guest Share Links</Text>
+                <TouchableOpacity style={styles.closePill} onPress={() => setShareModalOpen(false)}>
+                  <Text style={styles.closeText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.settingsHint}>
+                People on the same link see only each other—never other group members.
+              </Text>
+
+              <TextInput
+                style={styles.shareInput}
+                value={shareLabelInput}
+                onChangeText={setShareLabelInput}
+                maxLength={80}
+                placeholder="Label (optional, e.g. Meetup)"
+                placeholderTextColor="#a1a1aa"
+              />
+
+              <View style={styles.themeSegmentGroup}>
+                {(
+                  [
+                    [15, '15m'],
+                    [60, '1h'],
+                    [240, '4h'],
+                    [1440, '24h'],
+                  ] as const
+                ).map(([mins, label]) => {
+                  const active = shareDurationMinutes === mins;
+                  return (
+                    <TouchableOpacity
+                      key={mins}
+                      style={[
+                        styles.themeSegmentBtn,
+                        styles.flexOne,
+                        { alignItems: 'center' },
+                        active && styles.themeSegmentBtnActive,
+                      ]}
+                      onPress={() => setShareDurationMinutes(mins)}
+                    >
+                      <Text
+                        style={[
+                          styles.themeSegmentText,
+                          active && styles.themeSegmentTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <TouchableOpacity
+                style={styles.menuRow}
+                onPress={() => setShareAllowMutual((v) => !v)}
+              >
+                <View style={styles.flexOne}>
+                  <Text style={styles.settingsSectionTitle}>Mutual guest sharing</Text>
+                  <Text style={styles.settingsHint}>
+                    {shareAllowMutual
+                      ? 'Guests can share their pins back on this link'
+                      : 'View-only (only your pin is shown)'}
+                  </Text>
+                </View>
+                <Text style={styles.menuRowAction}>{shareAllowMutual ? 'On' : 'Off'}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.openMapsBtn, { alignItems: 'center', paddingVertical: 11 }]}
+                disabled={shareBusy || !activeGroup}
+                onPress={() => void handleCreateMobileShareLink()}
+              >
+                <Text style={[styles.openMapsBtnText, { fontSize: 13 }]}>
+                  {shareBusy ? 'Creating...' : 'Create Share Link'}
+                </Text>
+              </TouchableOpacity>
+
+              {shareError && <Text style={styles.errorText}>{shareError}</Text>}
+
+              <ScrollView style={{ maxHeight: 200 }} contentContainerStyle={{ gap: 8 }}>
+                {shareLinks.map((item) => {
+                  const shareUrl = resolveMobileShareUrl(serverUrl, item);
+                  return (
+                    <View key={item.token} style={styles.shareLinkCard}>
+                      <View style={styles.flexOne}>
+                        <Text style={styles.settingsSectionTitle} numberOfLines={1}>
+                          {item.label ?? `${item.groupName} Share`}
+                        </Text>
+                        <Text style={styles.settingsHint} numberOfLines={1}>
+                          {item.allowGuestSharing
+                            ? `${item.activeGuestCount} guest${item.activeGuestCount === 1 ? '' : 's'} · ${new Date(item.expiresAt).toLocaleTimeString()}`
+                            : `View-only · ends ${new Date(item.expiresAt).toLocaleTimeString()}`}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.openMapsBtn}
+                        onPress={() => void handleShareNativeLink(item)}
+                      >
+                        <Text style={styles.openMapsBtnText}>Share</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.shareOpenBtn}
+                        onPress={() => void Linking.openURL(shareUrl)}
+                      >
+                        <Text style={styles.shareOpenBtnText}>Open</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.shareRevokeBtn}
+                        disabled={shareBusy}
+                        onPress={() => void handleRevokeMobileShareLink(item.token)}
+                      >
+                        <Text style={styles.shareRevokeBtnText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
         </View>
       </Modal>
 
@@ -3156,6 +3388,52 @@ const styles = StyleSheet.create({
   dismissMemberText: {
     color: '#52525b',
     fontSize: 12,
+    fontWeight: '700',
+  },
+  shareInput: {
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    backgroundColor: '#fafafa',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 13,
+    color: '#18181b',
+  },
+  shareLinkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    backgroundColor: '#fafafa',
+    padding: 10,
+  },
+  shareOpenBtn: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  shareOpenBtnText: {
+    color: '#18181b',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  shareRevokeBtn: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fecdd3',
+    backgroundColor: '#fff1f2',
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  shareRevokeBtnText: {
+    color: '#be123c',
+    fontSize: 11,
     fontWeight: '700',
   },
   memberChipDot: {

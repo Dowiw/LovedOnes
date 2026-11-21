@@ -146,6 +146,7 @@ services:
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-lovedones}}
       REDIS_URL: ${DOCKER_REDIS_URL:-redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-key-minimum-32-characters-long}
+      PUBLIC_SERVER_URL: ${PUBLIC_SERVER_URL:-http://localhost:${GATEWAY_PORT:-8080}}
       LOG_DIR: /var/log/app
       LOG_RETENTION_FILES: ${LOG_RETENTION_FILES:-10}
       LOG_RING_MAX_ENTRIES: ${LOG_RING_MAX_ENTRIES:-500}

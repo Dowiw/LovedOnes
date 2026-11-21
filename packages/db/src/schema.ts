@@ -229,3 +229,31 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const locationShareLinks = pgTable('location_share_links', {
+  token: varchar('token', { length: 96 }).primaryKey(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  groupId: uuid('group_id')
+    .notNull()
+    .references(() => groups.id, { onDelete: 'cascade' }),
+  label: varchar('label', { length: 80 }),
+  allowGuestSharing: boolean('allow_guest_sharing').default(true).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const locationShareGuests = pgTable('location_share_guests', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  shareToken: varchar('share_token', { length: 96 })
+    .notNull()
+    .references(() => locationShareLinks.token, { onDelete: 'cascade' }),
+  guestSecret: varchar('guest_secret', { length: 96 }).notNull(),
+  displayName: varchar('display_name', { length: 40 }).notNull(),
+  latitude: doublePrecision('latitude').notNull(),
+  longitude: doublePrecision('longitude').notNull(),
+  accuracy: doublePrecision('accuracy'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});

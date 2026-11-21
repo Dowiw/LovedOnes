@@ -37,11 +37,13 @@ import {
   PostgresRealtimeStore,
   SocketIoBroadcaster,
 } from './adapters/postgres-socketio-adapters.js';
+import { PostgresShareLinkStore } from './adapters/postgres-share-links-adapter.js';
 import {
   PostgresPushSubscriptionStore,
   WebPushTransport,
 } from './adapters/web-push-adapter.js';
 import { PushNotificationsModule } from './domain/push-notifications-module.js';
+import { ShareLinksModule } from './domain/share-links-module.js';
 import { matchesIfNoneMatch, RealtimeModule } from './domain/realtime-module.js';
 
 export interface RealtimeServiceOptions {
@@ -171,6 +173,27 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     transport: new WebPushTransport(),
   });
 
+  const shareLinks = new ShareLinksModule({
+    store: new PostgresShareLinkStore(pool),
+    publicServerUrl: process.env.PUBLIC_SERVER_URL ?? '',
+  });
+
+  const resolveRequestOrigin = (request: {
+    headers: Record<string, string | string[] | undefined>;
+  }): string | undefined => {
+    const originHeader = request.headers.origin;
+    if (typeof originHeader === 'string' && originHeader && originHeader !== 'null') {
+      return originHeader;
+    }
+    const host = request.headers['x-forwarded-host'] ?? request.headers.host;
+    if (typeof host === 'string' && host.trim()) {
+      const proto = request.headers['x-forwarded-proto'];
+      const scheme = typeof proto === 'string' && proto.trim() ? proto.split(',')[0].trim() : 'http';
+      return `${scheme}://${host.split(',')[0].trim()}`;
+    }
+    return undefined;
+  };
+
   const realtime = new RealtimeModule({
     store: new PostgresRealtimeStore(pool),
     broadcaster: new SocketIoBroadcaster(io),
@@ -281,6 +304,76 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       return pushNotifications.sendTestNotification(user.id, user.username);
     },
   );
+
+  app.get(
+    '/api/realtime/share-links',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const links = await shareLinks.listShareLinks(
+        request.authUser!,
+        resolveRequestOrigin(request),
+      );
+      return { links };
+    },
+  );
+
+  app.post(
+    '/api/realtime/share-links',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest, reply) => {
+      const user = request.authUser!;
+      const link = await shareLinks.createShareLink(
+        user,
+        request.body,
+        resolveRequestOrigin(request),
+      );
+      loggerHandle.logger.info(
+        {
+          action: 'share_link.created',
+          userId: user.id,
+          username: user.username,
+          groupId: link.groupId,
+          allowGuestSharing: link.allowGuestSharing,
+          expiresAt: link.expiresAt,
+        },
+        `${user.username} created temporary guest share link (${link.allowGuestSharing ? 'mutual' : 'view-only'})`,
+      );
+      return reply.code(201).send({ link });
+    },
+  );
+
+  app.delete(
+    '/api/realtime/share-links/:token',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const { token } = request.params as { token: string };
+      const res = await shareLinks.revokeShareLink(user, token);
+      loggerHandle.logger.info(
+        { action: 'share_link.revoked', userId: user.id, username: user.username },
+        `${user.username} revoked temporary guest share link`,
+      );
+      return res;
+    },
+  );
+
+  app.get('/api/realtime/public/share/:token', async (request, reply) => {
+    const { token } = request.params as { token: string };
+    reply.header('Cache-Control', 'no-store');
+    return shareLinks.getPublicShareSnapshot(token);
+  });
+
+  app.post('/api/realtime/public/share/:token/ping', async (request, reply) => {
+    const { token } = request.params as { token: string };
+    reply.header('Cache-Control', 'no-store');
+    return shareLinks.upsertGuestPing(token, request.body);
+  });
+
+  app.delete('/api/realtime/public/share/:token/ping', async (request, reply) => {
+    const { token } = request.params as { token: string };
+    reply.header('Cache-Control', 'no-store');
+    return shareLinks.stopGuestPing(token, request.body);
+  });
 
   app.post(
     '/api/realtime/locations',

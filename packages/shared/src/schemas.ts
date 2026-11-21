@@ -896,3 +896,74 @@ export interface WebPushNotificationPayload {
   groupId?: string;
   tab?: 'people' | 'chat' | 'places' | 'requests';
 }
+
+export const CreateLocationShareLinkSchema = z.object({
+  groupId: z.string().uuid(),
+  durationMinutes: z.number().int().min(5).max(1440).default(60),
+  label: z.string().trim().min(1).max(80).optional(),
+  allowGuestSharing: z.boolean().default(true),
+});
+export type CreateLocationShareLinkInput = z.infer<typeof CreateLocationShareLinkSchema>;
+
+export const GuestSharePingSchema = z.object({
+  displayName: z.string().trim().min(1).max(40),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  accuracy: z.number().min(0).max(50000).nullable().optional(),
+  guestId: z.string().uuid().optional(),
+  guestSecret: z.string().trim().min(16).max(128).optional(),
+});
+export type GuestSharePingInput = z.infer<typeof GuestSharePingSchema>;
+
+export const GuestShareStopSchema = z.object({
+  guestId: z.string().uuid(),
+  guestSecret: z.string().trim().min(16).max(128),
+});
+export type GuestShareStopInput = z.infer<typeof GuestShareStopSchema>;
+
+export interface LocationShareLinkItem {
+  token: string;
+  groupId: string;
+  groupName: string;
+  label: string | null;
+  allowGuestSharing: boolean;
+  activeGuestCount: number;
+  expiresAt: string;
+  createdAt: string;
+  shareUrl: string;
+}
+
+export interface PublicLocationShareGuest {
+  id: string;
+  displayName: string;
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  updatedAt: string;
+}
+
+export interface PublicLocationShareCreatorPin {
+  userId: string;
+  username: string;
+  avatarUrl: string | null;
+  haloColor: string | null;
+  fuzzCircleColor: string | null;
+  privacyMode: PrivacyMode;
+  isFuzzed: boolean;
+  hidden: boolean;
+  latitude: number | null;
+  longitude: number | null;
+  altitude: number | null;
+  speed: number | null;
+  batteryLevel: number | null;
+  recordedAt: string | null;
+}
+
+export interface PublicLocationShareSnapshot {
+  token: string;
+  label: string | null;
+  allowGuestSharing: boolean;
+  expiresAt: string;
+  creator: PublicLocationShareCreatorPin;
+  guests: PublicLocationShareGuest[];
+}

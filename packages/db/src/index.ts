@@ -1111,3 +1111,281 @@ export async function listGroupMemberUserIds(
   );
   return res.rows.map((r) => r.user_id);
 }
+
+export interface StoredLocationShareLinkRow {
+  token: string;
+  userId: string;
+  groupId: string;
+  groupName: string;
+  label: string | null;
+  allowGuestSharing: boolean;
+  activeGuestCount: number;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface StoredShareGuestRow {
+  id: string;
+  shareToken: string;
+  guestSecret: string;
+  displayName: string;
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  updatedAt: string;
+}
+
+export async function createLocationShareLinkRecord(
+  pool: pg.Pool,
+  input: {
+    token: string;
+    userId: string;
+    groupId: string;
+    label: string | null;
+    allowGuestSharing: boolean;
+    expiresAt: Date;
+    now: Date;
+  },
+): Promise<StoredLocationShareLinkRow> {
+  await pool.query(
+    `INSERT INTO location_share_links (token, user_id, group_id, label, allow_guest_sharing, expires_at, created_at)
+     VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7)`,
+    [
+      input.token,
+      input.userId,
+      input.groupId,
+      input.label,
+      input.allowGuestSharing,
+      input.expiresAt,
+      input.now,
+    ],
+  );
+  const groupRes = await pool.query<{ name: string }>('SELECT name FROM groups WHERE id = $1::uuid', [
+    input.groupId,
+  ]);
+  return {
+    token: input.token,
+    userId: input.userId,
+    groupId: input.groupId,
+    groupName: groupRes.rows[0]?.name ?? 'Group',
+    label: input.label,
+    allowGuestSharing: input.allowGuestSharing,
+    activeGuestCount: 0,
+    expiresAt: input.expiresAt.toISOString(),
+    revokedAt: null,
+    createdAt: input.now.toISOString(),
+  };
+}
+
+export async function listActiveLocationShareLinksForUser(
+  pool: pg.Pool,
+  userId: string,
+  now: Date,
+  guestActiveWindowMs: number,
+): Promise<StoredLocationShareLinkRow[]> {
+  const cutoff = new Date(now.getTime() - guestActiveWindowMs);
+  const res = await pool.query<{
+    token: string;
+    user_id: string;
+    group_id: string;
+    group_name: string;
+    label: string | null;
+    allow_guest_sharing: boolean;
+    active_guest_count: string;
+    expires_at: Date;
+    revoked_at: Date | null;
+    created_at: Date;
+  }>(
+    `SELECT l.token, l.user_id, l.group_id, g.name AS group_name, l.label, l.allow_guest_sharing,
+            COUNT(sg.id) FILTER (WHERE sg.updated_at >= $3) AS active_guest_count,
+            l.expires_at, l.revoked_at, l.created_at
+     FROM location_share_links l
+     INNER JOIN groups g ON g.id = l.group_id
+     LEFT JOIN location_share_guests sg ON sg.share_token = l.token
+     WHERE l.user_id = $1::uuid
+       AND l.revoked_at IS NULL
+       AND l.expires_at > $2
+     GROUP BY l.token, g.name
+     ORDER BY l.created_at DESC`,
+    [userId, now, cutoff],
+  );
+  return res.rows.map((r) => ({
+    token: r.token,
+    userId: r.user_id,
+    groupId: r.group_id,
+    groupName: r.group_name,
+    label: r.label,
+    allowGuestSharing: r.allow_guest_sharing,
+    activeGuestCount: Number.parseInt(r.active_guest_count, 10) || 0,
+    expiresAt: r.expires_at.toISOString(),
+    revokedAt: r.revoked_at ? r.revoked_at.toISOString() : null,
+    createdAt: r.created_at.toISOString(),
+  }));
+}
+
+export async function getLocationShareLinkByToken(
+  pool: pg.Pool,
+  token: string,
+): Promise<StoredLocationShareLinkRow | null> {
+  const res = await pool.query<{
+    token: string;
+    user_id: string;
+    group_id: string;
+    group_name: string;
+    label: string | null;
+    allow_guest_sharing: boolean;
+    expires_at: Date;
+    revoked_at: Date | null;
+    created_at: Date;
+  }>(
+    `SELECT l.token, l.user_id, l.group_id, g.name AS group_name, l.label, l.allow_guest_sharing,
+            l.expires_at, l.revoked_at, l.created_at
+     FROM location_share_links l
+     INNER JOIN groups g ON g.id = l.group_id
+     WHERE l.token = $1
+     LIMIT 1`,
+    [token],
+  );
+  const r = res.rows[0];
+  if (!r) return null;
+  return {
+    token: r.token,
+    userId: r.user_id,
+    groupId: r.group_id,
+    groupName: r.group_name,
+    label: r.label,
+    allowGuestSharing: r.allow_guest_sharing,
+    activeGuestCount: 0,
+    expiresAt: r.expires_at.toISOString(),
+    revokedAt: r.revoked_at ? r.revoked_at.toISOString() : null,
+    createdAt: r.created_at.toISOString(),
+  };
+}
+
+export async function revokeLocationShareLinkRecord(
+  pool: pg.Pool,
+  userId: string,
+  token: string,
+  now: Date,
+): Promise<boolean> {
+  const res = await pool.query(
+    `UPDATE location_share_links
+     SET revoked_at = $3
+     WHERE token = $1 AND user_id = $2::uuid AND revoked_at IS NULL`,
+    [token, userId, now],
+  );
+  if ((res.rowCount ?? 0) > 0) {
+    await pool.query('DELETE FROM location_share_guests WHERE share_token = $1', [token]);
+    return true;
+  }
+  return false;
+}
+
+export async function listActiveShareGuests(
+  pool: pg.Pool,
+  shareToken: string,
+  since: Date,
+): Promise<StoredShareGuestRow[]> {
+  const res = await pool.query<{
+    id: string;
+    share_token: string;
+    guest_secret: string;
+    display_name: string;
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    updated_at: Date;
+  }>(
+    `SELECT id, share_token, guest_secret, display_name, latitude, longitude, accuracy, updated_at
+     FROM location_share_guests
+     WHERE share_token = $1 AND updated_at >= $2
+     ORDER BY updated_at DESC`,
+    [shareToken, since],
+  );
+  return res.rows.map((r) => ({
+    id: r.id,
+    shareToken: r.share_token,
+    guestSecret: r.guest_secret,
+    displayName: r.display_name,
+    latitude: r.latitude,
+    longitude: r.longitude,
+    accuracy: r.accuracy ?? null,
+    updatedAt: r.updated_at.toISOString(),
+  }));
+}
+
+export async function upsertShareGuestRecord(
+  pool: pg.Pool,
+  input: {
+    id: string;
+    shareToken: string;
+    guestSecret: string;
+    displayName: string;
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    now: Date;
+    staleCutoff: Date;
+  },
+): Promise<'inserted' | 'updated' | 'forbidden'> {
+  // Prune stale guest entries for this link first
+  await pool.query(
+    'DELETE FROM location_share_guests WHERE share_token = $1 AND updated_at < $2',
+    [input.shareToken, input.staleCutoff],
+  );
+
+  const existing = await pool.query<{ guest_secret: string }>(
+    'SELECT guest_secret FROM location_share_guests WHERE id = $1::uuid AND share_token = $2 LIMIT 1',
+    [input.id, input.shareToken],
+  );
+
+  if (existing.rows[0]) {
+    if (existing.rows[0].guest_secret !== input.guestSecret) {
+      return 'forbidden';
+    }
+    await pool.query(
+      `UPDATE location_share_guests
+       SET display_name = $3, latitude = $4, longitude = $5, accuracy = $6, updated_at = $7
+       WHERE id = $1::uuid AND share_token = $2`,
+      [
+        input.id,
+        input.shareToken,
+        input.displayName,
+        input.latitude,
+        input.longitude,
+        input.accuracy,
+        input.now,
+      ],
+    );
+    return 'updated';
+  }
+
+  await pool.query(
+    `INSERT INTO location_share_guests (id, share_token, guest_secret, display_name, latitude, longitude, accuracy, updated_at)
+     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      input.id,
+      input.shareToken,
+      input.guestSecret,
+      input.displayName,
+      input.latitude,
+      input.longitude,
+      input.accuracy,
+      input.now,
+    ],
+  );
+  return 'inserted';
+}
+
+export async function deleteShareGuestRecord(
+  pool: pg.Pool,
+  input: { shareToken: string; guestId: string; guestSecret: string },
+): Promise<boolean> {
+  const res = await pool.query(
+    `DELETE FROM location_share_guests
+     WHERE id = $1::uuid AND share_token = $2 AND guest_secret = $3`,
+    [input.guestId, input.shareToken, input.guestSecret],
+  );
+  return (res.rowCount ?? 0) > 0;
+}

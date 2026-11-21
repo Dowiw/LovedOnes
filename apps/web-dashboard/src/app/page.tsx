@@ -33,6 +33,7 @@ import {
   Route,
   Send,
   Settings,
+  Share2,
   Smartphone,
   Sun,
   Trash2,
@@ -49,6 +50,7 @@ import {
   type GroupPlace,
   type LocationBroadcast,
   type LocationRequestItem,
+  type LocationShareLinkItem,
   type MapDownloadJob,
   type MapRegion,
   type PlaceTransitionEvent,
@@ -63,6 +65,7 @@ import {
   apiCreateGroup,
   apiCreateGroupPlace,
   apiCreateLocationRequest,
+  apiCreateShareLink,
   apiCreateTrackerToken,
   apiDeleteGroupPlace,
   apiFetchAppVersion,
@@ -77,12 +80,14 @@ import {
   apiGetMe,
   apiGetTrackerTokenStatus,
   apiJoinInvite,
+  apiListShareLinks,
   apiLogin,
   apiRegister,
   apiRequestMapDownload,
   apiRequestPasswordReset,
   apiResetPasswordWithCode,
   apiRespondLocationRequest,
+  apiRevokeShareLink,
   apiRevokeTrackerToken,
   apiSendLocationBatch,
   apiTestWebPush,
@@ -213,6 +218,14 @@ export default function HomePage() {
   const [trackerLoading, setTrackerLoading] = useState(false);
   const [trackerFeedback, setTrackerFeedback] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const [shareLinksOpen, setShareLinksOpen] = useState(false);
+  const [shareDurationMinutes, setShareDurationMinutes] = useState<number>(60);
+  const [shareLabelInput, setShareLabelInput] = useState('');
+  const [shareAllowMutual, setShareAllowMutual] = useState(true);
+  const [shareLinks, setShareLinks] = useState<LocationShareLinkItem[]>([]);
+  const [shareLinkBusy, setShareLinkBusy] = useState(false);
+  const [shareLinkError, setShareLinkError] = useState<string | null>(null);
 
   const [privacySavingMode, setPrivacySavingMode] = useState<PrivacyMode | null>(null);
   const [privacyFeedback, setPrivacyFeedback] = useState<PrivacyMode | null>(null);
@@ -600,7 +613,46 @@ export default function HomePage() {
   useEffect(() => {
     if (!session) return;
     void refreshMapRegions(false);
+    void apiListShareLinks(session.accessToken)
+      .then(setShareLinks)
+      .catch(() => {});
   }, [session, refreshMapRegions]);
+
+  async function handleCreateShareLink() {
+    if (!session || !activeGroup) return;
+    setShareLinkError(null);
+    setShareLinkBusy(true);
+    try {
+      const created = await withMinDelay(
+        apiCreateShareLink(session.accessToken, {
+          groupId: activeGroup.id,
+          durationMinutes: shareDurationMinutes,
+          label: shareLabelInput.trim() || undefined,
+          allowGuestSharing: shareAllowMutual,
+        }),
+      );
+      setShareLinks((prev) => [created, ...prev]);
+      setShareLabelInput('');
+    } catch (err) {
+      setShareLinkError(err instanceof Error ? err.message : 'Failed to create share link');
+    } finally {
+      setShareLinkBusy(false);
+    }
+  }
+
+  async function handleRevokeShareLink(token: string) {
+    if (!session) return;
+    setShareLinkError(null);
+    setShareLinkBusy(true);
+    try {
+      await apiRevokeShareLink(session.accessToken, token);
+      setShareLinks((prev) => prev.filter((item) => item.token !== token));
+    } catch (err) {
+      setShareLinkError(err instanceof Error ? err.message : 'Failed to revoke share link');
+    } finally {
+      setShareLinkBusy(false);
+    }
+  }
 
   const activeMapJob = useMemo(
     () =>
@@ -2500,6 +2552,144 @@ export default function HomePage() {
                         {activeMapJob ? 'Download in progress…' : 'Download map for current view'}
                       </button>
                     )}
+                </div>
+              )}
+            </div>
+
+            {/* Guest Share Links (Temporary Meetup Links) */}
+            <div className="border-t border-zinc-100 pt-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setShareLinksOpen((v) => !v);
+                  if (!shareLinksOpen && session) {
+                    void apiListShareLinks(session.accessToken).then(setShareLinks).catch(() => {});
+                  }
+                }}
+                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100"
+              >
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                  <Share2 className="h-3.5 w-3.5 text-zinc-500" />
+                  Guest Share Links
+                </span>
+                <span className="flex items-center gap-1.5">
+                  {shareLinks.length > 0 && (
+                    <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white">
+                      {shareLinks.length}
+                    </span>
+                  )}
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform ${
+                      shareLinksOpen ? 'rotate-180 text-zinc-800' : ''
+                    }`}
+                  />
+                </span>
+              </button>
+
+              {shareLinksOpen && (
+                <div className="mt-2 space-y-2.5 px-1">
+                  <p className="text-[11px] leading-snug text-zinc-500">
+                    Share an isolated link with people outside your group. Only participants on the
+                    same link see each other.
+                  </p>
+                  <input
+                    type="text"
+                    maxLength={80}
+                    value={shareLabelInput}
+                    onChange={(e) => setShareLabelInput(e.target.value)}
+                    placeholder="Label (optional, e.g. Meetup)"
+                    className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                  />
+                  <label className="flex items-center gap-2 text-[11px] text-zinc-700">
+                    <input
+                      type="checkbox"
+                      checked={shareAllowMutual}
+                      onChange={(e) => setShareAllowMutual(e.target.checked)}
+                      className="rounded border-zinc-300"
+                    />
+                    Allow guests on this link to share back
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={shareDurationMinutes}
+                      onChange={(e) => setShareDurationMinutes(Number(e.target.value))}
+                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    >
+                      <option value={15}>15 min</option>
+                      <option value={60}>1 hour</option>
+                      <option value={240}>4 hours</option>
+                      <option value={1440}>24 hours</option>
+                    </select>
+                    <button
+                      type="button"
+                      disabled={shareLinkBusy || !activeGroup || activeGroup.myRole === 'SPECTATOR'}
+                      onClick={() => void handleCreateShareLink()}
+                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      {shareLinkBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                      Create Link
+                    </button>
+                  </div>
+                  {shareLinkError && (
+                    <p className="text-[11px] text-rose-600">{shareLinkError}</p>
+                  )}
+                  {shareLinks.length > 0 && (
+                    <div className="space-y-1.5">
+                      {shareLinks.map((item) => {
+                        const resolvedUrl =
+                          typeof window !== 'undefined'
+                            ? `${window.location.origin}/share/${item.token}`
+                            : item.shareUrl;
+                        return (
+                          <div
+                            key={item.token}
+                            className="space-y-1.5 rounded-lg border border-zinc-200/80 bg-zinc-50 p-2 text-[10px]"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate font-semibold text-zinc-900">
+                                {item.label ?? `${item.groupName} Share`}
+                              </span>
+                              <span className="shrink-0 text-zinc-500">
+                                {item.allowGuestSharing
+                                  ? `${item.activeGuestCount} guest${item.activeGuestCount === 1 ? '' : 's'}`
+                                  : 'View-only'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <input
+                                readOnly
+                                value={resolvedUrl}
+                                className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[10px] text-zinc-700"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleCopyText(`share:${item.token}`, resolvedUrl)}
+                                className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 hover:bg-zinc-100"
+                              >
+                                {copiedField === `share:${item.token}` ? 'Copied' : 'Copy'}
+                              </button>
+                              <Link
+                                href={`/share/${item.token}`}
+                                target="_blank"
+                                className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 hover:bg-zinc-100"
+                              >
+                                Open
+                              </Link>
+                              <button
+                                type="button"
+                                disabled={shareLinkBusy}
+                                onClick={() => void handleRevokeShareLink(item.token)}
+                                title="Revoke share link"
+                                className="shrink-0 rounded-md border border-rose-200 bg-rose-50 p-1 text-rose-600 hover:bg-rose-100"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
