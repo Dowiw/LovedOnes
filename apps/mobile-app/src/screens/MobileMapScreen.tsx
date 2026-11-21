@@ -21,6 +21,7 @@ import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-ca
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
 import {
+  buildExternalMapsUrls,
   buildGeodesicCircleRing,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
@@ -186,6 +187,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
   const systemColorScheme = useColorScheme();
   const [mapThemePreference, setMapThemePreference] = useState<MobileMapThemePreference>('system');
@@ -208,6 +210,42 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     () => groups.find((g) => g.id === activeGroupId) ?? groups[0] ?? null,
     [groups, activeGroupId],
   );
+
+  const selectedMember = useMemo(
+    () => (selectedMemberId ? locations.find((l) => l.userId === selectedMemberId) ?? null : null),
+    [locations, selectedMemberId],
+  );
+
+  const handleSelectMember = useCallback((loc: LocationBroadcast) => {
+    setSelectedMemberId(loc.userId);
+    cameraRef.current?.flyTo({
+      center: [loc.longitude, loc.latitude],
+      zoom: 14.5,
+      duration: 550,
+    });
+  }, []);
+
+  const handleOpenInDefaultMaps = useCallback(async (loc: LocationBroadcast) => {
+    const label = loc.isFuzzed ? `${loc.username} (~1km)` : loc.username;
+    const urls = buildExternalMapsUrls({
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      label,
+      platformOs: Platform.OS,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      isNativeApp: true,
+    });
+    try {
+      const canOpenPrimary = await Linking.canOpenURL(urls.primaryUrl);
+      await Linking.openURL(canOpenPrimary ? urls.primaryUrl : urls.fallbackUrl);
+    } catch {
+      try {
+        await Linking.openURL(urls.fallbackUrl);
+      } catch (err) {
+        setStatusBanner(formatUserError(err, 'Could not open external Maps app'));
+      }
+    }
+  }, []);
 
   const useCompositeServerTiles = useMemo(() => {
     const operational = mapRegions.filter((r) => !r.isStub);
@@ -1320,7 +1358,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               : DEFAULT_EXACT_HALO_COLOR;
           return (
             <Marker key={loc.userId} id={loc.userId} lngLat={[loc.longitude, loc.latitude]}>
-              <View style={styles.marker}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => handleSelectMember(loc)}
+                style={styles.marker}
+              >
                 <Text style={styles.markerLabel}>
                   {loc.username}
                   {loc.isFuzzed ? ' (~1km)' : ''}
@@ -1336,7 +1378,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                     <View style={[styles.markerDot, { backgroundColor: resolvedHalo }]} />
                   </View>
                 )}
-              </View>
+              </TouchableOpacity>
             </Marker>
           );
         })}
@@ -1529,6 +1571,53 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
       {/* Bottom Floating Controls & Safe-Area Bottom Sheet */}
       <View style={styles.bottomWrap} pointerEvents="box-none">
+        {selectedMember && (
+          <View style={styles.selectedMemberCard}>
+            <View style={styles.selectedMemberInfo}>
+              <View style={styles.selectedMemberHeader}>
+                <Text style={styles.selectedMemberName} numberOfLines={1}>
+                  {selectedMember.username}
+                </Text>
+                <View
+                  style={[
+                    styles.selectedMemberBadge,
+                    selectedMember.isFuzzed
+                      ? styles.selectedMemberBadgeFuzzed
+                      : styles.selectedMemberBadgeExact,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.selectedMemberBadgeText,
+                      selectedMember.isFuzzed && styles.selectedMemberBadgeTextFuzzed,
+                    ]}
+                  >
+                    {selectedMember.isFuzzed ? 'FUZZED · ~1km' : selectedMember.privacyMode}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.selectedMemberCoords}>
+                {selectedMember.latitude.toFixed(4)}, {selectedMember.longitude.toFixed(4)}
+              </Text>
+            </View>
+            <View style={styles.selectedMemberActions}>
+              <TouchableOpacity
+                style={styles.openMapsBtn}
+                onPress={() => void handleOpenInDefaultMaps(selectedMember)}
+              >
+                <Text style={styles.openMapsBtnText}>Open in Maps</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.dismissMemberBtn}
+                accessibilityLabel="Close member actions"
+                onPress={() => setSelectedMemberId(null)}
+              >
+                <Text style={styles.dismissMemberText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
         <View style={styles.floatingCtaRow} pointerEvents="box-none">
           <TouchableOpacity
             style={styles.floatingCircleBtn}
@@ -1589,8 +1678,14 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             >
               {locations.map((loc) => {
                 const chipAvatar = isSafeAvatarUrl(loc.avatarUrl) ? loc.avatarUrl : null;
+                const isSelected = selectedMemberId === loc.userId;
                 return (
-                  <View key={loc.userId} style={styles.memberChip}>
+                  <TouchableOpacity
+                    key={loc.userId}
+                    activeOpacity={0.8}
+                    onPress={() => handleSelectMember(loc)}
+                    style={[styles.memberChip, isSelected && styles.memberChipSelected]}
+                  >
                     {chipAvatar ? (
                       <Image source={{ uri: chipAvatar }} style={styles.memberChipAvatar} />
                     ) : (
@@ -1601,11 +1696,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                         ]}
                       />
                     )}
-                    <Text style={styles.memberChipText}>
+                    <Text
+                      style={[styles.memberChipText, isSelected && styles.memberChipTextSelected]}
+                    >
                       {loc.username}
                       {loc.isFuzzed ? ' ~1km' : ''}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
             </ScrollView>
@@ -2966,6 +3063,100 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
+  },
+  memberChipSelected: {
+    backgroundColor: '#18181b',
+    borderColor: '#18181b',
+  },
+  memberChipTextSelected: {
+    color: '#ffffff',
+  },
+  selectedMemberCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+    shadowColor: '#09090b',
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  selectedMemberInfo: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  selectedMemberHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  selectedMemberName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#18181b',
+    flexShrink: 1,
+  },
+  selectedMemberBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  selectedMemberBadgeExact: {
+    backgroundColor: '#18181b',
+  },
+  selectedMemberBadgeFuzzed: {
+    backgroundColor: '#fef3c7',
+  },
+  selectedMemberBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  selectedMemberBadgeTextFuzzed: {
+    color: '#92400e',
+  },
+  selectedMemberCoords: {
+    fontSize: 11,
+    color: '#71717a',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  selectedMemberActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  openMapsBtn: {
+    backgroundColor: '#18181b',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  openMapsBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  dismissMemberBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f4f4f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dismissMemberText: {
+    color: '#52525b',
+    fontSize: 12,
+    fontWeight: '700',
   },
   memberChipDot: {
     width: 7,

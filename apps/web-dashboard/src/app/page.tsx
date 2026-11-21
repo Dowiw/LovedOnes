@@ -25,6 +25,7 @@ import {
   MessageSquare,
   Monitor,
   Moon,
+  Navigation,
   PanelRight,
   Plus,
   QrCode,
@@ -39,6 +40,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  buildExternalMapsUrls,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
   withMinDelay,
@@ -2837,46 +2839,66 @@ export default function HomePage() {
             {/* People Tab */}
             {inspectorTab === 'people' && (
               <div key="tab-people" className="lo-tab-enter flex-1 space-y-1.5 overflow-y-auto p-3">
-                {locations.map((loc) => (
-                  <div
-                    key={loc.userId}
-                    className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2.5 transition hover:border-zinc-200 hover:bg-white"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setSelectedUserId(loc.userId)}
-                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                {locations.map((loc) => {
+                  const externalMaps = buildExternalMapsUrls({
+                    latitude: loc.latitude,
+                    longitude: loc.longitude,
+                    label: loc.isFuzzed ? `${loc.username} (~1km)` : loc.username,
+                    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+                  });
+                  return (
+                    <div
+                      key={loc.userId}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2.5 transition hover:border-zinc-200 hover:bg-white"
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
-                        {isSafeAvatarUrl(loc.avatarUrl) ? (
-                          <img
-                            src={loc.avatarUrl}
-                            alt={loc.username}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          loc.username.slice(0, 1).toUpperCase()
-                        )}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="truncate text-xs font-semibold text-zinc-950">
-                          {loc.username}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedUserId(loc.userId)}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                      >
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
+                          {isSafeAvatarUrl(loc.avatarUrl) ? (
+                            <img
+                              src={loc.avatarUrl}
+                              alt={loc.username}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            loc.username.slice(0, 1).toUpperCase()
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-semibold text-zinc-950">
+                            {loc.username}
+                          </div>
+                          <div className="truncate font-mono text-[10px] text-zinc-400">
+                            {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
+                          </div>
                         </div>
-                        <div className="truncate font-mono text-[10px] text-zinc-400">
-                          {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
-                        </div>
+                      </button>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${loc.isFuzzed
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-zinc-950 text-white'
+                            }`}
+                        >
+                          {loc.privacyMode}
+                        </span>
+                        <a
+                          href={externalMaps.primaryUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Open ${loc.username} in ${externalMaps.appLabel}`}
+                          aria-label={`Open ${loc.username} in default maps`}
+                          className="lo-press flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950"
+                        >
+                          <Navigation className="h-3.5 w-3.5" />
+                        </a>
                       </div>
-                    </button>
-                    <span
-                      className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${loc.isFuzzed
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-zinc-950 text-white'
-                        }`}
-                    >
-                      {loc.privacyMode}
-                    </span>
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
                 {locations.length === 0 && (
                   <div className="py-8 text-center text-xs text-zinc-400">
                     No active pins in this group yet.

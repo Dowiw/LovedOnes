@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyPrivacyFuzzing,
   averageNearbyTrailPings,
+  buildExternalMapsUrls,
   buildGeodesicCircleRing,
   ChangePasswordSchema,
   compareSemver,
@@ -12,6 +13,7 @@ import {
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
   CreateRegistrationRequestSchema,
+  detectExternalMapPlatform,
   evaluateClientVersion,
   findCoveringRegions,
   formatCountdownRemaining,
@@ -687,5 +689,48 @@ describe('@loved-ones/shared', () => {
     ).toBe('23h 05m 09s');
     expect(formatCountdownRemaining(new Date(now + 125 * 1000).toISOString(), now)).toBe('2m 05s');
     expect(formatCountdownRemaining(new Date(now - 1000).toISOString(), now)).toBe('Expired');
+  });
+
+  it('builds default Maps deep links and fallbacks across Android, iOS, macOS, Windows, and Linux', () => {
+    expect(detectExternalMapPlatform({ platformOs: 'android' })).toBe('android');
+    expect(
+      detectExternalMapPlatform({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
+      }),
+    ).toBe('windows');
+    expect(
+      detectExternalMapPlatform({
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15',
+      }),
+    ).toBe('macos');
+
+    const androidUrls = buildExternalMapsUrls({
+      latitude: 52.520008,
+      longitude: 13.404954,
+      label: 'Alice (Home)',
+      platformOs: 'android',
+      isNativeApp: true,
+    });
+    expect(androidUrls.primaryUrl).toBe('geo:52.520008,13.404954?q=52.520008,13.404954(Alice%20Home)');
+    expect(androidUrls.fallbackUrl).toBe('https://www.google.com/maps/search/?api=1&query=52.520008,13.404954');
+
+    const iosNative = buildExternalMapsUrls({
+      latitude: 52.52,
+      longitude: 13.405,
+      label: 'Bob',
+      platformOs: 'ios',
+      isNativeApp: true,
+    });
+    expect(iosNative.primaryUrl).toBe('maps://?ll=52.52,13.405&q=Bob');
+    expect(iosNative.fallbackUrl).toBe('https://maps.apple.com/?ll=52.52,13.405&q=Bob');
+
+    const windowsWeb = buildExternalMapsUrls({
+      latitude: 52.52,
+      longitude: 13.405,
+      label: 'Home',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    });
+    expect(windowsWeb.primaryUrl).toBe('bingmaps:?cp=52.52~13.405&lvl=16&sp=point.52.52_13.405_Home');
+    expect(windowsWeb.fallbackUrl).toBe('https://www.google.com/maps/search/?api=1&query=52.52,13.405');
   });
 });

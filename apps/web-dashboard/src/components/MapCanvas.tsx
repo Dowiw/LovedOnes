@@ -5,6 +5,7 @@ import maplibregl from 'maplibre-gl';
 import { PMTiles, Protocol } from 'pmtiles';
 import {
   averageNearbyTrailPings,
+  buildExternalMapsUrls,
   buildGeodesicCircleRing,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
@@ -371,6 +372,36 @@ function applyMapTheme(map: maplibregl.Map, theme: ResolvedMapTheme): void {
   }
 }
 
+function buildExternalMapsPopupRowHtml(
+  latitude: number,
+  longitude: number,
+  label: string,
+): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const urls = buildExternalMapsUrls({ latitude, longitude, label, userAgent: ua });
+  return `
+    <div class="mt-2 flex items-center gap-1.5 pt-1.5 border-t border-zinc-100">
+      <a
+        href="${escapeHtml(urls.primaryUrl)}"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="lo-popup-maps-primary inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-zinc-950 px-2.5 py-1.5 text-[11px] font-semibold text-white no-underline hover:bg-zinc-800"
+      >
+        Open in Maps
+      </a>
+      <a
+        href="${escapeHtml(urls.fallbackUrl)}"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open in browser map"
+        class="lo-popup-maps-secondary inline-flex items-center justify-center rounded-md border border-zinc-200 bg-white px-2 py-1.5 text-[10px] font-medium text-zinc-700 no-underline hover:bg-zinc-50"
+      >
+        Web
+      </a>
+    </div>
+  `;
+}
+
 function escapeHtml(raw: string): string {
   return raw
     .replace(/&/g, '&amp;')
@@ -509,9 +540,14 @@ export function MapCanvas({
       recordedAt: loc.recordedAt,
       extraLines,
     });
+    const mapsRowHtml = buildExternalMapsPopupRowHtml(
+      loc.latitude,
+      loc.longitude,
+      loc.isFuzzed ? `${loc.username} (~1km)` : loc.username,
+    );
 
     return `
-      <div class="text-xs space-y-1 min-w-[180px]">
+      <div class="text-xs space-y-1 min-w-[190px]">
         <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">
             ${popupAvatarHtml}
@@ -521,6 +557,7 @@ export function MapCanvas({
         </div>
         ${contextHtml}
         <div class="text-[11px] text-zinc-500">Last seen ${escapeHtml(formatRelativeTime(loc.recordedAt))}</div>
+        ${mapsRowHtml}
         ${detailsHtml}
       </div>
     `;
@@ -550,11 +587,13 @@ export function MapCanvas({
       recordedAt: fix.recordedAt,
       extraLines: [accLabel],
     });
+    const mapsRowHtml = buildExternalMapsPopupRowHtml(fix.latitude, fix.longitude, 'My Location');
     return `
-      <div class="text-xs space-y-1 min-w-[175px]">
+      <div class="text-xs space-y-1 min-w-[185px]">
         <div class="font-semibold text-zinc-950">You (Live GPS)</div>
         ${contextHtml}
         <div class="text-[11px] text-zinc-500">Updated ${escapeHtml(formatRelativeTime(fix.recordedAt))}</div>
+        ${mapsRowHtml}
         ${detailsHtml}
       </div>
     `;
@@ -1032,10 +1071,16 @@ export function MapCanvas({
       activePlaceIds.add(place.id);
       const existing = placeMarkersRef.current.get(place.id);
       const safeName = escapeHtml(place.name);
+      const placeMapsHtml = buildExternalMapsPopupRowHtml(
+        place.latitude,
+        place.longitude,
+        place.name,
+      );
       const popupHtml = `
-        <div class="text-xs space-y-0.5">
+        <div class="text-xs space-y-0.5 min-w-[180px]">
           <div class="font-semibold text-zinc-900">${safeName}</div>
           <div class="text-zinc-500">Geofence radius: ${Math.round(place.radiusMeters)} m</div>
+          ${placeMapsHtml}
         </div>
       `;
       if (existing) {

@@ -172,3 +172,102 @@ export function slugifyCityName(name: string, latitude: number, longitude: numbe
   const lonTag = `${Math.abs(longitude).toFixed(2)}${longitude >= 0 ? 'e' : 'w'}`;
   return `${base}-${latTag}-${lonTag}`.replace(/\./g, '_');
 }
+
+export type ExternalMapPlatform = 'android' | 'ios' | 'macos' | 'windows' | 'linux';
+
+export interface ExternalMapPlatformInput {
+  platformOs?: string | null;
+  userAgent?: string | null;
+}
+
+export interface ExternalMapsUrlOptions extends ExternalMapPlatformInput {
+  latitude: number;
+  longitude: number;
+  label?: string | null;
+  isNativeApp?: boolean;
+}
+
+export interface ExternalMapsUrls {
+  platform: ExternalMapPlatform;
+  primaryUrl: string;
+  fallbackUrl: string;
+  appLabel: string;
+}
+
+export function detectExternalMapPlatform(
+  input: ExternalMapPlatformInput = {},
+): ExternalMapPlatform {
+  const os = input.platformOs?.toLowerCase().trim();
+  if (os === 'android') return 'android';
+  if (os === 'ios') return 'ios';
+  if (os === 'macos') return 'macos';
+  if (os === 'windows') return 'windows';
+
+  const ua = (input.userAgent ?? '').toLowerCase();
+  if (ua.includes('android')) return 'android';
+  if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ipod')) return 'ios';
+  if (ua.includes('macintosh') || ua.includes('mac os x')) return 'macos';
+  if (ua.includes('windows')) return 'windows';
+  return 'linux';
+}
+
+/**
+ * Builds platform-native default Maps app deep links (`geo:`, `maps://`, `bingmaps:`)
+ * paired with a universal web maps fallback URL.
+ */
+export function buildExternalMapsUrls(options: ExternalMapsUrlOptions): ExternalMapsUrls {
+  const lat = Number(Math.max(-90, Math.min(90, options.latitude)).toFixed(6));
+  const lon = Number(Math.max(-180, Math.min(180, options.longitude)).toFixed(6));
+  const cleanLabel = (options.label ?? 'Location')
+    .replace(/[()\r\n]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80) || 'Location';
+  const encodedLabel = encodeURIComponent(cleanLabel);
+  const platform = detectExternalMapPlatform(options);
+  const googleFallback = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  const appleUniversal = `https://maps.apple.com/?ll=${lat},${lon}&q=${encodedLabel}`;
+
+  if (platform === 'android') {
+    return {
+      platform,
+      primaryUrl: `geo:${lat},${lon}?q=${lat},${lon}(${encodedLabel})`,
+      fallbackUrl: googleFallback,
+      appLabel: 'Default Maps',
+    };
+  }
+
+  if (platform === 'ios') {
+    return {
+      platform,
+      primaryUrl: options.isNativeApp ? `maps://?ll=${lat},${lon}&q=${encodedLabel}` : appleUniversal,
+      fallbackUrl: options.isNativeApp ? appleUniversal : googleFallback,
+      appLabel: 'Apple Maps',
+    };
+  }
+
+  if (platform === 'macos') {
+    return {
+      platform,
+      primaryUrl: `maps://?ll=${lat},${lon}&q=${encodedLabel}`,
+      fallbackUrl: appleUniversal,
+      appLabel: 'Apple Maps',
+    };
+  }
+
+  if (platform === 'windows') {
+    return {
+      platform,
+      primaryUrl: `bingmaps:?cp=${lat}~${lon}&lvl=16&sp=point.${lat}_${lon}_${encodedLabel}`,
+      fallbackUrl: googleFallback,
+      appLabel: 'Windows Maps',
+    };
+  }
+
+  return {
+    platform,
+    primaryUrl: `geo:${lat},${lon}?q=${lat},${lon}(${encodedLabel})`,
+    fallbackUrl: googleFallback,
+    appLabel: 'Maps App',
+  };
+}

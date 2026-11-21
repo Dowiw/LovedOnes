@@ -311,3 +311,14 @@ textarea {
 [data-map-theme='dark'] .maplibregl-popup-tip {
   border-top-color: rgba(24, 24, 27, 0.96) !important;
 }
+
+[data-map-theme='dark'] .lo-popup-maps-primary {
+  background-color: #f4f4f5 !important;
+  color: #09090b !important;
+}
+
+[data-map-theme='dark'] .lo-popup-maps-secondary {
+  background-color: #27272a !important;
+  border-color: #3f3f46 !important;
+  color: #e4e4e7 !important;
+}
