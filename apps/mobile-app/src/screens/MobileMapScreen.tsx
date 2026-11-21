@@ -77,7 +77,7 @@ import {
 import { groupChatMessagesForDisplay } from '../services/chatFormatting';
 import { formatUserError } from '../services/errorFormatter';
 import { useSafeAreaInsets } from '../services/safeArea';
-import { clearStoredConfig, MobileStoredConfig, saveStoredConfig } from '../services/secureConfig';
+import { clearSessionConfig, MobileStoredConfig, saveStoredConfig } from '../services/secureConfig';
 
 interface GroupSummary {
   id: string;
@@ -925,7 +925,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           res = await send(tokens.accessToken);
         }
       } else if (refreshRes.status === 400 || refreshRes.status === 401) {
-        await clearStoredConfig();
+        await clearSessionConfig();
         onSignedOut();
       }
     }
@@ -1997,7 +1997,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               onPress={async () => {
                 setAccountOpen(false);
                 await stopBackgroundTracking().catch(() => {});
-                await clearStoredConfig();
+                await clearSessionConfig();
                 onSignedOut();
               }}
             >

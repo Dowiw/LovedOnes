@@ -4,7 +4,7 @@
     "slug": "loved-ones",
     "version": "0.1.1",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "scheme": "lovedones",
     "updates": {

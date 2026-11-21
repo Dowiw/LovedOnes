@@ -13,10 +13,19 @@ import {
   formatCacheBytes,
 } from '../services/pmtilesStyle';
 import {
+  clearSessionConfig,
   createMemoryKeyValueStore,
+  extractInviteCandidateFromUrl,
   getStoredConfig,
   parseAndBindQrInvite,
+  saveStoredConfig,
 } from '../services/secureConfig';
+import {
+  formatServerHostLabel,
+  getDefaultServerUrl,
+  getOnboardingPalette,
+  validateAuthForm,
+} from '../services/onboardingTheme';
 import {
   checkMobileAppVersion,
   formatAppUpdateNotice,
@@ -325,5 +334,95 @@ describe('@loved-ones/mobile-app', () => {
     expect(grouped[3].isMine).toBe(true);
     expect(grouped[3].showSenderHeader).toBe(false);
     expect(grouped[3].compactTime).toMatch(/^\d{2}:\d{2}$/);
+  });
+
+  it('supports lovedones:// deep links and preserves serverUrl on sign-out', async () => {
+    const deepLink =
+      'lovedones://join?token=inv_deep1234&serverUrl=https%3A%2F%2Ffamily.example.com%2F&groupName=HomeCircle';
+    expect(extractInviteCandidateFromUrl(deepLink)).toBe(deepLink);
+    expect(extractInviteCandidateFromUrl('https://family.example.com/join?token=inv_web123')).toBe(
+      'https://family.example.com/join?token=inv_web123',
+    );
+    expect(extractInviteCandidateFromUrl('https://family.example.com/')).toBeNull();
+
+    const store = createMemoryKeyValueStore();
+    const parsed = await parseAndBindQrInvite(deepLink, store);
+    expect(parsed.serverUrl).toBe('https://family.example.com');
+    expect(parsed.inviteToken).toBe('inv_deep1234');
+    expect(parsed.groupName).toBe('HomeCircle');
+
+    await saveStoredConfig(
+      {
+        accessToken: 'acc_1',
+        refreshToken: 'ref_1',
+        activeGroupId: 'grp_1',
+        user: { id: 'u1', email: 'a@b.com', username: 'Sam', role: 'USER' },
+      },
+      store,
+    );
+    await clearSessionConfig(store);
+
+    const afterSignOut = await getStoredConfig(store);
+    expect(afterSignOut.serverUrl).toBe('https://family.example.com');
+    expect(afterSignOut.accessToken).toBeNull();
+    expect(afterSignOut.refreshToken).toBeNull();
+    expect(afterSignOut.user).toBeNull();
+    expect(afterSignOut.activeGroupId).toBeNull();
+  });
+
+  it('provides monochrome light/dark onboarding tokens and friendly form validation', () => {
+    const light = getOnboardingPalette('light');
+    const dark = getOnboardingPalette('dark');
+    expect(light.canvas).toBe('#f4f4f5');
+    expect(light.ctaBg).toBe('#18181b');
+    expect(light.statusBarStyle).toBe('dark');
+    expect(dark.canvas).toBe('#09090b');
+    expect(dark.ctaBg).toBe('#fafafa');
+    expect(dark.statusBarStyle).toBe('light');
+
+    expect(formatServerHostLabel('https://track.example.com/')).toBe('track.example.com');
+    expect(formatServerHostLabel('http://localhost:8080/')).toBe('localhost:8080');
+    expect(getDefaultServerUrl('android')).toBe('http://localhost:8080');
+    expect(getDefaultServerUrl('ios')).toBe('http://localhost:8080');
+
+    expect(
+      validateAuthForm({
+        mode: 'login',
+        serverUrl: 'not-a-url',
+        email: 'a@b.com',
+        username: '',
+        password: 'secret',
+      }),
+    ).toContain('server address');
+
+    expect(
+      validateAuthForm({
+        mode: 'register',
+        serverUrl: 'https://track.example.com',
+        email: 'a@b.com',
+        username: '   ',
+        password: 'password123',
+      }),
+    ).toContain('display name');
+
+    expect(
+      validateAuthForm({
+        mode: 'register',
+        serverUrl: 'https://track.example.com',
+        email: 'a@b.com',
+        username: 'Sam',
+        password: 'short',
+      }),
+    ).toContain('8 characters');
+
+    expect(
+      validateAuthForm({
+        mode: 'register',
+        serverUrl: 'https://track.example.com',
+        email: 'a@b.com',
+        username: 'Sam',
+        password: 'password123',
+      }),
+    ).toBeNull();
   });
 });

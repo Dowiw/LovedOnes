@@ -128,8 +128,52 @@ export async function clearStoredConfig(store?: SecureKeyValueStore): Promise<vo
 }
 
 /**
- * Parses a scanned onboarding QR code payload or web join URL and binds serverUrl
- * into expo-secure-store immediately.
+ * Signs out the active user session while remembering serverUrl for quick re-entry.
+ */
+export async function clearSessionConfig(store?: SecureKeyValueStore): Promise<void> {
+  const s = store ?? (await getExpoSecureStore());
+  await Promise.all([
+    s.deleteItemAsync(KEYS.accessToken),
+    s.deleteItemAsync(KEYS.refreshToken),
+    s.deleteItemAsync(KEYS.user),
+    s.deleteItemAsync(KEYS.activeGroupId),
+  ]);
+}
+
+/**
+ * Extracts a bindable invite payload string from an incoming deep-link or web join URL.
+ */
+export function extractInviteCandidateFromUrl(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl) return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.searchParams.get('token') ? trimmed : null;
+    } catch {
+      return null;
+    }
+  }
+  if (trimmed.startsWith('lovedones://')) {
+    try {
+      const parsed = new URL(trimmed);
+      const token = parsed.searchParams.get('token');
+      const serverUrl = parsed.searchParams.get('serverUrl') || parsed.searchParams.get('server');
+      if (token && serverUrl) {
+        return trimmed;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Parses a scanned onboarding QR code payload, web join URL, or lovedones:// deep link
+ * and binds serverUrl into expo-secure-store immediately.
  */
 export async function parseAndBindQrInvite(
   rawData: string,
@@ -148,6 +192,19 @@ export async function parseAndBindQrInvite(
       candidate = {
         v: 1,
         serverUrl: parsedUrl.origin,
+        inviteToken: token,
+        groupName: parsedUrl.searchParams.get('groupName') ?? 'Invited Group',
+      };
+    } else if (trimmed.startsWith('lovedones://')) {
+      const parsedUrl = new URL(trimmed);
+      const token = parsedUrl.searchParams.get('token');
+      const serverParam = parsedUrl.searchParams.get('serverUrl') ?? parsedUrl.searchParams.get('server');
+      if (!token || !serverParam) {
+        throw new Error('Invite link does not include token and serverUrl parameters');
+      }
+      candidate = {
+        v: 1,
+        serverUrl: serverParam,
         inviteToken: token,
         groupName: parsedUrl.searchParams.get('groupName') ?? 'Invited Group',
       };
