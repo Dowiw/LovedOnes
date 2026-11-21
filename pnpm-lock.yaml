@@ -163,6 +163,9 @@ importers:
       react-native:
         specifier: 0.88.1
         version: 0.88.1(@babel/core@7.29.13(supports-color@8.1.1))(@types/react@19.3.0)(react@19.3.1)(supports-color@8.1.1)
+      react-native-wheel-color-picker:
+        specifier: ^1.3.1
+        version: 1.3.1
       socket.io-client:
         specifier: ^4.8.1
         version: 4.8.4(supports-color@8.1.1)
@@ -3813,6 +3816,12 @@ packages:
 
   react-is@18.3.1:
     resolution: {integrity: sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==}
+
+  react-native-elevation@1.0.0:
+    resolution: {integrity: sha512-BWIKcEYtzjRV6GpkX0Km5/w2E7fgIcywiQOT7JZTc5NSbv/YI9kpFinB9lRFsOoRVGmiqq/O3VfP/oH2clIiBA==}
+
+  react-native-wheel-color-picker@1.3.1:
+    resolution: {integrity: sha512-ojuajzwEkgIHa4Iw94K9FlwA1iifslMo+HDrOFQMBTMCXm1HaFhtQpDZ5upV9y8vujviDko3hDkVqB7/eV0dzg==}
 
   react-native@0.88.1:
     resolution: {integrity: sha512-wajWcLZ93GCN7k4Uwh4CS4L2Ah8ohcvkOXnvIYmh4Yvuqho5j3APZ9qozK+nQrHWSgauq4h8D3HN5DKK84SrHA==}
@@ -8151,6 +8160,12 @@ snapshots:
       scheduler: 0.28.0
 
   react-is@18.3.1: {}
+
+  react-native-elevation@1.0.0: {}
+
+  react-native-wheel-color-picker@1.3.1:
+    dependencies:
+      react-native-elevation: 1.0.0
 
   react-native@0.88.1(@babel/core@7.29.13(supports-color@8.1.1))(@types/react@19.3.0)(react@19.3.1)(supports-color@8.1.1):
     dependencies:
