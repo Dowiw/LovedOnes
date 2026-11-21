@@ -56,7 +56,35 @@ const KEYS = {
   activeGroupId: 'lovedones.activeGroupId',
   pendingRegistration: 'lovedones.pendingRegistration',
   pingedServers: 'lovedones.pingedServers',
+  mapThemePreference: 'lovedones.mapThemePreference',
 } as const;
+
+export type MobileMapThemePreference = 'system' | 'light' | 'dark';
+
+export function parseMobileMapThemePreference(
+  raw: string | null | undefined,
+): MobileMapThemePreference {
+  if (raw === 'light' || raw === 'dark' || raw === 'system') {
+    return raw;
+  }
+  return 'system';
+}
+
+export async function getMapThemePreference(
+  store?: SecureKeyValueStore,
+): Promise<MobileMapThemePreference> {
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(KEYS.mapThemePreference);
+  return parseMobileMapThemePreference(raw);
+}
+
+export async function saveMapThemePreference(
+  preference: MobileMapThemePreference,
+  store?: SecureKeyValueStore,
+): Promise<void> {
+  const s = store ?? (await getExpoSecureStore());
+  await s.setItemAsync(KEYS.mapThemePreference, preference);
+}
 
 export function normalizeServerUrlKey(rawUrl: string): string {
   return rawUrl.trim().replace(/\/+$/, '').toLowerCase();

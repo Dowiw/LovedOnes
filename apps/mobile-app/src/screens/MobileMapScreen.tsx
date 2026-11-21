@@ -13,6 +13,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useColorScheme,
   View,
 } from 'react-native';
 import { Camera, type CameraRef, GeoJSONSource, Layer, Map, Marker } from '@maplibre/maplibre-react-native';
@@ -73,11 +74,19 @@ import {
   type MapLabelLanguage,
   type OfflineCacheInfo,
   type OfflineDownloadProgress,
+  resolveMobileMapTheme,
 } from '../services/pmtilesStyle';
 import { groupChatMessagesForDisplay } from '../services/chatFormatting';
 import { formatUserError } from '../services/errorFormatter';
 import { useSafeAreaInsets } from '../services/safeArea';
-import { clearSessionConfig, MobileStoredConfig, saveStoredConfig } from '../services/secureConfig';
+import {
+  clearSessionConfig,
+  getMapThemePreference,
+  type MobileMapThemePreference,
+  MobileStoredConfig,
+  saveMapThemePreference,
+  saveStoredConfig,
+} from '../services/secureConfig';
 import { sendLocalNotification } from '../services/notifications';
 import { Vibration } from 'react-native';
 
@@ -178,6 +187,9 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
+  const systemColorScheme = useColorScheme();
+  const [mapThemePreference, setMapThemePreference] = useState<MobileMapThemePreference>('system');
+  const resolvedMapTheme = resolveMobileMapTheme(mapThemePreference, systemColorScheme);
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
@@ -203,8 +215,15 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   }, [mapRegions]);
 
   const mapStyle = useMemo(
-    () => buildMobileMapStyle(serverUrl, localPmtilesUri, labelLanguage, useCompositeServerTiles),
-    [serverUrl, localPmtilesUri, labelLanguage, useCompositeServerTiles],
+    () =>
+      buildMobileMapStyle(
+        serverUrl,
+        localPmtilesUri,
+        labelLanguage,
+        useCompositeServerTiles,
+        resolvedMapTheme,
+      ),
+    [serverUrl, localPmtilesUri, labelLanguage, useCompositeServerTiles, resolvedMapTheme],
   );
 
   const refreshQueueCount = useCallback(async () => {
@@ -228,6 +247,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         void getCachedRegionPmtilesUri().then(setLocalPmtilesUri).catch(() => {});
       });
     void refreshQueueCount().catch(() => {});
+    void getMapThemePreference().then(setMapThemePreference).catch(() => {});
   }, [refreshQueueCount]);
 
   useEffect(() => {
@@ -1232,7 +1252,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   );
 
   return (
-    <View style={styles.root}>
+    <View
+      style={[
+        styles.root,
+        { backgroundColor: resolvedMapTheme === 'dark' ? '#0c141d' : '#cfe3ee' },
+      ]}
+    >
       <Map style={styles.map} mapStyle={mapStyle}>
         <Camera
           ref={cameraRef}
@@ -2219,6 +2244,49 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
               <Text style={styles.menuRowAction}>{labelLanguage === 'en' ? 'EN' : 'Local'}</Text>
             </TouchableOpacity>
 
+            <View style={styles.menuRow}>
+              <View style={styles.flexOne}>
+                <Text style={styles.settingsSectionTitle}>Map Theme</Text>
+                <Text style={styles.settingsHint}>
+                  {mapThemePreference === 'system'
+                    ? `Auto (${resolvedMapTheme === 'dark' ? 'Night' : 'Light'})`
+                    : mapThemePreference === 'dark'
+                      ? 'Night mode'
+                      : 'Light mode'}
+                </Text>
+              </View>
+              <View style={styles.themeSegmentGroup}>
+                {(
+                  [
+                    ['system', 'Auto'],
+                    ['light', 'Light'],
+                    ['dark', 'Dark'],
+                  ] as const
+                ).map(([pref, label]) => {
+                  const active = mapThemePreference === pref;
+                  return (
+                    <TouchableOpacity
+                      key={pref}
+                      style={[styles.themeSegmentBtn, active && styles.themeSegmentBtnActive]}
+                      onPress={() => {
+                        setMapThemePreference(pref);
+                        void saveMapThemePreference(pref).catch(() => {});
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.themeSegmentText,
+                          active && styles.themeSegmentTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
             <TouchableOpacity
               style={styles.menuRow}
               onPress={() => {
@@ -3156,6 +3224,29 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   menuRowAction: { color: '#18181b', fontSize: 12, fontWeight: '700' },
+  themeSegmentGroup: {
+    flexDirection: 'row',
+    backgroundColor: '#e4e4e7',
+    borderRadius: 8,
+    padding: 2,
+    gap: 2,
+  },
+  themeSegmentBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  themeSegmentBtnActive: {
+    backgroundColor: '#18181b',
+  },
+  themeSegmentText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#52525b',
+  },
+  themeSegmentTextActive: {
+    color: '#ffffff',
+  },
   progressTrack: {
     height: 8,
     borderRadius: 999,

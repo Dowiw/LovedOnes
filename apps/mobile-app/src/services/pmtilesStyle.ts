@@ -1,6 +1,82 @@
 import type { StyleSpecification } from '@maplibre/maplibre-react-native';
+import type { MobileMapThemePreference } from './secureConfig';
 
 export type MapLabelLanguage = 'en' | 'local';
+export type ResolvedMobileMapTheme = 'light' | 'dark';
+
+export function resolveMobileMapTheme(
+  preference: MobileMapThemePreference,
+  systemScheme: 'light' | 'dark' | null | undefined,
+): ResolvedMobileMapTheme {
+  if (preference === 'dark') return 'dark';
+  if (preference === 'light') return 'light';
+  return systemScheme === 'dark' ? 'dark' : 'light';
+}
+
+const MOBILE_MAP_PALETTES = {
+  light: {
+    background: '#cfe3ee',
+    earth: '#f3f2ed',
+    landuseUrban: '#eeede7',
+    landuseUrbanOpacity: 0.65,
+    landuseGreen: '#d5e8ce',
+    landuseGreenOpacity: 0.82,
+    water: '#bfe0f0',
+    buildings: '#e6e4dd',
+    buildingsOutline: '#d6d3cb',
+    roadsCasing: '#d4d8dd',
+    roadsMajor: '#ffffff',
+    roadsMinor: '#fafaf9',
+    housenumbers: '#94a3b8',
+    housenumbersHalo: 'rgba(255, 255, 255, 0.85)',
+    foodText: '#9a5828',
+    retailText: '#356299',
+    waterText: '#4b7b94',
+    waterHalo: 'rgba(232, 245, 251, 0.92)',
+    roadMinorText: '#525866',
+    roadMajorText: '#3f444e',
+    parkText: '#456847',
+    healthLocalText: '#c23648',
+    civicText: '#475569',
+    landmarkText: '#2c5b8c',
+    healthMajorText: '#be123c',
+    neighborhoodText: '#475569',
+    cityText: '#18181b',
+    labelHalo: 'rgba(255, 255, 255, 0.94)',
+    labelHaloStrong: 'rgba(255, 255, 255, 0.96)',
+  },
+  dark: {
+    background: '#0c141d',
+    earth: '#111318',
+    landuseUrban: '#161920',
+    landuseUrbanOpacity: 0.78,
+    landuseGreen: '#132019',
+    landuseGreenOpacity: 0.88,
+    water: '#0c1c2c',
+    buildings: '#1c2028',
+    buildingsOutline: '#272c37',
+    roadsCasing: '#1f242e',
+    roadsMajor: '#475569',
+    roadsMinor: '#282e39',
+    housenumbers: '#71717a',
+    housenumbersHalo: 'rgba(17, 19, 24, 0.9)',
+    foodText: '#fdba74',
+    retailText: '#93c5fd',
+    waterText: '#7dd3fc',
+    waterHalo: 'rgba(12, 28, 44, 0.92)',
+    roadMinorText: '#9ca3af',
+    roadMajorText: '#e4e4e7',
+    parkText: '#86efac',
+    healthLocalText: '#fda4af',
+    civicText: '#cbd5e1',
+    landmarkText: '#93c5fd',
+    healthMajorText: '#fb7185',
+    neighborhoodText: '#cbd5e1',
+    cityText: '#f4f4f5',
+    labelHalo: 'rgba(17, 19, 24, 0.92)',
+    labelHaloStrong: 'rgba(17, 19, 24, 0.96)',
+  },
+} as const;
 
 export function buildPmtilesSourceUrl(serverUrl: string, localFileUri?: string | null): string {
   if (localFileUri && localFileUri.trim().length > 0) {
@@ -18,7 +94,9 @@ export function buildMobileMapStyle(
   localFileUri?: string | null,
   labelLanguage: MapLabelLanguage = 'en',
   useCompositeServerTiles = false,
+  mapTheme: ResolvedMobileMapTheme = 'light',
 ): StyleSpecification {
+  const palette = MOBILE_MAP_PALETTES[mapTheme];
   const cleanServer = serverUrl.replace(/\/$/, '');
   const pmtilesUrl = buildPmtilesSourceUrl(serverUrl, localFileUri);
   const openmaptilesSource =
@@ -50,7 +128,7 @@ export function buildMobileMapStyle(
         id: 'background',
         type: 'background',
         paint: {
-          'background-color': '#cfe3ee',
+          'background-color': palette.background,
         },
       },
       {
@@ -59,7 +137,7 @@ export function buildMobileMapStyle(
         source: 'openmaptiles',
         'source-layer': 'earth',
         paint: {
-          'fill-color': '#f3f2ed',
+          'fill-color': palette.earth,
         },
       },
       {
@@ -73,8 +151,8 @@ export function buildMobileMapStyle(
           ['literal', ['residential', 'commercial', 'industrial', 'university', 'hospital', 'school', 'college']],
         ],
         paint: {
-          'fill-color': '#eeede7',
-          'fill-opacity': 0.65,
+          'fill-color': palette.landuseUrban,
+          'fill-opacity': palette.landuseUrbanOpacity,
         },
       },
       {
@@ -91,8 +169,8 @@ export function buildMobileMapStyle(
           ],
         ],
         paint: {
-          'fill-color': '#d5e8ce',
-          'fill-opacity': 0.82,
+          'fill-color': palette.landuseGreen,
+          'fill-opacity': palette.landuseGreenOpacity,
         },
       },
       {
@@ -102,7 +180,7 @@ export function buildMobileMapStyle(
         'source-layer': 'water',
         filter: ['==', ['geometry-type'], 'Polygon'],
         paint: {
-          'fill-color': '#bfe0f0',
+          'fill-color': palette.water,
         },
       },
       {
@@ -112,7 +190,7 @@ export function buildMobileMapStyle(
         'source-layer': 'water',
         filter: ['==', ['geometry-type'], 'LineString'],
         paint: {
-          'line-color': '#bfe0f0',
+          'line-color': palette.water,
           'line-width': ['match', ['get', 'kind'], 'river', 3.2, 'canal', 2.4, 1.2],
         },
       },
@@ -123,8 +201,8 @@ export function buildMobileMapStyle(
         'source-layer': 'buildings',
         minzoom: 13,
         paint: {
-          'fill-color': '#e6e4dd',
-          'fill-outline-color': '#d6d3cb',
+          'fill-color': palette.buildings,
+          'fill-outline-color': palette.buildingsOutline,
         },
       },
       {
@@ -138,7 +216,7 @@ export function buildMobileMapStyle(
           'line-join': 'round',
         },
         paint: {
-          'line-color': '#d4d8dd',
+          'line-color': palette.roadsCasing,
           'line-width': [
             'interpolate',
             ['linear'],
@@ -161,7 +239,15 @@ export function buildMobileMapStyle(
           'line-join': 'round',
         },
         paint: {
-          'line-color': ['match', ['get', 'kind'], 'highway', '#ffffff', 'major_road', '#ffffff', '#fafaf9'],
+          'line-color': [
+            'match',
+            ['get', 'kind'],
+            'highway',
+            palette.roadsMajor,
+            'major_road',
+            palette.roadsMajor,
+            palette.roadsMinor,
+          ],
           'line-width': [
             'interpolate',
             ['linear'],
@@ -186,8 +272,8 @@ export function buildMobileMapStyle(
           'text-size': 9.5,
         },
         paint: {
-          'text-color': '#94a3b8',
-          'text-halo-color': 'rgba(255, 255, 255, 0.85)',
+          'text-color': palette.housenumbers,
+          'text-halo-color': palette.housenumbersHalo,
           'text-halo-width': 1.2,
         },
       },
@@ -232,8 +318,8 @@ export function buildMobileMapStyle(
           'text-max-width': 9,
         },
         paint: {
-          'text-color': '#9a5828',
-          'text-halo-color': 'rgba(255, 255, 255, 0.94)',
+          'text-color': palette.foodText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.6,
         },
       },
@@ -314,8 +400,8 @@ export function buildMobileMapStyle(
           'text-max-width': 9,
         },
         paint: {
-          'text-color': '#356299',
-          'text-halo-color': 'rgba(255, 255, 255, 0.94)',
+          'text-color': palette.retailText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.6,
         },
       },
@@ -334,8 +420,8 @@ export function buildMobileMapStyle(
           'symbol-spacing': 520,
         },
         paint: {
-          'text-color': '#4b7b94',
-          'text-halo-color': 'rgba(232, 245, 251, 0.92)',
+          'text-color': palette.waterText,
+          'text-halo-color': palette.waterHalo,
           'text-halo-width': 1.6,
         },
       },
@@ -361,8 +447,8 @@ export function buildMobileMapStyle(
           'symbol-spacing': 620,
         },
         paint: {
-          'text-color': '#525866',
-          'text-halo-color': 'rgba(255, 255, 255, 0.94)',
+          'text-color': palette.roadMinorText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.7,
         },
       },
@@ -388,8 +474,8 @@ export function buildMobileMapStyle(
           'symbol-spacing': 560,
         },
         paint: {
-          'text-color': '#3f444e',
-          'text-halo-color': 'rgba(255, 255, 255, 0.94)',
+          'text-color': palette.roadMajorText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.8,
         },
       },
@@ -428,8 +514,8 @@ export function buildMobileMapStyle(
           'text-max-width': 9,
         },
         paint: {
-          'text-color': '#456847',
-          'text-halo-color': 'rgba(255, 255, 255, 0.92)',
+          'text-color': palette.parkText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.6,
         },
       },
@@ -464,8 +550,8 @@ export function buildMobileMapStyle(
           'text-max-width': 9,
         },
         paint: {
-          'text-color': '#c23648',
-          'text-halo-color': 'rgba(255, 255, 255, 0.94)',
+          'text-color': palette.healthLocalText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.6,
         },
       },
@@ -502,8 +588,8 @@ export function buildMobileMapStyle(
           'text-max-width': 9,
         },
         paint: {
-          'text-color': '#475569',
-          'text-halo-color': 'rgba(255, 255, 255, 0.94)',
+          'text-color': palette.civicText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.6,
         },
       },
@@ -576,8 +662,8 @@ export function buildMobileMapStyle(
           'text-max-width': 9,
         },
         paint: {
-          'text-color': '#2c5b8c',
-          'text-halo-color': 'rgba(255, 255, 255, 0.94)',
+          'text-color': palette.landmarkText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.7,
         },
       },
@@ -610,8 +696,8 @@ export function buildMobileMapStyle(
           'text-max-width': 9,
         },
         paint: {
-          'text-color': '#be123c',
-          'text-halo-color': 'rgba(255, 255, 255, 0.96)',
+          'text-color': palette.healthMajorText,
+          'text-halo-color': palette.labelHaloStrong,
           'text-halo-width': 1.8,
         },
       },
@@ -629,8 +715,8 @@ export function buildMobileMapStyle(
           'text-max-width': 9,
         },
         paint: {
-          'text-color': '#475569',
-          'text-halo-color': 'rgba(255, 255, 255, 0.94)',
+          'text-color': palette.neighborhoodText,
+          'text-halo-color': palette.labelHalo,
           'text-halo-width': 1.9,
         },
       },
@@ -648,8 +734,8 @@ export function buildMobileMapStyle(
           'text-max-width': 8,
         },
         paint: {
-          'text-color': '#18181b',
-          'text-halo-color': 'rgba(255, 255, 255, 0.96)',
+          'text-color': palette.cityText,
+          'text-halo-color': palette.labelHaloStrong,
           'text-halo-width': 2.2,
         },
       },
