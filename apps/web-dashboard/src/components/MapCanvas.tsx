@@ -661,7 +661,18 @@ export function MapCanvas({
 
     mapRef.current = map;
 
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && containerRef.current
+        ? new ResizeObserver(() => {
+            map.resize();
+          })
+        : null;
+    if (resizeObserver && containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
     return () => {
+      resizeObserver?.disconnect();
       styleReadyRef.current = false;
       for (const frameId of markerAnimFramesRef.current.values()) {
         cancelAnimationFrame(frameId);

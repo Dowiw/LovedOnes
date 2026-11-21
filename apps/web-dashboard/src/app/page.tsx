@@ -1314,7 +1314,7 @@ export default function HomePage() {
 
   if (!session) {
     return (
-      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f4f4f5] px-4">
+      <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#f4f4f5] pb-[calc(1.5rem+var(--lo-safe-bottom,0px))] pl-[calc(1rem+var(--lo-safe-left,0px))] pr-[calc(1rem+var(--lo-safe-right,0px))] pt-[calc(1.5rem+var(--lo-safe-top,0px))]">
         <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl" />
         <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl" />
 
@@ -1322,7 +1322,7 @@ export default function HomePage() {
           <div
             role="status"
             aria-live="assertive"
-            className="lo-feedback-in fixed inset-x-4 top-5 z-50 mx-auto flex max-w-md items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/95 px-4 py-3 text-xs text-rose-800 shadow-[0_14px_32px_rgba(190,18,60,0.16)] backdrop-blur-md"
+            className="lo-feedback-in fixed inset-x-4 top-[calc(1.25rem+var(--lo-safe-top,0px))] z-50 mx-auto flex max-w-md items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/95 px-4 py-3 text-xs text-rose-800 shadow-[0_14px_32px_rgba(190,18,60,0.16)] backdrop-blur-md"
           >
             <Bell className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
             <div>
@@ -1657,7 +1657,7 @@ export default function HomePage() {
   }
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#cfe3ee]">
+    <div className="lo-app-shell relative w-full overflow-hidden bg-[#cfe3ee]">
       {/* Full-bleed Map Canvas */}
       <MapCanvas
         locations={mapViewMode === 'places' ? [] : locations}
@@ -1688,7 +1688,7 @@ export default function HomePage() {
       {/* Server Update Reload Banner (when web tab stayed open across a server release) */}
       {webVersionInfo?.updateAvailable &&
         dismissedWebUpdateVersion !== webVersionInfo.serverVersion && (
-          <div className="pointer-events-none fixed left-1/2 top-4 z-30 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2">
+          <div className="pointer-events-none fixed left-1/2 top-[calc(1rem+var(--lo-safe-top,0px))] z-30 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2">
             <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-3 rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.12)] backdrop-blur-xl">
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold text-zinc-950">
@@ -1724,7 +1724,7 @@ export default function HomePage() {
         (uncoveredTarget &&
           dismissedUncoveredKey !== uncoveredTarget.coordKey &&
           (allowMemberMapDownloads || session.user.role === 'HOST_ADMIN'))) && (
-        <div className="pointer-events-none fixed left-1/2 top-16 z-20 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 md:top-4">
+        <div className="pointer-events-none fixed left-1/2 top-[calc(4rem+var(--lo-safe-top,0px))] z-20 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 md:top-[calc(1rem+var(--lo-safe-top,0px))]">
           <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.1)] backdrop-blur-xl">
             {activeMapJob ? (
               <div className="space-y-1.5">
@@ -1816,7 +1816,7 @@ export default function HomePage() {
 
       {/* Incoming Chat Toast Notification */}
       {chatToast && (
-        <div className="pointer-events-none fixed left-1/2 top-3 z-30 w-[calc(100vw-1.5rem)] max-w-sm -translate-x-1/2 sm:top-4">
+        <div className="pointer-events-none fixed left-1/2 top-[calc(0.75rem+var(--lo-safe-top,0px))] z-30 w-[calc(100vw-1.5rem)] max-w-sm -translate-x-1/2 sm:top-[calc(1rem+var(--lo-safe-top,0px))]">
           <div className="lo-float-in pointer-events-auto flex items-start gap-2.5 rounded-xl border border-zinc-200/90 bg-white/95 p-3 shadow-[0_14px_38px_rgba(15,23,42,0.16)] backdrop-blur-xl">
             <button
               type="button"
@@ -1860,7 +1860,7 @@ export default function HomePage() {
       {/* Top-Left Calm Capsule & Progressive Disclosure Popovers */}
       <div
         ref={leftDockRef}
-        className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col gap-2.5 sm:left-4 sm:top-4 sm:w-[316px]"
+        className="pointer-events-none absolute left-[calc(0.75rem+var(--lo-safe-left,0px))] top-[calc(0.75rem+var(--lo-safe-top,0px))] z-20 flex max-w-[calc(100vw-1.5rem-var(--lo-safe-left,0px)-var(--lo-safe-right,0px))] flex-col gap-2.5 sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:top-[calc(1rem+var(--lo-safe-top,0px))] sm:w-[316px]"
       >
         <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-1.5 rounded-xl border border-zinc-200/80 bg-white/92 p-1.5 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
           <button
@@ -2106,7 +2106,7 @@ export default function HomePage() {
         )}
 
         {menuOpen && (
-          <div className="lo-float-in pointer-events-auto max-h-[calc(100vh-5.5rem)] space-y-3 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+          <div className="lo-float-in pointer-events-auto max-h-[calc(var(--lo-app-height,100dvh)-5.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))] space-y-3 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl">
             {/* Live GPS Beacon */}
             <div>
               <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
@@ -2451,7 +2451,7 @@ export default function HomePage() {
       </div>
 
       {/* Top-Right Single Inspector Toggle & Floating Tabbed Inspector */}
-      <div className="pointer-events-none absolute bottom-16 left-3 right-3 z-20 flex flex-col items-end gap-2.5 md:bottom-auto md:left-auto md:right-4 md:top-4 md:w-[350px]">
+      <div className="pointer-events-none absolute bottom-[calc(4.25rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] right-[calc(0.75rem+var(--lo-safe-right,0px))] z-20 flex flex-col items-end gap-2.5 md:bottom-auto md:left-auto md:right-[calc(1rem+var(--lo-safe-right,0px))] md:top-[calc(1rem+var(--lo-safe-top,0px))] md:w-[350px]">
         <div className="lo-float-in pointer-events-auto hidden items-center md:flex">
           <button
             type="button"
@@ -2481,7 +2481,7 @@ export default function HomePage() {
         </div>
 
         {rightOpen && (
-          <div className="lo-float-in pointer-events-auto flex max-h-[44vh] w-full flex-col overflow-hidden rounded-xl border border-zinc-200/80 bg-white/92 shadow-[0_16px_44px_rgba(9,9,11,0.1)] backdrop-blur-xl md:max-h-[calc(100vh-140px)]">
+          <div className="lo-float-in pointer-events-auto flex max-h-[min(44dvh,calc(var(--lo-app-height,100dvh)-9.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px)))] w-full flex-col overflow-hidden rounded-xl border border-zinc-200/80 bg-white/92 shadow-[0_16px_44px_rgba(9,9,11,0.1)] backdrop-blur-xl md:max-h-[calc(var(--lo-app-height,100dvh)-8.75rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))]">
             {/* Segmented Pill Tabs */}
             <div className="border-b border-zinc-100 p-2">
               <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold">
@@ -2917,7 +2917,7 @@ export default function HomePage() {
       </div>
 
       {/* Bottom-Left Floating Profile Pill & Map Credits */}
-      <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-end gap-2 sm:bottom-4 sm:left-4 sm:flex">
+      <div className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] z-20 hidden items-end gap-2 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))] sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:flex">
         <div className="lo-float-in pointer-events-auto flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white/92 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
           <button
             type="button"
@@ -3003,8 +3003,8 @@ export default function HomePage() {
       </div>
 
       {/* Bottom-Center Floating Map View Mode Switcher */}
-      <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 sm:bottom-4">
-        <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/92 p-1 text-xs font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl">
+      <div className="pointer-events-auto absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-1/2 z-20 -translate-x-1/2 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))]">
+        <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/92 p-1 text-[11px] font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl sm:text-xs">
           {(
             [
               ['live', 'Live', MapPin],
@@ -3016,7 +3016,7 @@ export default function HomePage() {
               key={mode}
               type="button"
               onClick={() => setMapViewMode(mode)}
-              className={`lo-press flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 transition ${mapViewMode === mode
+              className={`lo-press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition sm:px-3.5 ${mapViewMode === mode
                 ? 'bg-zinc-950 text-white shadow-sm'
                 : 'text-zinc-600 hover:text-zinc-950'
                 }`}

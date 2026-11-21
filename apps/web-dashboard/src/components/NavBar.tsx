@@ -15,17 +15,17 @@ export function NavBar({ user, onSignOut }: NavBarProps) {
   const pathname = usePathname();
 
   return (
-    <header className="sticky top-0 z-30 px-4 pt-3 sm:px-6">
-      <div className="mx-auto flex max-w-7xl items-center justify-between rounded-xl border border-zinc-200/80 bg-white/90 px-4 py-2 shadow-[0_8px_28px_rgba(9,9,11,0.06)] backdrop-blur-xl">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="flex items-center gap-2 text-sm font-bold tracking-tight text-zinc-950">
+    <header className="sticky top-0 z-30 pl-[calc(1rem+var(--lo-safe-left,0px))] pr-[calc(1rem+var(--lo-safe-right,0px))] pt-[calc(0.75rem+var(--lo-safe-top,0px))] sm:pl-[calc(1.5rem+var(--lo-safe-left,0px))] sm:pr-[calc(1.5rem+var(--lo-safe-right,0px))]">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200/80 bg-white/90 px-3 py-2 shadow-[0_8px_28px_rgba(9,9,11,0.06)] backdrop-blur-xl sm:px-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-4">
+          <Link href="/" className="flex shrink-0 items-center gap-2 text-sm font-bold tracking-tight text-zinc-950">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-950 text-white">
               <MapPin className="h-4 w-4" />
             </span>
-            <span>LovedOnes</span>
+            <span className="hidden xs:inline sm:inline">LovedOnes</span>
           </Link>
 
-          <nav className="flex items-center gap-1 rounded-lg bg-zinc-100 p-1 text-xs font-medium">
+          <nav className="flex items-center gap-1 overflow-x-auto rounded-lg bg-zinc-100 p-1 text-xs font-medium">
             <Link
               href="/"
               className={`rounded-md px-3 py-1.5 transition ${

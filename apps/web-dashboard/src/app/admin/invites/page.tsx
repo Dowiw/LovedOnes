@@ -71,7 +71,7 @@ export default function AdminInvitesPage() {
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-[#f4f4f5]">
+      <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)]">
         <NavBar user={null} onSignOut={() => {}} />
         <main className="mx-auto max-w-md px-4 py-16 text-center">
           <div className="rounded-xl border border-slate-200/80 bg-white/90 p-8 shadow-sm backdrop-blur-xl">
@@ -85,7 +85,7 @@ export default function AdminInvitesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f4f4f5]">
+    <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)]">
       <NavBar
         user={session.user}
         onSignOut={() => {

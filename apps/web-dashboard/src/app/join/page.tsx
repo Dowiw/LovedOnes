@@ -85,7 +85,7 @@ function JoinInviteInner() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f4f4f5]">
+    <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)]">
       <NavBar
         user={session?.user ?? null}
         onSignOut={() => {
@@ -212,7 +212,7 @@ export default function JoinPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-[#f4f4f5] p-8 text-sm text-zinc-500">Loading...</div>
+        <div className="min-h-dvh bg-[#f4f4f5] p-8 pb-[var(--lo-safe-bottom,0px)] text-sm text-zinc-500">Loading...</div>
       }
     >
       <JoinInviteInner />
