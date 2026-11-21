@@ -283,7 +283,27 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       const user = request.authUser!;
       const userAgent =
         typeof request.headers['user-agent'] === 'string' ? request.headers['user-agent'] : null;
-      return pushNotifications.subscribe(user.id, request.body, userAgent);
+      const result = await pushNotifications.subscribe(user.id, request.body, userAgent);
+      const endpointRaw = (request.body as { endpoint?: unknown } | undefined)?.endpoint;
+      let endpointHost: string | undefined;
+      if (typeof endpointRaw === 'string') {
+        try {
+          endpointHost = new URL(endpointRaw).host;
+        } catch {
+          endpointHost = undefined;
+        }
+      }
+      loggerHandle.logger.info(
+        {
+          action: 'push.subscribed',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          endpointHost,
+        },
+        `${user.username} enabled Web Push notifications${endpointHost ? ` (${endpointHost})` : ''}`,
+      );
+      return result;
     },
   );
 
@@ -292,7 +312,18 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest) => {
       const user = request.authUser!;
-      return pushNotifications.unsubscribe(user.id, request.body);
+      const result = await pushNotifications.unsubscribe(user.id, request.body);
+      loggerHandle.logger.info(
+        {
+          action: 'push.unsubscribed',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          unsubscribed: result.unsubscribed,
+        },
+        `${user.username} disabled Web Push notifications`,
+      );
+      return result;
     },
   );
 
@@ -301,7 +332,19 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest) => {
       const user = request.authUser!;
-      return pushNotifications.sendTestNotification(user.id, user.username);
+      const result = await pushNotifications.sendTestNotification(user.id, user.username);
+      loggerHandle.logger.info(
+        {
+          action: 'push.test_sent',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          sent: result.sent,
+          failed: result.failed,
+        },
+        `${user.username} triggered a test Web Push alert (sent=${result.sent}, failed=${result.failed})`,
+      );
+      return result;
     },
   );
 
@@ -366,13 +409,45 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   app.post('/api/realtime/public/share/:token/ping', async (request, reply) => {
     const { token } = request.params as { token: string };
     reply.header('Cache-Control', 'no-store');
-    return shareLinks.upsertGuestPing(token, request.body);
+    const result = await shareLinks.upsertGuestPing(token, request.body);
+    const guestName =
+      typeof (request.body as { displayName?: unknown } | undefined)?.displayName === 'string'
+        ? (request.body as { displayName: string }).displayName.trim()
+        : 'Guest';
+    loggerHandle.logger.info(
+      {
+        action: 'share_link.guest_ping',
+        guestId: result.guestId,
+        guestName,
+        creatorUserId: result.snapshot.creator.userId,
+        creatorUsername: result.snapshot.creator.username,
+        activeGuests: result.snapshot.guests.length,
+      },
+      `Guest "${guestName}" updated live location on ${result.snapshot.creator.username}'s share link (${result.snapshot.guests.length} active guest(s))`,
+    );
+    return result;
   });
 
   app.delete('/api/realtime/public/share/:token/ping', async (request, reply) => {
     const { token } = request.params as { token: string };
     reply.header('Cache-Control', 'no-store');
-    return shareLinks.stopGuestPing(token, request.body);
+    const result = await shareLinks.stopGuestPing(token, request.body);
+    const guestId =
+      typeof (request.body as { guestId?: unknown } | undefined)?.guestId === 'string'
+        ? (request.body as { guestId: string }).guestId
+        : undefined;
+    loggerHandle.logger.info(
+      {
+        action: 'share_link.guest_stopped',
+        guestId,
+        stopped: result.stopped,
+        creatorUserId: result.snapshot.creator.userId,
+        creatorUsername: result.snapshot.creator.username,
+        activeGuests: result.snapshot.guests.length,
+      },
+      `Guest stopped sharing location on ${result.snapshot.creator.username}'s share link (${result.snapshot.guests.length} active guest(s) remaining)`,
+    );
+    return result;
   });
 
   app.post(

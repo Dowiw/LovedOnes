@@ -24,3 +24,9 @@ The stack targets Linux, macOS, and Windows (WSL2) workstations as well as `amd6
 
 - Run `pnpm typecheck`, `pnpm build`, and `pnpm test` before committing changes across packages.
 - Do not bypass Zod validation or privacy mode filtering (`EXACT`, `FUZZED`, `GHOST`) in any client or service layer.
+
+## Audit Logging Discipline (`/admin` Live Log Terminal)
+
+- **Record Every User & Admin Action:** Every state-changing user action, guest action, and admin action across all services—including `HOST_ADMIN` and Group `ADMIN` actions (auth/onboarding, profile/password/recovery changes, invites, registration approvals/denials, account removals, group/role/privacy changes, tracker tokens, GPS ingestion, chat, check-ins, geofenced places, guest share links, Web Push subscriptions/tests, map downloads/deletions, log retention/pruning, and system updates)—MUST emit a structured `logger.info({ action, userId, username, ... }, humanReadableMessage)` entry through the shared 3-way Pino logger (`@loved-ones/shared/logger`).
+- **Live Admin Visibility:** Entries logged this way automatically write to `STDOUT`, rotate to disk (`pino-roll`), and stream via Redis `logs:ring` + `logs:stream` to the Host Admin `/admin` Live Log Terminal.
+- **No Secrets in Logs:** Never log passwords, raw JWTs, tracker/invite/share-link secret tokens, recovery codes, `guestSecret`, or push encryption keys (`p256dh`/`auth`).

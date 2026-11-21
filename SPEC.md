@@ -172,6 +172,7 @@ Every microservice must use the shared logger in `packages/shared/logger`:
 * **Target 1 (`STDOUT`):** Standard output for Docker container logs.
 * **Target 2 (Physical Rotating File):** `pino-roll` writing to `/var/log/app/service.log` (rotated daily or at `50MB`, max 10 files retained).
 * **Target 3 (Live Redis Stream):** Custom Pino transport pushes each serialized log entry into Redis list `logs:ring` (`LPUSH` + `LTRIM 0 499`) and publishes to Redis channel `logs:stream`. The Admin Dashboard subscribes to `logs:stream` to display a live terminal feed.
+* **Mandatory User & Admin Action Auditing:** Every state-changing action performed by any user, guest, Group `ADMIN`, or `HOST_ADMIN` across every backend service MUST emit a structured `logger.info({ action, ... }, humanReadableMessage)` audit record through this 3-way logger so `/admin` operators have a complete live audit trail—while redacting secrets, passwords, raw tokens, and encryption keys.
 
 ### 4.3 Storage & Per-User Compute/RAM Telemetry
 
