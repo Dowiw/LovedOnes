@@ -10,7 +10,7 @@ The system is a decoupled microservices platform orchestrated via containers or 
 
 ### 1.1 Infrastructure & Ingress Services
 * **`gateway` (Reverse Proxy):** Single HTTP/WebSocket entry point (bundled with Caddy 2, or replaceable by any external reverse proxy / cloud load balancer). Routes traffic by path or subdomain:
-  * `/api/auth/*` and `/api/admin/*` -> `auth-admin-service:4001`
+  * `/api/auth/*`, `/api/admin/*`, and `/api/maps/*` -> `auth-admin-service:4001`
   * `/api/realtime/*` and `/socket.io/*` -> `realtime-service:4002`
   * `/tiles/*` -> served directly from `/srv/tiles` with `Accept-Ranges: bytes` + CORS (`apps/map-service` remains available via optional `standalone-maps` profile)
   * `/*` -> `web-dashboard:3000`
@@ -21,14 +21,16 @@ The system is a decoupled microservices platform orchestrated via containers or 
 ### 1.2 Application Microservices & Clients (Monorepo Packages)
 1. **`packages/shared`:** Shared TypeScript interfaces, Zod validation schemas, Socket.io event payloads, and Pino logger configuration.
 2. **`apps/auth-admin-service` (Node.js 22 + Fastify + TypeScript):**
-   * User authentication (JWT access + refresh tokens, Argon2id password hashing).
-   * Role-Based Access Control (RBAC) group management (`ADMIN`, `MEMBER`, `SPECTATOR`).
-   * One-time invite token & QR onboarding payload generator.
-   * System & per-user telemetry engine (disk space, log sizes, DB size per user, Redis memory & compute load per user).
+   * User authentication (JWT access + refresh tokens, Argon2id password hashing, optional backup recovery-email verification and password reset).
+   * Registration approval queue (`registration_requests`: uninvited onboarding requests expire after 24h unless approved/denied by `HOST_ADMIN`).
+   * Role-Based Access Control (RBAC) group management (`ADMIN`, `MEMBER`, `SPECTATOR`), group creation (`POST /api/auth/groups`), and scoped HTTP `TrackerToken` management.
+   * One-time invite token & QR onboarding payload generator (`HOST_ADMIN` or Group `ADMIN` via `requireAdmin`).
+   * System & per-user telemetry engine (disk space, log sizes & retention/pruning, DB size per user, Redis memory & compute load per user), dynamic city PMTiles downloader/region management, and optional remote `system-updater` control (`HOST_ADMIN`).
 3. **`apps/realtime-service` (Node.js 22 + Fastify + Socket.io + TypeScript):**
    * Stateless, horizontally scalable WebSocket + REST ingestion service using `@socket.io/redis-adapter`.
-   * Ingests live GPS batches and chat messages, persists to PostGIS, and broadcasts to authorized group rooms.
-   * Enforces privacy modes per group (`ACTIVE`, `GHOST`, `FUZZED_1KM`).
+   * Ingests live GPS batches (interactive JWT + scoped `TrackerToken` via native/OwnTracks/Overland endpoints), persists to PostGIS, evaluates geofenced `group_places` enter/exit transitions, and broadcasts to authorized group rooms.
+   * Enforces privacy modes per group (`EXACT`, `FUZZED`, `GHOST`) plus temporary check-in `EXACT` overrides (`privacy_override_until`).
+   * Manages group chat (`messages`), Web Push VAPID notifications (`push_subscriptions`), and isolated public temporary share links (`/api/realtime/share-links` + `/api/realtime/public/share/:token`).
 4. **`apps/map-service` (Optional Standalone Range Server / `standalone-maps` Profile):**
    * Serves static `.pmtiles` vector archives and map styles/glyphs via HTTP Range Requests (`Accept-Ranges: bytes`) with CORS enabled for custom/standalone deployments (`gateway` serves `/tiles/*` directly in the default stack).
 5. **`apps/web-dashboard` (Web Portal):**
@@ -194,3 +196,30 @@ GROUP BY u.id;
    * A Fastify/Socket.io middleware wraps every authenticated request and WebSocket event with `performance.now()`.
    * Increments Redis hash counters per user (`HINCRBYFLOAT telemetry:user:<id> cpu_ms <elapsed>`, `HINCRBY telemetry:user:<id> events_count 1`) and measures Redis state size (`MEMORY USAGE session:user:<id>`).
    * Admin UI renders a table of active users ranked by `cpu_ms/min`, `pings/min`, active socket count, and storage consumed.
+
+---
+
+## 5. Actors, Role Hierarchy & Permissions
+
+### 5.1 System Infrastructure Summary
+
+- **Ingress (`gateway` Caddy 2):** Terminates public/LAN HTTP(S) and routes `/api/auth/*` + `/api/admin/*` + `/api/maps/*` -> `auth-admin-service:4001`, `/api/realtime/*` + `/socket.io/*` -> `realtime-service:4002`, `/tiles/*` -> static `/srv/tiles` Byte-Range serving (or `map-service:8080`), and all UI pages (`/`, `/admin`, `/admin/invites`, `/join`, `/share/[token]`) -> `web-dashboard:3000`.
+- **Backing Stores:** Shared PostgreSQL + PostGIS (`users`, `groups`, `group_memberships`, `group_invites`, `location_history`, `messages`, `location_requests`, `group_places`, `group_place_states`, `group_place_events`, `registration_requests`, `push_vapid_config`, `push_subscriptions`, `location_share_links`, `location_share_guests`) plus Redis (Socket.io adapter, session/revocation state, `logs:ring` / `logs:stream`, `telemetry:user:<id>`, tracker tokens, email verification challenges, log retention settings).
+
+### 5.2 Role Layers & Priority Hierarchy
+
+Permissions operate across **two independent layers** (system-wide vs. per-group) plus **two scoped non-member actors**:
+
+1. **System Roles (`users.role`) — `HOST_ADMIN` > `USER`**
+   - **`HOST_ADMIN` (Server / Home Admin):** Automatically granted to the **first registered account** (`users` count == 0); all later accounts register as `USER`. Exercises server-wide authority (`requireHostAdmin`) for `/admin` telemetry, live/recent audit logs, log retention/pruning, registration request approve/deny, account deletion, map region deletion, and remote system updates, and satisfies `requireAdmin` across any group for invites and role changes. Still requires Group membership/role to view or post in private Groups.
+   - **`USER` (Standard Account):** Can manage own profile/avatar/halo colors, password, recovery email, personal HTTP `TrackerToken`, Web Push subscriptions, join Groups by invite, and create new Groups (`POST /api/auth/groups`, automatically becoming `ADMIN` of the created Group). Cannot access `/admin` host endpoints.
+   - **Standalone Account (`USER` with 0 memberships):** May operate authenticated self-service settings, create a Group, or redeem an Invite; does not see other users' private Groups until joining or creating one.
+
+2. **Group Roles (`group_memberships.role`, scoped per Group) — `ADMIN` > `MEMBER` > `SPECTATOR`**
+   - **Group `ADMIN`:** Assigned automatically on Group creation (`createGroup`) or via Invite/promotion (`updateMemberRole`). Can manage Geofenced `group_places` (`POST`/`DELETE`), promote/demote members in that Group, and create/delete Invites for that Group (`requireAdmin`), in addition to full `MEMBER` capabilities.
+   - **Group `MEMBER`:** Shares GPS locations & trails into the Group (strictly filtered by per-Group `PrivacyMode`: `EXACT`, `FUZZED`, or `GHOST`), participates in Group chat, requests/responds to `CheckInRequest` temporary `EXACT` overrides, and creates/revokes temporary `ShareLink`s.
+   - **Group `SPECTATOR`:** Read-only observer inside that Group. Views live Group map pins, chat, trails, and places, but is suppressed from location broadcasts, snapshots, and trails, cannot request or accept `EXACT` check-ins, and cannot create `ShareLink`s for that Group.
+
+3. **Scoped & External Actors (Lowest Privilege)**
+   - **Public `ShareLink` Guest (`/share/[token]`):** Unauthenticated participant possessing a valid non-revoked, non-expired share token. Sees **only** the creator's `PrivacyMode`-filtered location and (when `allowGuestSharing` is enabled) peer guests holding `(guestId, guestSecret)` on that exact token—never any private Group member or Group data.
+   - **Scoped HTTP Tracker Client (`TrackerToken` `trk_...`):** Authenticates only location ingestion endpoints (`OwnTracks`, `Overland`, or `/api/realtime/locations`) for its owning Account without access to REST/Admin/Chat/UI routes.

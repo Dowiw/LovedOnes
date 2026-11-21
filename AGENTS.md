@@ -1,6 +1,6 @@
 # AGENTS.md — Development Rules & Execution Guide
 
-Read `SPEC.md` at the repository root as the single source of truth for schemas, services, logging, telemetry, and monorepo boundaries.
+Read `SPEC.md` at the repository root as the single source of truth for schemas, services, actor/role hierarchy, logging, telemetry, and monorepo boundaries, and `GLOSSARY.md` for canonical domain terminology.
 
 ## Cross-Platform Development & Scaling Rules
 
