@@ -98,6 +98,9 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-jwt-refresh-secret-key-min-32-chars}
       LOG_DIR: /var/log/app
       MAX_LOG_STORAGE_MB: ${MAX_LOG_STORAGE_MB:-500}
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-14}
+      LOG_RETENTION_FILES: ${LOG_RETENTION_FILES:-10}
+      LOG_RING_MAX_ENTRIES: ${LOG_RING_MAX_ENTRIES:-500}
       TILES_DIR: /srv/tiles
       ALLOW_MEMBER_MAP_DOWNLOADS: ${ALLOW_MEMBER_MAP_DOWNLOADS:-true}
       MAX_MAP_EXTRACT_MB: ${MAX_MAP_EXTRACT_MB:-1024}
@@ -144,6 +147,8 @@ services:
       REDIS_URL: ${DOCKER_REDIS_URL:-redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-key-minimum-32-characters-long}
       LOG_DIR: /var/log/app
+      LOG_RETENTION_FILES: ${LOG_RETENTION_FILES:-10}
+      LOG_RING_MAX_ENTRIES: ${LOG_RING_MAX_ENTRIES:-500}
     volumes:
       - ./logs:/var/log/app
     networks:

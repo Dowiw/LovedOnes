@@ -6,6 +6,8 @@ import type {
   LocationBroadcast,
   LocationPoint,
   LocationRequestItem,
+  LogPruneResult,
+  LogRetentionSettings,
   MapDownloadJob,
   MapRegion,
   PlaceTransitionEvent,
@@ -14,6 +16,7 @@ import type {
   SystemRole,
   SystemTelemetry,
   SystemUpdateStatus,
+  UpdateLogRetentionInput,
 } from '@loved-ones/shared';
 
 export interface AuthUser {
@@ -489,6 +492,33 @@ export async function apiFetchRecentLogs(accessToken: string): Promise<string[]>
     accessToken,
   );
   return res.logs;
+}
+
+export async function apiFetchLogRetention(accessToken: string): Promise<LogRetentionSettings> {
+  const { authBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ settings: LogRetentionSettings }>(
+    `${authBase}/api/admin/logs/retention`,
+    accessToken,
+  );
+  return res.settings;
+}
+
+export async function apiUpdateLogRetention(
+  accessToken: string,
+  patch: UpdateLogRetentionInput,
+): Promise<LogPruneResult> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<LogPruneResult>(`${authBase}/api/admin/logs/retention`, accessToken, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function apiPruneLogs(accessToken: string): Promise<LogPruneResult> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<LogPruneResult>(`${authBase}/api/admin/logs/prune`, accessToken, {
+    method: 'POST',
+  });
 }
 
 export async function apiFetchGroupLocations(

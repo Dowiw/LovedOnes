@@ -1,8 +1,16 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pause, Play, Terminal, Trash2 } from 'lucide-react';
-import { apiFetchRecentLogs, getLogsWsUrl } from '@/lib/api';
+import { Clock, Pause, Play, Terminal, Trash2 } from 'lucide-react';
+import type { LogRetentionSettings } from '@loved-ones/shared';
+import {
+  apiFetchLogRetention,
+  apiFetchRecentLogs,
+  apiPruneLogs,
+  apiUpdateLogRetention,
+  formatBytes,
+  getLogsWsUrl,
+} from '@/lib/api';
 
 interface ParsedLogLine {
   raw: string;
@@ -55,20 +63,48 @@ function getLevelMeta(level?: number): { label: string; color: string } {
 
 interface LiveLogTerminalProps {
   accessToken: string;
+  onRetentionUpdated?: () => void;
 }
 
-export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
+const RETENTION_DAY_PRESETS = [1, 7, 14, 30, 90] as const;
+
+export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerminalProps) {
   const [lines, setLines] = useState<ParsedLogLine[]>([]);
   const [paused, setPaused] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
   const [connected, setConnected] = useState(false);
   const [filter, setFilter] = useState('');
+  const [retentionOpen, setRetentionOpen] = useState(false);
+  const [retention, setRetention] = useState<LogRetentionSettings | null>(null);
+  const [retentionDaysInput, setRetentionDaysInput] = useState('14');
+  const [maxFilesInput, setMaxFilesInput] = useState('10');
+  const [maxBufferInput, setMaxBufferInput] = useState('500');
+  const [maxStorageInput, setMaxStorageInput] = useState('500');
+  const [autoPruneInput, setAutoPruneInput] = useState(true);
+  const [savingRetention, setSavingRetention] = useState(false);
+  const [pruningNow, setPruningNow] = useState(false);
+  const [retentionFeedback, setRetentionFeedback] = useState<string | null>(null);
+  const [retentionError, setRetentionError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
 
+  const syncRetentionForm = (s: LogRetentionSettings) => {
+    setRetention(s);
+    setRetentionDaysInput(String(s.retentionDays));
+    setMaxFilesInput(String(s.maxFilesPerService));
+    setMaxBufferInput(String(s.maxRecentEntries));
+    setMaxStorageInput(String(s.maxStorageMb));
+    setAutoPruneInput(s.autoPruneDiskLogs);
+  };
+
   useEffect(() => {
     let active = true;
+    void apiFetchLogRetention(accessToken)
+      .then((s) => {
+        if (active) syncRetentionForm(s);
+      })
+      .catch(() => {});
     void apiFetchRecentLogs(accessToken)
       .then((initial) => {
         if (active) {
@@ -108,6 +144,61 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
     return lines.filter((l) => l.raw.toLowerCase().includes(q));
   }, [lines, filter]);
 
+  async function handleSaveRetention(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingRetention(true);
+    setRetentionError(null);
+    setRetentionFeedback(null);
+    try {
+      const result = await apiUpdateLogRetention(accessToken, {
+        retentionDays: Math.min(365, Math.max(1, Math.round(Number(retentionDaysInput) || 14))),
+        maxFilesPerService: Math.min(100, Math.max(1, Math.round(Number(maxFilesInput) || 10))),
+        maxRecentEntries: Math.min(10000, Math.max(50, Math.round(Number(maxBufferInput) || 500))),
+        maxStorageMb: Math.min(50000, Math.max(10, Math.round(Number(maxStorageInput) || 500))),
+        autoPruneDiskLogs: autoPruneInput,
+      });
+      syncRetentionForm(result.settings);
+      const summary =
+        result.deletedFiles > 0 || result.trimmedRedisEntries > 0
+          ? `Saved · pruned ${result.deletedFiles} files (${formatBytes(result.freedBytes)}) & ${result.trimmedRedisEntries} buffer entries`
+          : `Saved (${result.settings.retentionDays}d retention active)`;
+      setRetentionFeedback(summary);
+      if (result.trimmedRedisEntries > 0) {
+        const refreshed = await apiFetchRecentLogs(accessToken).catch(() => null);
+        if (refreshed) setLines(refreshed.map(parseLogLine));
+      }
+      onRetentionUpdated?.();
+    } catch (err) {
+      setRetentionError(err instanceof Error ? err.message : 'Failed to save log retention');
+    } finally {
+      setSavingRetention(false);
+    }
+  }
+
+  async function handlePruneNow() {
+    setPruningNow(true);
+    setRetentionError(null);
+    setRetentionFeedback(null);
+    try {
+      const result = await apiPruneLogs(accessToken);
+      syncRetentionForm(result.settings);
+      setRetentionFeedback(
+        result.deletedFiles > 0 || result.trimmedRedisEntries > 0
+          ? `Pruned ${result.deletedFiles} files (${formatBytes(result.freedBytes)}) & ${result.trimmedRedisEntries} buffer entries`
+          : 'All logs are already within retention limits',
+      );
+      if (result.trimmedRedisEntries > 0) {
+        const refreshed = await apiFetchRecentLogs(accessToken).catch(() => null);
+        if (refreshed) setLines(refreshed.map(parseLogLine));
+      }
+      onRetentionUpdated?.();
+    } catch (err) {
+      setRetentionError(err instanceof Error ? err.message : 'Failed to prune expired logs');
+    } finally {
+      setPruningNow(false);
+    }
+  }
+
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-5 py-3.5">
@@ -130,7 +221,7 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             type="text"
             value={filter}
@@ -138,6 +229,18 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
             placeholder="Filter logs (user, group, action)..."
             className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none"
           />
+          <button
+            type="button"
+            onClick={() => setRetentionOpen((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+              retentionOpen
+                ? 'border-zinc-950 bg-zinc-950 text-white'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950'
+            }`}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            Retention{retention ? ` · ${retention.retentionDays}d` : ''}
+          </button>
           <button
             type="button"
             onClick={() => setShowRawJson((r) => !r)}
@@ -167,6 +270,122 @@ export function LiveLogTerminal({ accessToken }: LiveLogTerminalProps) {
           </button>
         </div>
       </div>
+
+      {retentionOpen && (
+        <form
+          onSubmit={(e) => void handleSaveRetention(e)}
+          className="space-y-3 border-b border-zinc-200 bg-zinc-50/90 px-5 py-4"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-semibold text-zinc-950">Log Retention Policy</h3>
+              <p className="text-[11px] text-zinc-500">
+                Controls how long rotated disk logs and Redis live terminal entries are kept before pruning.
+              </p>
+            </div>
+            <div className="flex items-center gap-1">
+              {RETENTION_DAY_PRESETS.map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setRetentionDaysInput(String(days))}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${
+                    Number(retentionDaysInput) === days
+                      ? 'bg-zinc-950 text-white'
+                      : 'border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100'
+                  }`}
+                >
+                  {days}d
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="space-y-1 text-[11px] font-medium text-zinc-600">
+              <span>Keep logs (days)</span>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={retentionDaysInput}
+                onChange={(e) => setRetentionDaysInput(e.target.value)}
+                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+              />
+            </label>
+            <label className="space-y-1 text-[11px] font-medium text-zinc-600">
+              <span>Max files / service</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={maxFilesInput}
+                onChange={(e) => setMaxFilesInput(e.target.value)}
+                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+              />
+            </label>
+            <label className="space-y-1 text-[11px] font-medium text-zinc-600">
+              <span>Live terminal buffer lines</span>
+              <input
+                type="number"
+                min={50}
+                max={10000}
+                value={maxBufferInput}
+                onChange={(e) => setMaxBufferInput(e.target.value)}
+                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+              />
+            </label>
+            <label className="space-y-1 text-[11px] font-medium text-zinc-600">
+              <span>Disk alert threshold (MB)</span>
+              <input
+                type="number"
+                min={10}
+                max={50000}
+                value={maxStorageInput}
+                onChange={(e) => setMaxStorageInput(e.target.value)}
+                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <label className="flex items-center gap-2 text-xs text-zinc-700">
+              <input
+                type="checkbox"
+                checked={autoPruneInput}
+                onChange={(e) => setAutoPruneInput(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-950"
+              />
+              <span>Automatically prune expired rotated logs</span>
+            </label>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={pruningNow || savingRetention}
+                onClick={() => void handlePruneNow()}
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+              >
+                {pruningNow ? 'Pruning...' : 'Prune Expired Now'}
+              </button>
+              <button
+                type="submit"
+                disabled={savingRetention || pruningNow}
+                className="rounded-lg bg-zinc-950 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {savingRetention ? 'Saving...' : 'Save Retention'}
+              </button>
+            </div>
+          </div>
+
+          {retentionError && (
+            <div className="text-[11px] font-medium text-rose-600">{retentionError}</div>
+          )}
+          {retentionFeedback && (
+            <div className="text-[11px] font-medium text-emerald-700">{retentionFeedback}</div>
+          )}
+        </form>
+      )}
 
       <div className="h-80 overflow-y-auto bg-zinc-950 p-4 font-mono text-xs leading-5">
         {filtered.length === 0 ? (

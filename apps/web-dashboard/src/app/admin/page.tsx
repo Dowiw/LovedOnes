@@ -627,7 +627,10 @@ export default function AdminDashboardPage() {
           </div>
         </section>
 
-        <LiveLogTerminal accessToken={session.accessToken} />
+        <LiveLogTerminal
+          accessToken={session.accessToken}
+          onRetentionUpdated={() => void refreshData(session.accessToken)}
+        />
       </main>
     </div>
   );

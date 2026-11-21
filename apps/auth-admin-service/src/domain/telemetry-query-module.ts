@@ -1,5 +1,5 @@
 import { DatabaseTelemetryResult } from '@loved-ones/db';
-import { SystemTelemetry } from '@loved-ones/shared';
+import { LogRetentionSettings, SystemTelemetry } from '@loved-ones/shared';
 import { RedisUserTelemetrySnapshot } from '@loved-ones/shared/telemetry';
 
 export interface TelemetryQueryStore {
@@ -13,6 +13,7 @@ export interface TelemetryQueryModuleOptions {
   store: TelemetryQueryStore;
   logDir: string;
   maxLogStorageMb: number;
+  getLogRetention?: () => Promise<LogRetentionSettings>;
   now?: () => Date;
 }
 
@@ -24,22 +25,26 @@ export class TelemetryQueryModule {
   private readonly store: TelemetryQueryStore;
   private readonly logDir: string;
   private readonly maxLogStorageMb: number;
+  private readonly getLogRetention?: () => Promise<LogRetentionSettings>;
   private readonly now: () => Date;
 
   constructor(options: TelemetryQueryModuleOptions) {
     this.store = options.store;
     this.logDir = options.logDir;
     this.maxLogStorageMb = options.maxLogStorageMb;
+    this.getLogRetention = options.getLogRetention;
     this.now = options.now ?? (() => new Date());
   }
 
   async getSystemTelemetry(): Promise<SystemTelemetry> {
-    const [logStorageBytes, dbTelemetry] = await Promise.all([
+    const [logStorageBytes, dbTelemetry, retention] = await Promise.all([
       this.store.computeLogStorageBytes(),
       this.store.getDatabaseTelemetry(),
+      this.getLogRetention ? this.getLogRetention().catch(() => null) : Promise.resolve(null),
     ]);
 
-    const maxLogStorageBytes = Math.round(this.maxLogStorageMb * 1024 * 1024);
+    const effectiveMaxMb = retention?.maxStorageMb ?? this.maxLogStorageMb;
+    const maxLogStorageBytes = Math.round(effectiveMaxMb * 1024 * 1024);
     const logStoragePercent =
       maxLogStorageBytes > 0
         ? Number(((logStorageBytes / maxLogStorageBytes) * 100).toFixed(2))

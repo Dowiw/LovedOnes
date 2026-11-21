@@ -573,6 +573,36 @@ export const TriggerSystemUpdateSchema = z.object({
 });
 export type TriggerSystemUpdateInput = z.infer<typeof TriggerSystemUpdateSchema>;
 
+// ---- Log Retention Policy Schemas ----
+
+export const LogRetentionSettingsSchema = z.object({
+  retentionDays: z.number().int().min(1).max(365),
+  maxFilesPerService: z.number().int().min(1).max(100),
+  maxRecentEntries: z.number().int().min(50).max(10000),
+  maxStorageMb: z.number().min(10).max(50000),
+  autoPruneDiskLogs: z.boolean().default(true),
+  updatedAt: z.string().nullable().optional(),
+});
+export type LogRetentionSettings = z.infer<typeof LogRetentionSettingsSchema>;
+
+export const UpdateLogRetentionSchema = z.object({
+  retentionDays: z.number().int().min(1).max(365).optional(),
+  maxFilesPerService: z.number().int().min(1).max(100).optional(),
+  maxRecentEntries: z.number().int().min(50).max(10000).optional(),
+  maxStorageMb: z.number().min(10).max(50000).optional(),
+  autoPruneDiskLogs: z.boolean().optional(),
+});
+export type UpdateLogRetentionInput = z.infer<typeof UpdateLogRetentionSchema>;
+
+export const LogPruneResultSchema = z.object({
+  settings: LogRetentionSettingsSchema,
+  deletedFiles: z.number().int().nonnegative(),
+  freedBytes: z.number().nonnegative(),
+  trimmedRedisEntries: z.number().int().nonnegative(),
+  remainingRedisEntries: z.number().int().nonnegative(),
+});
+export type LogPruneResult = z.infer<typeof LogPruneResultSchema>;
+
 // ---- Third-Party Tracker Schemas (OwnTracks & Overland) ----
 
 export const OwnTracksLocationItemSchema = z

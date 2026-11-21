@@ -34,7 +34,7 @@ import {
   UpdateProfileSchema,
   withMinDelay,
 } from '../index.js';
-import { createServiceLogger } from '../logger.js';
+import { createServiceLogger, LOGS_RING_KEY, pruneLogArtifacts } from '../logger.js';
 import {
   createTokenService,
   extractBearerToken,
@@ -592,5 +592,73 @@ describe('@loved-ones/shared', () => {
     });
     expect(current.updateAvailable).toBe(false);
     expect(current.updateRequired).toBe(false);
+  });
+
+  it('prunes rotated log files by retention age and file count while preserving non-log files', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lovedones-prune-'));
+    try {
+      const nowMs = Date.UTC(2026, 10, 21, 9, 0, 0);
+      const tenDaysAgo = new Date(nowMs - 10 * 24 * 60 * 60 * 1000);
+      const twoDaysAgo = new Date(nowMs - 2 * 24 * 60 * 60 * 1000);
+      const oneHourAgo = new Date(nowMs - 60 * 60 * 1000);
+
+      const oldFile = path.join(tmpDir, 'auth-admin-service.log.1');
+      const midFile = path.join(tmpDir, 'auth-admin-service.log.2');
+      const freshFile = path.join(tmpDir, 'auth-admin-service.log.3');
+      const keepGitkeep = path.join(tmpDir, '.gitkeep');
+      const keepState = path.join(tmpDir, 'system-update.json');
+
+      fs.writeFileSync(oldFile, 'old-log-entry\n', 'utf8');
+      fs.writeFileSync(midFile, 'mid-log-entry\n', 'utf8');
+      fs.writeFileSync(freshFile, 'fresh-log-entry\n', 'utf8');
+      fs.writeFileSync(keepGitkeep, '', 'utf8');
+      fs.writeFileSync(keepState, '{}', 'utf8');
+
+      fs.utimesSync(oldFile, tenDaysAgo, tenDaysAgo);
+      fs.utimesSync(midFile, twoDaysAgo, twoDaysAgo);
+      fs.utimesSync(freshFile, oneHourAgo, oneHourAgo);
+      fs.utimesSync(keepGitkeep, tenDaysAgo, tenDaysAgo);
+      fs.utimesSync(keepState, tenDaysAgo, tenDaysAgo);
+
+      // Retain 7 days, max 2 files -> oldFile (10d) deleted; midFile (2d) + freshFile (1h) kept
+      const res = await pruneLogArtifacts({
+        logDir: tmpDir,
+        settings: {
+          retentionDays: 7,
+          maxFilesPerService: 2,
+          maxRecentEntries: 500,
+          maxStorageMb: 500,
+          autoPruneDiskLogs: true,
+        },
+        nowMs,
+      });
+
+      expect(res.deletedFiles).toBe(1);
+      expect(res.freedBytes).toBeGreaterThan(0);
+      expect(fs.existsSync(oldFile)).toBe(false);
+      expect(fs.existsSync(midFile)).toBe(true);
+      expect(fs.existsSync(freshFile)).toBe(true);
+      expect(fs.existsSync(keepGitkeep)).toBe(true);
+      expect(fs.existsSync(keepState)).toBe(true);
+
+      // Dropping maxFilesPerService to 1 removes midFile while preserving freshFile
+      const resCount = await pruneLogArtifacts({
+        logDir: tmpDir,
+        settings: {
+          retentionDays: 7,
+          maxFilesPerService: 1,
+          maxRecentEntries: 500,
+          maxStorageMb: 500,
+          autoPruneDiskLogs: true,
+        },
+        nowMs,
+      });
+      expect(resCount.deletedFiles).toBe(1);
+      expect(fs.existsSync(midFile)).toBe(false);
+      expect(fs.existsSync(freshFile)).toBe(true);
+      expect(LOGS_RING_KEY).toBe('logs:ring');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

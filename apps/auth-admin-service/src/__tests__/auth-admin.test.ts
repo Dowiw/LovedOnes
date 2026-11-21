@@ -496,5 +496,57 @@ describe('@loved-ones/auth-admin-service integration', () => {
       updateAvailable: false,
       updateRequired: false,
     });
+
+    // 15. Configurable Log Retention policy & manual pruning (Host Admin only)
+    const memberRetentionRes = await app.inject({
+      method: 'GET',
+      url: '/api/admin/logs/retention',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+    });
+    expect(memberRetentionRes.statusCode).toBe(403);
+
+    const expiredLogPath = path.join(logDir, 'realtime-service.log.99');
+    fs.writeFileSync(expiredLogPath, 'stale\n', 'utf8');
+    const oldDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(expiredLogPath, oldDate, oldDate);
+
+    const updateRetentionRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/admin/logs/retention',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+      payload: {
+        retentionDays: 3,
+        maxFilesPerService: 5,
+        maxRecentEntries: 250,
+        maxStorageMb: 250,
+        autoPruneDiskLogs: true,
+      },
+    });
+    expect(updateRetentionRes.statusCode).toBe(200);
+    expect(updateRetentionRes.json().settings).toMatchObject({
+      retentionDays: 3,
+      maxFilesPerService: 5,
+      maxRecentEntries: 250,
+      maxStorageMb: 250,
+      autoPruneDiskLogs: true,
+    });
+    expect(updateRetentionRes.json().deletedFiles).toBeGreaterThanOrEqual(1);
+    expect(fs.existsSync(expiredLogPath)).toBe(false);
+
+    const telAfterRetention = await app.inject({
+      method: 'GET',
+      url: '/api/admin/telemetry',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(telAfterRetention.statusCode).toBe(200);
+    expect(telAfterRetention.json().maxLogStorageBytes).toBe(250 * 1024 * 1024);
+
+    const manualPruneRes = await app.inject({
+      method: 'POST',
+      url: '/api/admin/logs/prune',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(manualPruneRes.statusCode).toBe(200);
+    expect(manualPruneRes.json().settings.retentionDays).toBe(3);
   });
 });

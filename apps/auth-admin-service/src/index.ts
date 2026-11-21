@@ -11,6 +11,7 @@ import {
   DEFAULT_APP_VERSION,
   evaluateClientVersion,
   MOBILE_DEFAULT_DOWNLOAD_URL,
+  UpdateLogRetentionSchema,
 } from '@loved-ones/shared';
 import {
   attachAuthAndTelemetry,
@@ -21,8 +22,11 @@ import {
 } from '@loved-ones/shared/auth';
 import {
   createServiceLogger,
+  loadLogRetentionSettings,
   LOGS_RING_KEY,
   LOGS_STREAM_CHANNEL,
+  pruneLogArtifacts,
+  saveLogRetentionSettings,
   ServiceLoggerHandle,
 } from '@loved-ones/shared/logger';
 import { recordUserTelemetry } from '@loved-ones/shared/telemetry';
@@ -136,7 +140,23 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     store: new PostgresRedisTelemetryStore(pool, redis, logDir),
     logDir,
     maxLogStorageMb,
+    getLogRetention: () => loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb }),
   });
+
+  // Periodic automatic cleanup of expired log files and stale Redis log buffer entries
+  const pruneInterval = setInterval(() => {
+    void loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb })
+      .then((settings) => {
+        if (!settings.autoPruneDiskLogs) return;
+        return pruneLogArtifacts({
+          logDir: options.disableFileLog ? undefined : logDir,
+          redis,
+          settings,
+        });
+      })
+      .catch(() => {});
+  }, 60 * 60 * 1000);
+  pruneInterval.unref();
   const mapRegions = new MapRegionsModule({
     ...(options.mapRegions ?? {}),
     onLog: (level, msg, meta) => {
@@ -669,8 +689,75 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   });
 
   app.get('/api/admin/logs/recent', { preHandler: [requireHostAdmin] }, async () => {
-    return telemetryQuery.getRecentLogs(200);
+    const retention = await loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb });
+    const fetchLimit = Math.min(1000, Math.max(50, retention.maxRecentEntries));
+    return telemetryQuery.getRecentLogs(fetchLimit);
   });
+
+  app.get('/api/admin/logs/retention', { preHandler: [requireHostAdmin] }, async () => {
+    const settings = await loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb });
+    return { settings };
+  });
+
+  app.patch(
+    '/api/admin/logs/retention',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const parsed = UpdateLogRetentionSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        throw new DomainError(400, 'Invalid log retention settings', parsed.error.flatten());
+      }
+      const settings = await saveLogRetentionSettings(redis, parsed.data, {
+        maxStorageMb: maxLogStorageMb,
+      });
+      const pruned = await pruneLogArtifacts({
+        logDir: !options.disableFileLog && settings.autoPruneDiskLogs ? logDir : undefined,
+        redis,
+        settings,
+      });
+      loggerHandle.logger.info(
+        {
+          action: 'logs.retention_updated',
+          userId: actor.id,
+          username: actor.username,
+          retentionDays: settings.retentionDays,
+          maxFilesPerService: settings.maxFilesPerService,
+          maxRecentEntries: settings.maxRecentEntries,
+          maxStorageMb: settings.maxStorageMb,
+          autoPruneDiskLogs: settings.autoPruneDiskLogs,
+        },
+        `${actor.username} updated log retention (${settings.retentionDays}d, ${settings.maxFilesPerService} files/service, ${settings.maxRecentEntries} live entries, ${settings.maxStorageMb} MB alert limit)`,
+      );
+      return { settings, ...pruned };
+    },
+  );
+
+  app.post(
+    '/api/admin/logs/prune',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const settings = await loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb });
+      const result = await pruneLogArtifacts({
+        logDir: options.disableFileLog ? undefined : logDir,
+        redis,
+        settings,
+      });
+      loggerHandle.logger.info(
+        {
+          action: 'logs.pruned',
+          userId: actor.id,
+          username: actor.username,
+          deletedFiles: result.deletedFiles,
+          freedBytes: result.freedBytes,
+          trimmedRedisEntries: result.trimmedRedisEntries,
+        },
+        `${actor.username} pruned expired logs (deleted ${result.deletedFiles} files, trimmed ${result.trimmedRedisEntries} buffer entries)`,
+      );
+      return { settings, ...result };
+    },
+  );
 
   app.get(
     '/api/admin/system/update',
@@ -859,6 +946,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   });
 
   app.addHook('onClose', async () => {
+    clearInterval(pruneInterval);
     await mapRegions.close();
     await loggerHandle.close();
     await redis.quit().catch(() => redis.disconnect());
