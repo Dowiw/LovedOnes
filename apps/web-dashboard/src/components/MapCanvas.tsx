@@ -18,6 +18,7 @@ import {
   type MapRegion,
 } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
+import { getMapPaintOverrides, type ResolvedMapTheme } from '@/lib/mapTheme';
 
 let pmtilesProtocolRegistered = false;
 const archiveInstanceCache = new Map<string, PMTiles>();
@@ -362,6 +363,14 @@ function applyMapLabelLanguage(map: maplibregl.Map, lang: MapLabelLanguage): voi
   }
 }
 
+function applyMapTheme(map: maplibregl.Map, theme: ResolvedMapTheme): void {
+  for (const entry of getMapPaintOverrides(theme)) {
+    if (map.getLayer(entry.layerId)) {
+      map.setPaintProperty(entry.layerId, entry.property, entry.value);
+    }
+  }
+}
+
 function escapeHtml(raw: string): string {
   return raw
     .replace(/&/g, '&amp;')
@@ -409,6 +418,7 @@ interface MapCanvasProps {
   draftPlace?: DraftPlaceCoords | null;
   pickingPlace?: boolean;
   labelLanguage?: MapLabelLanguage;
+  mapTheme?: ResolvedMapTheme;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
   onViewportChange?: (viewport: { latitude: number; longitude: number; zoom: number }) => void;
   className?: string;
@@ -432,9 +442,10 @@ export function MapCanvas({
   draftPlace = null,
   pickingPlace = false,
   labelLanguage = 'en',
+  mapTheme = 'light',
   onMapSelectCoords,
   onViewportChange,
-  className = 'relative h-full w-full overflow-hidden bg-[#cfe3ee]',
+  className,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -449,6 +460,8 @@ export function MapCanvas({
   const hasAutoFramedRef = useRef(false);
   const labelLanguageRef = useRef<MapLabelLanguage>(labelLanguage);
   labelLanguageRef.current = labelLanguage;
+  const mapThemeRef = useRef<ResolvedMapTheme>(mapTheme);
+  mapThemeRef.current = mapTheme;
   const placesRef = useRef<GroupPlace[]>(places);
   placesRef.current = places;
   const currentUserIdRef = useRef<string | null>(currentUserId);
@@ -633,6 +646,7 @@ export function MapCanvas({
     map.on('load', () => {
       styleReadyRef.current = true;
       applyMapLabelLanguage(map, labelLanguageRef.current);
+      applyMapTheme(map, mapThemeRef.current);
       emitViewport();
     });
     map.on('moveend', emitViewport);
@@ -645,7 +659,9 @@ export function MapCanvas({
             {
               id: 'fallback-bg',
               type: 'background',
-              paint: { 'background-color': '#e9eff3' },
+              paint: {
+                'background-color': mapThemeRef.current === 'dark' ? '#111318' : '#e9eff3',
+              },
             },
           ],
         });
@@ -1217,7 +1233,7 @@ export function MapCanvas({
         source: TRAIL_SOURCE_ID,
         filter: ['==', ['geometry-type'], 'LineString'],
         paint: {
-          'line-color': '#18181b',
+          'line-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
           'line-width': 2.5,
           'line-dasharray': [2, 1.5],
           'line-opacity': 0.75,
@@ -1230,8 +1246,8 @@ export function MapCanvas({
         filter: ['==', ['geometry-type'], 'Point'],
         paint: {
           'circle-radius': ['case', ['>', ['coalesce', ['get', 'pingCount'], 1], 1], 5, 4],
-          'circle-color': '#ffffff',
-          'circle-stroke-color': '#18181b',
+          'circle-color': mapThemeRef.current === 'dark' ? '#09090b' : '#ffffff',
+          'circle-stroke-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
           'circle-stroke-width': 1.5,
         },
       });
@@ -1251,6 +1267,14 @@ export function MapCanvas({
       applyMapLabelLanguage(map, labelLanguage);
     }
   }, [labelLanguage]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (styleReadyRef.current || map.isStyleLoaded()) {
+      applyMapTheme(map, mapTheme);
+    }
+  }, [mapTheme]);
 
   useEffect(() => {
     for (const entry of markersRef.current.values()) {
@@ -1286,5 +1310,11 @@ export function MapCanvas({
     }
   }, [regions, regionsRevision]);
 
-  return <div ref={containerRef} className={className} />;
+  const resolvedClassName =
+    className ??
+    `relative h-full w-full overflow-hidden transition-colors duration-300 ${
+      mapTheme === 'dark' ? 'bg-[#0c141d]' : 'bg-[#cfe3ee]'
+    }`;
+
+  return <div ref={containerRef} className={resolvedClassName} />;
 }

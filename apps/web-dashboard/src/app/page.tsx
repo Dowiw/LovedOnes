@@ -23,6 +23,8 @@ import {
   MapPin,
   Menu,
   MessageSquare,
+  Monitor,
+  Moon,
   PanelRight,
   Plus,
   QrCode,
@@ -31,6 +33,7 @@ import {
   Send,
   Settings,
   Smartphone,
+  Sun,
   Trash2,
   Users,
   X,
@@ -102,6 +105,12 @@ import {
   subscribeToWebPush,
   unsubscribeFromWebPush,
 } from '@/lib/pwaPush';
+import {
+  MAP_THEME_STORAGE_KEY,
+  type MapThemePreference,
+  parseMapThemePreference,
+  resolveMapTheme,
+} from '@/lib/mapTheme';
 
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
 type MapViewMode = 'live' | 'trails' | 'places';
@@ -248,6 +257,8 @@ export default function HomePage() {
   const [isStandalonePwa, setIsStandalonePwa] = useState(false);
   const [needsIosInstallForPush, setNeedsIosInstallForPush] = useState(false);
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
+  const [mapThemePreference, setMapThemePreference] = useState<MapThemePreference>('system');
+  const [systemPrefersDark, setSystemPrefersDark] = useState(false);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
   const [mapRegionsLoaded, setMapRegionsLoaded] = useState(false);
   const [regionsRevision, setRegionsRevision] = useState(0);
@@ -290,6 +301,8 @@ export default function HomePage() {
       if (savedLang === 'en' || savedLang === 'local') {
         setLabelLanguage(savedLang);
       }
+      const savedTheme = window.localStorage.getItem(MAP_THEME_STORAGE_KEY);
+      setMapThemePreference(parseMapThemePreference(savedTheme));
       const savedAlerts = window.localStorage.getItem('lovedones_chat_alerts_v1');
       if (savedAlerts === 'off') {
         setChatAlertsEnabled(false);
@@ -346,6 +359,15 @@ export default function HomePage() {
         }
       }
     };
+
+    const darkMedia = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (darkMedia) {
+      setSystemPrefersDark(darkMedia.matches);
+    }
+    const onColorSchemeChange = (e: MediaQueryListEvent) => {
+      setSystemPrefersDark(e.matches);
+    };
+    darkMedia?.addEventListener?.('change', onColorSchemeChange);
 
     window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
     window.addEventListener('appinstalled', onAppInstalled);
@@ -410,6 +432,7 @@ export default function HomePage() {
       window.removeEventListener(ACCOUNT_REMOVED_EVENT, onAccountRemoved);
       window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
       window.removeEventListener('appinstalled', onAppInstalled);
+      darkMedia?.removeEventListener?.('change', onColorSchemeChange);
       navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage);
       if (chatToastTimerRef.current !== null) {
         window.clearTimeout(chatToastTimerRef.current);
@@ -425,6 +448,17 @@ export default function HomePage() {
       // ignore storage failures
     }
   }
+
+  function handleChangeMapTheme(pref: MapThemePreference) {
+    setMapThemePreference(pref);
+    try {
+      window.localStorage.setItem(MAP_THEME_STORAGE_KEY, pref);
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  const resolvedMapTheme = resolveMapTheme(mapThemePreference, systemPrefersDark);
 
   function handleToggleChatAlerts() {
     setChatAlertsEnabled((prev) => {
@@ -1820,7 +1854,12 @@ export default function HomePage() {
   }
 
   return (
-    <div className="lo-app-shell relative w-full overflow-hidden bg-[#cfe3ee]">
+    <div
+      data-map-theme={resolvedMapTheme}
+      className={`lo-app-shell relative w-full overflow-hidden transition-colors duration-300 ${
+        resolvedMapTheme === 'dark' ? 'bg-[#0c141d]' : 'bg-[#cfe3ee]'
+      }`}
+    >
       {/* Full-bleed Map Canvas */}
       <MapCanvas
         locations={mapViewMode === 'places' ? [] : locations}
@@ -1840,6 +1879,7 @@ export default function HomePage() {
         draftPlace={draftPlace}
         pickingPlace={isPickingPlace}
         labelLanguage={labelLanguage}
+        mapTheme={resolvedMapTheme}
         onViewportChange={setMapViewport}
         onMapSelectCoords={(lat, lon) => {
           if (!isPickingPlace) return;
@@ -2321,6 +2361,41 @@ export default function HomePage() {
               {geoStatus && (
                 <p className="mt-2 truncate font-mono text-[11px] text-zinc-500">{geoStatus}</p>
               )}
+            </div>
+
+            {/* Map Theme (Auto / Light / Dark) */}
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                {resolvedMapTheme === 'dark' ? (
+                  <Moon className="h-3.5 w-3.5 text-zinc-500" />
+                ) : (
+                  <Sun className="h-3.5 w-3.5 text-zinc-500" />
+                )}
+                Map Theme
+              </div>
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5">
+                {(
+                  [
+                    ['system', 'Auto', Monitor],
+                    ['light', 'Light', Sun],
+                    ['dark', 'Dark', Moon],
+                  ] as const
+                ).map(([pref, label, Icon]) => (
+                  <button
+                    key={pref}
+                    type="button"
+                    onClick={() => handleChangeMapTheme(pref)}
+                    className={`lo-press flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold transition ${
+                      mapThemePreference === pref
+                        ? 'bg-zinc-950 text-white shadow-sm'
+                        : 'text-zinc-600 hover:text-zinc-950'
+                    }`}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Map Label Language */}
