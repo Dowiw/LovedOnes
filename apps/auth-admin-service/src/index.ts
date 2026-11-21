@@ -29,7 +29,10 @@ import {
   saveLogRetentionSettings,
   ServiceLoggerHandle,
 } from '@loved-ones/shared/logger';
-import { recordUserTelemetry } from '@loved-ones/shared/telemetry';
+import {
+  recordUserTelemetry,
+  REMOVED_USER_PREFIX,
+} from '@loved-ones/shared/telemetry';
 import {
   PostgresAuthGroupStore,
   PostgresRedisTelemetryStore,
@@ -133,9 +136,11 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
 
   const emailSender = options.emailSender ?? new SmtpEmailSender();
   const tokenService = createTokenService({ jwtSecret, jwtRefreshSecret });
+  const authGroupStore = new PostgresAuthGroupStore(pool);
+  const sessionStore = new RedisSessionStore(redis);
   const authGroup = new AuthGroupModule({
-    store: new PostgresAuthGroupStore(pool),
-    sessionStore: new RedisSessionStore(redis),
+    store: authGroupStore,
+    sessionStore,
     tokenService,
     emailSender,
     publicServerUrl,
@@ -202,9 +207,17 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
         },
         `${authReq.authUser?.username ?? request.ip} ${request.method} ${request.url} rejected (${err.statusCode}): ${err.message}`,
       );
+      const detailCode =
+        err.details && typeof err.details === 'object' && 'code' in err.details
+          ? (err.details as { code?: string }).code
+          : undefined;
       return reply
         .code(err.statusCode)
-        .send(err.details ? { error: err.message, details: err.details } : { error: err.message });
+        .send(
+          err.details
+            ? { error: err.message, ...(detailCode ? { code: detailCode } : {}), details: err.details }
+            : { error: err.message },
+        );
     }
     loggerHandle.logger.error({ err, method: request.method, url: request.url }, 'unhandled auth-admin error');
     return reply.code(500).send({ error: 'Internal server error' });
@@ -212,6 +225,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
 
   const { requireAuth, requireHostAdmin } = attachAuthAndTelemetry(app, {
     verifyAccessToken: (token) => tokenService.verifyAccessToken(token),
+    verifyUserActive: async (userId) => !(await redis.get(`${REMOVED_USER_PREFIX}${userId}`)),
     recordTelemetry: (userId, elapsedMs, weight) =>
       recordUserTelemetry(redis, userId, elapsedMs, weight),
   });
@@ -754,6 +768,39 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   app.get('/api/admin/registration-requests', { preHandler: [requireHostAdmin] }, async () => {
     return registrationRequests.listForAdmin();
   });
+
+  app.delete(
+    '/api/admin/users/:userId',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const { userId } = request.params as { userId: string };
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidPattern.test(userId)) {
+        throw new DomainError(400, 'Invalid userId');
+      }
+      if (userId === actor.id) {
+        throw new DomainError(400, 'You cannot remove your own active host admin profile');
+      }
+      const removed = await authGroupStore.deleteAccountById(userId);
+      if (!removed) {
+        throw new DomainError(404, 'Account not found');
+      }
+      await sessionStore.markAccountRemoved(removed.id, removed.email);
+      loggerHandle.logger.info(
+        {
+          action: 'account.deleted_by_admin',
+          userId: actor.id,
+          username: actor.username,
+          removedUserId: removed.id,
+          removedUsername: removed.username,
+          removedEmail: removed.email,
+        },
+        `${actor.username} removed profile ${removed.username} (${removed.email}) from server`,
+      );
+      return { ok: true, removedUserId: removed.id, email: removed.email, username: removed.username };
+    },
+  );
 
   app.post(
     '/api/admin/registration-requests/:id/approve',

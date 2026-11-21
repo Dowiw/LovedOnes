@@ -7,8 +7,12 @@ import { GroupRole, PrivacyMode, SystemRole } from '@loved-ones/shared';
 import { LOGS_RING_KEY } from '@loved-ones/shared/logger';
 import {
   getUserTelemetryFromRedis,
+  REMOVED_USER_PREFIX,
   SESSION_USER_PREFIX,
+  SOCKETS_USER_PREFIX,
+  TELEMETRY_USER_PREFIX,
   TRACKER_JTI_USER_PREFIX,
+  USER_ACCOUNT_REMOVED_CHANNEL,
   USER_PROFILE_UPDATED_CHANNEL,
 } from '@loved-ones/shared/telemetry';
 import {
@@ -520,6 +524,31 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
     const res = await this.pool.query('DELETE FROM group_invites WHERE token = $1', [token]);
     return (res.rowCount ?? 0) > 0;
   }
+
+  async deleteAccountById(userId: string): Promise<PublicAccountRecord | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const res = await client.query<Omit<PgUserRow, 'password_hash'>>(
+        `DELETE FROM users WHERE id = $1 RETURNING ${USER_SELECT_COLUMNS}`,
+        [userId],
+      );
+      const removed = res.rows[0] ? mapPublicAccount(res.rows[0]) : null;
+      if (removed) {
+        await client.query(
+          `DELETE FROM registration_requests WHERE LOWER(email) = LOWER($1)`,
+          [removed.email],
+        );
+      }
+      await client.query('COMMIT');
+      return removed;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 export class RedisSessionStore implements SessionStore {
@@ -574,6 +603,26 @@ export class RedisSessionStore implements SessionStore {
     groupIds: string[];
   }): Promise<void> {
     await this.redis.publish(USER_PROFILE_UPDATED_CHANNEL, JSON.stringify(event));
+  }
+
+  async markAccountRemoved(userId: string, email?: string): Promise<void> {
+    const reason = 'Your account was removed from this server by an administrator.';
+    const payload = {
+      userId,
+      email,
+      reason,
+      removedAt: new Date().toISOString(),
+    };
+    const pipeline = this.redis.pipeline();
+    pipeline.set(`${REMOVED_USER_PREFIX}${userId}`, '1', 'EX', 60 * 60 * 24 * 30);
+    pipeline.del(
+      `${SESSION_USER_PREFIX}${userId}`,
+      `${SOCKETS_USER_PREFIX}${userId}`,
+      `${TRACKER_JTI_USER_PREFIX}${userId}`,
+      `${TELEMETRY_USER_PREFIX}${userId}`,
+    );
+    await pipeline.exec();
+    await this.redis.publish(USER_ACCOUNT_REMOVED_CHANNEL, JSON.stringify(payload));
   }
 
   async saveEmailChallenge(

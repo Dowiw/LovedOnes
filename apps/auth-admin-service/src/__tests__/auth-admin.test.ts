@@ -673,5 +673,32 @@ describe('@loved-ones/auth-admin-service integration', () => {
     });
     expect(denyRes.statusCode).toBe(200);
     expect(denyRes.json().request.status).toBe('DENIED');
+
+    // 17. Admin removes Casey's profile -> stale tokens immediately fail with ACCOUNT_REMOVED
+    const caseyId = caseyLoginRes.json().user.id as string;
+    const caseyAccess = caseyLoginRes.json().accessToken as string;
+
+    const selfDeleteForbidden = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/users/${adminData.user.id}`,
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(selfDeleteForbidden.statusCode).toBe(400);
+
+    const deleteCaseyRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/users/${caseyId}`,
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(deleteCaseyRes.statusCode).toBe(200);
+    expect(deleteCaseyRes.json()).toMatchObject({ ok: true, removedUserId: caseyId });
+
+    const caseyAfterDelete = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { Authorization: `Bearer ${caseyAccess}` },
+    });
+    expect(caseyAfterDelete.statusCode).toBe(401);
+    expect(caseyAfterDelete.json().code).toBe('ACCOUNT_REMOVED');
   });
 });

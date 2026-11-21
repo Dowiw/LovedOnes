@@ -30,6 +30,8 @@ import {
   getDefaultServerUrl,
   getGeometricFonts,
   getOnboardingPalette,
+  hexToHsv,
+  hsvToHex,
   validateAuthForm,
 } from '../services/onboardingTheme';
 import {
@@ -465,5 +467,13 @@ describe('@loved-ones/mobile-app', () => {
     const cleared = await clearPendingRegistration('https://home.example.com', store);
     expect(Object.keys(cleared)).toEqual([]);
     expect(await getPendingRegistration(store)).toBeNull();
+  });
+
+  it('converts between HSV and hex colors for custom accent selection', () => {
+    expect(hsvToHex({ h: 0, s: 1, v: 1 })).toBe('#ff0000');
+    expect(hsvToHex({ h: 120, s: 1, v: 1 })).toBe('#00ff00');
+    const roundtrip = hexToHsv('#0ea5e9');
+    expect(hsvToHex(roundtrip)).toMatch(/^#[0-9a-f]{6}$/);
+    expect(Math.round(roundtrip.h)).toBe(199);
   });
 });

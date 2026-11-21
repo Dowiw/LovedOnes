@@ -78,6 +78,8 @@ import { groupChatMessagesForDisplay } from '../services/chatFormatting';
 import { formatUserError } from '../services/errorFormatter';
 import { useSafeAreaInsets } from '../services/safeArea';
 import { clearSessionConfig, MobileStoredConfig, saveStoredConfig } from '../services/secureConfig';
+import { sendLocalNotification } from '../services/notifications';
+import { Vibration } from 'react-native';
 
 interface GroupSummary {
   id: string;
@@ -87,7 +89,7 @@ interface GroupSummary {
 
 interface MobileMapScreenProps {
   config: MobileStoredConfig;
-  onSignedOut: () => void;
+  onSignedOut: (removedMessage?: string) => void;
 }
 
 export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
@@ -290,9 +292,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
   useEffect(() => {
     void checkServerAppVersion(false);
+    void authedFetch('/api/auth/me').catch(() => {});
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         void checkServerAppVersion(false);
+        void authedFetch('/api/auth/me').catch(() => {});
       }
     });
     return () => sub.remove();
@@ -409,8 +413,28 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     });
     socketRef.current = socket;
 
+    const handleRemoteAccountRemoval = async (
+      reason = 'Your account was removed from the server by an administrator.',
+    ) => {
+      await stopBackgroundTracking().catch(() => {});
+      await clearSessionConfig();
+      Vibration.vibrate(180);
+      void sendLocalNotification('Account Removed', reason);
+      onSignedOut(reason);
+    };
+
     socket.on('connect', () => {
       void checkServerAppVersion(false);
+    });
+
+    socket.on('connect_error', (err) => {
+      if (err instanceof Error && err.message === 'ACCOUNT_REMOVED') {
+        void handleRemoteAccountRemoval();
+      }
+    });
+
+    socket.on('account:removed', (evt: { reason?: string }) => {
+      void handleRemoteAccountRemoval(evt?.reason);
     });
 
     socket.on('location:update', (update: LocationBroadcast) => {
@@ -904,6 +928,22 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
     };
 
     let res = await send(accessToken);
+    if (res.status === 401) {
+      const cloned = (await res.clone().json().catch(() => null)) as {
+        code?: string;
+        error?: string;
+      } | null;
+      if (cloned?.code === 'ACCOUNT_REMOVED') {
+        await stopBackgroundTracking().catch(() => {});
+        await clearSessionConfig();
+        const reason =
+          cloned.error ?? 'Your account was removed from the server by an administrator.';
+        Vibration.vibrate(180);
+        void sendLocalNotification('Account Removed', reason);
+        onSignedOut(reason);
+        return res;
+      }
+    }
     if (res.status === 401 && refreshToken) {
       const refreshRes = await fetch(`${serverUrl}/api/auth/refresh`, {
         method: 'POST',
@@ -925,8 +965,21 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           res = await send(tokens.accessToken);
         }
       } else if (refreshRes.status === 400 || refreshRes.status === 401) {
+        const refreshErr = (await refreshRes.clone().json().catch(() => null)) as {
+          code?: string;
+          error?: string;
+        } | null;
+        await stopBackgroundTracking().catch(() => {});
         await clearSessionConfig();
-        onSignedOut();
+        if (refreshErr?.code === 'ACCOUNT_REMOVED') {
+          const reason =
+            refreshErr.error ?? 'Your account was removed from the server by an administrator.';
+          Vibration.vibrate(180);
+          void sendLocalNotification('Account Removed', reason);
+          onSignedOut(reason);
+        } else {
+          onSignedOut();
+        }
       }
     }
     return res;

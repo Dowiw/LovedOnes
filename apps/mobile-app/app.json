@@ -57,6 +57,14 @@
           "cameraPermission": "Allow LovedOnes to scan QR invite codes."
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow LovedOnes to choose and crop your profile photo.",
+          "cameraPermission": "Allow LovedOnes to take a profile photo."
+        }
+      ],
+      "expo-notifications",
       "expo-secure-store",
       "expo-sqlite",
       "@maplibre/maplibre-react-native"

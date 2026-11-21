@@ -7,7 +7,11 @@ import { Redis } from 'ioredis';
 import pg from 'pg';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { createPool, resolveAuditContext, runMigrations } from '@loved-ones/db';
-import { JwtUserPayload, MemberProfileUpdatedSchema } from '@loved-ones/shared';
+import {
+  AccountRemovedEventSchema,
+  JwtUserPayload,
+  MemberProfileUpdatedSchema,
+} from '@loved-ones/shared';
 import {
   attachAuthAndTelemetry,
   AuthenticatedRequest,
@@ -23,8 +27,10 @@ import {
 } from '@loved-ones/shared/logger';
 import {
   recordUserTelemetry,
+  REMOVED_USER_PREFIX,
   TRACKER_JTI_USER_PREFIX,
   trackUserSocket,
+  USER_ACCOUNT_REMOVED_CHANNEL,
   USER_PROFILE_UPDATED_CHANNEL,
 } from '@loved-ones/shared/telemetry';
 import {
@@ -142,6 +148,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       const activeJti = await redis.get(`${TRACKER_JTI_USER_PREFIX}${userId}`);
       return activeJti === jti;
     },
+    verifyUserActive: async (userId) => !(await redis.get(`${REMOVED_USER_PREFIX}${userId}`)),
     recordTelemetry: (userId, elapsedMs, weight) =>
       recordUserTelemetry(redis, userId, elapsedMs, weight),
   });
@@ -184,6 +191,19 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       io.to('admin:logs').emit('logs:line', message);
       return;
     }
+    if (channel === USER_ACCOUNT_REMOVED_CHANNEL) {
+      try {
+        const parsed = AccountRemovedEventSchema.parse(JSON.parse(message));
+        const room = `user:${parsed.userId}`;
+        io.to(room).emit('account:removed', parsed);
+        setTimeout(() => {
+          io.in(room).disconnectSockets(true);
+        }, 180);
+      } catch {
+        // Ignore malformed account removal pub/sub payloads
+      }
+      return;
+    }
     if (channel === USER_PROFILE_UPDATED_CHANNEL) {
       try {
         const parsed = MemberProfileUpdatedSchema.parse(JSON.parse(message));
@@ -201,7 +221,11 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       }
     }
   });
-  await logSubClient.subscribe(LOGS_STREAM_CHANNEL, USER_PROFILE_UPDATED_CHANNEL);
+  await logSubClient.subscribe(
+    LOGS_STREAM_CHANNEL,
+    USER_PROFILE_UPDATED_CHANNEL,
+    USER_ACCOUNT_REMOVED_CHANNEL,
+  );
 
   // ---- REST Routes ----
 
@@ -505,6 +529,11 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         return;
       }
       const user = await tokenService.verifyAccessToken(authToken);
+      const removedFlag = await redis.get(`${REMOVED_USER_PREFIX}${user.id}`);
+      if (removedFlag) {
+        next(new Error('ACCOUNT_REMOVED'));
+        return;
+      }
       socket.data.user = user;
       socket.data.groupIds = await realtime.resolveAuthorizedGroupIds(user.id);
       await trackUserSocket(redis, user.id, socket.id, 'connect');

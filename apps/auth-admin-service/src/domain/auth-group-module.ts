@@ -164,6 +164,7 @@ export interface AuthGroupStore {
   }): Promise<void>;
   listInvites(caller: { userId: string; systemRole: SystemRole }): Promise<InviteRecord[]>;
   deleteInvite?(token: string): Promise<boolean>;
+  deleteAccountById?(userId: string): Promise<PublicAccountRecord | null>;
 }
 
 export interface EmailChallengeRecord {
@@ -499,7 +500,9 @@ export class AuthGroupModule {
 
     const account = await this.store.findAccountById(payload.id);
     if (!account) {
-      throw new DomainError(401, 'User not found');
+      throw new DomainError(401, 'Your account was removed from this server.', {
+        code: 'ACCOUNT_REMOVED',
+      });
     }
 
     const tokens = await this.issueAndPersistSession(account);
@@ -512,7 +515,9 @@ export class AuthGroupModule {
       this.store.listAccountMemberships(userId),
     ]);
     if (!account) {
-      throw new DomainError(404, 'User not found');
+      throw new DomainError(401, 'Your account was removed from this server.', {
+        code: 'ACCOUNT_REMOVED',
+      });
     }
 
     return {

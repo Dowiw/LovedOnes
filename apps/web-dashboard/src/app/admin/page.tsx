@@ -35,8 +35,10 @@ import { LiveLogTerminal } from '@/components/LiveLogTerminal';
 import { NavBar } from '@/components/NavBar';
 import { QrInvitePanel } from '@/components/QrInviteModal';
 import {
+  ACCOUNT_REMOVED_EVENT,
   apiApproveRegistrationRequest,
   apiDeleteMapRegion,
+  apiDeleteUserAccount,
   apiDenyRegistrationRequest,
   apiFetchGroups,
   apiFetchMapJobs,
@@ -60,6 +62,8 @@ export default function AdminDashboardPage() {
   const [mapJobs, setMapJobs] = useState<MapDownloadJob[]>([]);
   const [registrationRequests, setRegistrationRequests] = useState<RegistrationRequestItem[]>([]);
   const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
+  const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null);
+  const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [updateStatus, setUpdateStatus] = useState<SystemUpdateStatus | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -72,6 +76,11 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     setSession(loadSession());
+    const onRemoved = () => {
+      window.location.assign('/?removed=1');
+    };
+    window.addEventListener(ACCOUNT_REMOVED_EVENT, onRemoved);
+    return () => window.removeEventListener(ACCOUNT_REMOVED_EVENT, onRemoved);
   }, []);
 
   const refreshData = useCallback(async (token: string) => {
@@ -122,6 +131,23 @@ export default function AdminDashboardPage() {
         setError(err instanceof Error ? err.message : `Failed to ${action} account request`);
       } finally {
         setReviewingRequestId(null);
+      }
+    },
+    [session, refreshData],
+  );
+
+  const handleRemoveUser = useCallback(
+    async (userId: string) => {
+      if (!session) return;
+      setRemovingUserId(userId);
+      try {
+        await apiDeleteUserAccount(session.accessToken, userId);
+        setConfirmRemoveUserId(null);
+        await refreshData(session.accessToken);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to remove profile');
+      } finally {
+        setRemovingUserId(null);
       }
     },
     [session, refreshData],
@@ -685,33 +711,75 @@ export default function AdminDashboardPage() {
                   <th className="px-5 py-3 font-medium">Cache RAM</th>
                   <th className="px-5 py-3 font-medium">DB Storage</th>
                   <th className="px-5 py-3 font-medium">Points</th>
+                  <th className="px-5 py-3 text-right font-medium">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
-                {telemetry?.users.map((u) => (
-                  <tr key={u.userId} className="hover:bg-zinc-50/80">
-                    <td className="px-5 py-3">
-                      <div className="font-medium text-zinc-950">{u.username}</div>
-                      <div className="text-[11px] text-zinc-400">{u.email}</div>
-                    </td>
-                    <td className="px-5 py-3 font-mono text-zinc-900">
-                      {u.cpuMsPerMin.toFixed(2)} ms
-                    </td>
-                    <td className="px-5 py-3 font-mono text-zinc-900">{u.pingsPerMin}</td>
-                    <td className="px-5 py-3 font-mono text-zinc-600">
-                      {u.cpuMsTotal.toFixed(2)} ms
-                    </td>
-                    <td className="px-5 py-3 font-mono text-zinc-600">{u.eventsCount}</td>
-                    <td className="px-5 py-3 font-mono text-zinc-600">{u.activeSockets}</td>
-                    <td className="px-5 py-3 font-mono text-zinc-600">
-                      {formatBytes(u.redisMemoryBytes)}
-                    </td>
-                    <td className="px-5 py-3 font-mono text-zinc-700">
-                      {formatBytes(u.locationBytes)}
-                    </td>
-                    <td className="px-5 py-3 font-mono text-zinc-600">{u.locationPoints}</td>
-                  </tr>
-                ))}
+                {telemetry?.users.map((u) => {
+                  const isSelf = u.userId === session.user.id;
+                  const confirming = confirmRemoveUserId === u.userId;
+                  const busy = removingUserId === u.userId;
+                  return (
+                    <tr key={u.userId} className="hover:bg-zinc-50/80">
+                      <td className="px-5 py-3">
+                        <div className="font-medium text-zinc-950">{u.username}</div>
+                        <div className="text-[11px] text-zinc-400">{u.email}</div>
+                      </td>
+                      <td className="px-5 py-3 font-mono text-zinc-900">
+                        {u.cpuMsPerMin.toFixed(2)} ms
+                      </td>
+                      <td className="px-5 py-3 font-mono text-zinc-900">{u.pingsPerMin}</td>
+                      <td className="px-5 py-3 font-mono text-zinc-600">
+                        {u.cpuMsTotal.toFixed(2)} ms
+                      </td>
+                      <td className="px-5 py-3 font-mono text-zinc-600">{u.eventsCount}</td>
+                      <td className="px-5 py-3 font-mono text-zinc-600">{u.activeSockets}</td>
+                      <td className="px-5 py-3 font-mono text-zinc-600">
+                        {formatBytes(u.redisMemoryBytes)}
+                      </td>
+                      <td className="px-5 py-3 font-mono text-zinc-700">
+                        {formatBytes(u.locationBytes)}
+                      </td>
+                      <td className="px-5 py-3 font-mono text-zinc-600">{u.locationPoints}</td>
+                      <td className="px-5 py-3 text-right">
+                        {isSelf ? (
+                          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500">
+                            You
+                          </span>
+                        ) : confirming ? (
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handleRemoveUser(u.userId)}
+                              className="lo-press inline-flex items-center gap-1 rounded-md bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+                            >
+                              {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+                              Confirm
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setConfirmRemoveUserId(null)}
+                              className="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-100"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRemoveUserId(u.userId)}
+                            className="lo-press inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Remove
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

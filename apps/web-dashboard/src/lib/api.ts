@@ -93,6 +93,27 @@ export interface TrackerTokenStatusResponse {
 
 const SESSION_STORAGE_KEY = 'lovedones_session_v1';
 export const SESSION_UPDATED_EVENT = 'lovedones:session-updated';
+export const ACCOUNT_REMOVED_EVENT = 'lovedones:account-removed';
+export const ACCOUNT_REMOVED_DEFAULT_MESSAGE =
+  'Your account was removed from the server by an administrator.';
+
+export function triggerAccountRemovedNotification(
+  reason = ACCOUNT_REMOVED_DEFAULT_MESSAGE,
+): void {
+  saveSession(null);
+  if (typeof window === 'undefined') return;
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try {
+      new Notification('Account Removed', {
+        body: reason,
+        tag: 'lovedones-account-removed',
+      });
+    } catch {
+      // Ignore browser notification errors
+    }
+  }
+  window.dispatchEvent(new CustomEvent<string>(ACCOUNT_REMOVED_EVENT, { detail: reason }));
+}
 
 export function getServiceBaseUrls(): {
   authBase: string;
@@ -184,6 +205,14 @@ export async function refreshStoredSession(): Promise<StoredSession | null> {
         body: JSON.stringify({ refreshToken: current.refreshToken }),
       });
       if (!res.ok) {
+        const body = (await res.clone().json().catch(() => null)) as {
+          code?: string;
+          error?: string;
+        } | null;
+        if (body?.code === 'ACCOUNT_REMOVED') {
+          triggerAccountRemovedNotification(body.error);
+          return null;
+        }
         if (res.status === 400 || res.status === 401) {
           saveSession(null);
         }
@@ -260,6 +289,14 @@ async function requestAuthedJson<T>(
   let res = await sendWithToken(latestStoredToken || accessToken);
 
   if (res.status === 401) {
+    const body = (await res.clone().json().catch(() => null)) as {
+      code?: string;
+      error?: string;
+    } | null;
+    if (body?.code === 'ACCOUNT_REMOVED') {
+      triggerAccountRemovedNotification(body.error);
+      throw new Error(body.error ?? ACCOUNT_REMOVED_DEFAULT_MESSAGE);
+    }
     const refreshed = await refreshStoredSession();
     if (refreshed?.accessToken) {
       res = await sendWithToken(refreshed.accessToken);
@@ -518,6 +555,18 @@ export async function apiDenyRegistrationRequest(
     `${authBase}/api/admin/registration-requests/${encodeURIComponent(requestId)}/deny`,
     accessToken,
     { method: 'POST' },
+  );
+}
+
+export async function apiDeleteUserAccount(
+  accessToken: string,
+  userId: string,
+): Promise<{ ok: true; removedUserId: string }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ ok: true; removedUserId: string }>(
+    `${authBase}/api/admin/users/${encodeURIComponent(userId)}`,
+    accessToken,
+    { method: 'DELETE' },
   );
 }
 

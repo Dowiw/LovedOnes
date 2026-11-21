@@ -51,6 +51,8 @@ import { AccountSettingsModal } from '@/components/AccountSettingsModal';
 import { MapCanvas, type MapLabelLanguage } from '@/components/MapCanvas';
 import { QrJoinModal } from '@/components/QrJoinModal';
 import {
+  ACCOUNT_REMOVED_DEFAULT_MESSAGE,
+  ACCOUNT_REMOVED_EVENT,
   apiCreateGroup,
   apiCreateGroupPlace,
   apiCreateLocationRequest,
@@ -86,6 +88,7 @@ import {
   SESSION_UPDATED_EVENT,
   StoredSession,
   TrackerTokenResponse,
+  triggerAccountRemovedNotification,
 } from '@/lib/api';
 
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
@@ -136,6 +139,7 @@ export default function HomePage() {
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [removedToast, setRemovedToast] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
   const [forgotMode, setForgotMode] = useState(false);
@@ -287,9 +291,31 @@ export default function HomePage() {
         return custom.detail ?? null;
       });
     };
+    const onAccountRemoved = (ev: Event) => {
+      const reason =
+        ev instanceof CustomEvent && typeof ev.detail === 'string' && ev.detail
+          ? ev.detail
+          : ACCOUNT_REMOVED_DEFAULT_MESSAGE;
+      setRemovedToast(reason);
+      setAuthError(null);
+      handleSignOut();
+    };
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('removed') === '1') {
+      setRemovedToast(ACCOUNT_REMOVED_DEFAULT_MESSAGE);
+      params.delete('removed');
+      const nextSearch = params.toString();
+      window.history.replaceState(
+        {},
+        '',
+        nextSearch ? `${window.location.pathname}?${nextSearch}` : window.location.pathname,
+      );
+    }
     window.addEventListener(SESSION_UPDATED_EVENT, onSessionSync);
+    window.addEventListener(ACCOUNT_REMOVED_EVENT, onAccountRemoved);
     return () => {
       window.removeEventListener(SESSION_UPDATED_EVENT, onSessionSync);
+      window.removeEventListener(ACCOUNT_REMOVED_EVENT, onAccountRemoved);
       if (chatToastTimerRef.current !== null) {
         window.clearTimeout(chatToastTimerRef.current);
       }
@@ -650,6 +676,16 @@ export default function HomePage() {
           if (info.updateAvailable) setWebVersionInfo(info);
         })
         .catch(() => {});
+    });
+
+    socket.on('connect_error', (err) => {
+      if (err instanceof Error && err.message === 'ACCOUNT_REMOVED') {
+        triggerAccountRemovedNotification(ACCOUNT_REMOVED_DEFAULT_MESSAGE);
+      }
+    });
+
+    socket.on('account:removed', (evt: { reason?: string }) => {
+      triggerAccountRemovedNotification(evt?.reason || ACCOUNT_REMOVED_DEFAULT_MESSAGE);
     });
 
     socket.on('location:update', (update: LocationBroadcast) => {
@@ -1281,6 +1317,20 @@ export default function HomePage() {
       <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f4f4f5] px-4">
         <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl" />
         <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl" />
+
+        {removedToast && (
+          <div
+            role="status"
+            aria-live="assertive"
+            className="lo-feedback-in fixed inset-x-4 top-5 z-50 mx-auto flex max-w-md items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/95 px-4 py-3 text-xs text-rose-800 shadow-[0_14px_32px_rgba(190,18,60,0.16)] backdrop-blur-md"
+          >
+            <Bell className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+            <div>
+              <p className="font-semibold text-rose-950">Account Removed</p>
+              <p className="mt-0.5 leading-relaxed text-rose-700">{removedToast}</p>
+            </div>
+          </div>
+        )}
 
         <div className="lo-float-in relative w-full max-w-md rounded-xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
           <div className="mb-6 flex items-center gap-3">

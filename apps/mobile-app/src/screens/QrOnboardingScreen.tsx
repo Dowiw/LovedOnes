@@ -3,6 +3,7 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Animated,
+  AppState,
   BackHandler,
   Easing,
   Image,
@@ -14,6 +15,7 @@ import {
   TextInput,
   TouchableOpacity,
   useColorScheme,
+  Vibration,
   View,
 } from 'react-native';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
@@ -26,16 +28,18 @@ import {
   DEFAULT_EXACT_HALO_COLOR,
   formatCountdownRemaining,
   isSafeAvatarUrl,
-  isSafeHexColor,
   parseInviteInput,
   withMinDelay,
 } from '@loved-ones/shared';
+import { ColorPickerSheet } from '../components/ColorPickerSheet';
 import {
   BackArrowButton,
   HandshakeAnimation,
   PinEmblem,
 } from '../components/OnboardingVisuals';
+import { pickAndCropSquareAvatar } from '../services/avatarPicker';
 import { formatUserError } from '../services/errorFormatter';
+import { sendLocalNotification } from '../services/notifications';
 import {
   formatServerHostLabel,
   getDefaultServerUrl,
@@ -72,8 +76,6 @@ type OnboardingStep =
   | 'forgot';
 
 const LOCKED_SETUP_STEPS: ReadonlySet<OnboardingStep> = new Set([
-  'join_group',
-  'join_server',
   'connecting',
   'create_account',
 ]);
@@ -82,6 +84,7 @@ export interface QrOnboardingScreenProps {
   onAuthenticated: (config: MobileStoredConfig) => void;
   initialServerUrl?: string | null;
   pendingInviteUrl?: string | null;
+  persistentToast?: string | null;
   onConsumePendingInvite?: () => void;
 }
 
@@ -118,6 +121,7 @@ export function QrOnboardingScreen({
   onAuthenticated,
   initialServerUrl = null,
   pendingInviteUrl = null,
+  persistentToast = null,
   onConsumePendingInvite,
 }: QrOnboardingScreenProps) {
   const insets = useSafeAreaInsets();
@@ -158,8 +162,15 @@ export function QrOnboardingScreen({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState('');
+  const [pickingAvatar, setPickingAvatar] = useState(false);
+  const [showPhotoUrlInput, setShowPhotoUrlInput] = useState(false);
   const [haloColor, setHaloColor] = useState<string | null>(null);
-  const [customHexInput, setCustomHexInput] = useState('');
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  const [requestBanner, setRequestBanner] = useState<{
+    kind: 'approved' | 'expired' | 'denied';
+    title: string;
+    body: string;
+  } | null>(null);
 
   const [loginNotFoundPrompt, setLoginNotFoundPrompt] = useState(false);
 
@@ -263,6 +274,12 @@ export function QrOnboardingScreen({
         transitionTo('welcome');
         return true;
       }
+      if (step === 'join_group' || step === 'join_server') {
+        setError(null);
+        setNotice(null);
+        transitionTo('first_time_choice');
+        return true;
+      }
       if (step === 'existing_server') {
         setError(null);
         setNotice(null);
@@ -292,15 +309,24 @@ export function QrOnboardingScreen({
     return () => clearInterval(interval);
   }, [step, pendingReg, pingedServers]);
 
-  // Auto-poll pending request status quietly while user is on waiting_admin
+  // Poll active pending request status across onboarding & on foreground resume
+  // so APPROVED / EXPIRED events always notify the user immediately.
   useEffect(() => {
-    if (step !== 'waiting_admin' || !pendingReg || pendingReg.status !== 'PENDING') return;
+    if (!pendingReg || pendingReg.status !== 'PENDING') return;
     void refreshRequestStatus(pendingReg, true);
     const interval = setInterval(() => {
       void refreshRequestStatus(pendingReg, true);
     }, 10_000);
-    return () => clearInterval(interval);
-  }, [step, pendingReg?.requestId, pendingReg?.status]);
+    const appSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void refreshRequestStatus(pendingReg, true);
+      }
+    });
+    return () => {
+      clearInterval(interval);
+      appSub.remove();
+    };
+  }, [pendingReg?.requestId, pendingReg?.status]);
 
   // Incoming deep-link invite handling (lovedones:// or https://.../join?token=...)
   useEffect(() => {
@@ -635,6 +661,26 @@ export function QrOnboardingScreen({
         const nextMap = await savePendingRegistration(updated);
         setPendingReg(updated);
         setPingedServers(nextMap);
+
+        if (target.status === 'PENDING' && updated.status !== 'PENDING') {
+          Vibration.vibrate(140);
+          if (updated.status === 'APPROVED') {
+            const title = 'Account Approved';
+            const body = `Your profile on ${formatServerHostLabel(updated.serverUrl)} was approved! Sign in now.`;
+            setRequestBanner({ kind: 'approved', title, body });
+            void sendLocalNotification(title, body);
+          } else if (updated.status === 'EXPIRED') {
+            const title = 'Request Expired';
+            const body = `Your 24h account request to ${formatServerHostLabel(updated.serverUrl)} expired.`;
+            setRequestBanner({ kind: 'expired', title, body });
+            void sendLocalNotification(title, body);
+          } else if (updated.status === 'DENIED') {
+            const title = 'Request Declined';
+            const body = `The server admin declined your request on ${formatServerHostLabel(updated.serverUrl)}.`;
+            setRequestBanner({ kind: 'denied', title, body });
+            void sendLocalNotification(title, body);
+          }
+        }
       }
     } catch (err) {
       if (!silent) {
@@ -829,11 +875,19 @@ export function QrOnboardingScreen({
     }
   }
 
-  function handleSelectCustomHex(raw: string) {
-    setCustomHexInput(raw);
-    const trimmed = raw.trim();
-    if (isSafeHexColor(trimmed)) {
-      setHaloColor(trimmed.toLowerCase());
+  async function handlePickPhotoFromDisk() {
+    setError(null);
+    setPickingAvatar(true);
+    try {
+      const picked = await pickAndCropSquareAvatar();
+      if (picked.status === 'ok') {
+        setAvatarUrl(picked.dataUri);
+        setShowPhotoUrlInput(false);
+      } else if (picked.status === 'denied' || picked.status === 'error') {
+        setError(picked.message);
+      }
+    } finally {
+      setPickingAvatar(false);
     }
   }
 
@@ -940,7 +994,81 @@ export function QrOnboardingScreen({
             },
           ]}
         >
-          <View style={styles.welcomeSpacer} />
+          {persistentToast ? (
+            <View
+              accessibilityLiveRegion="assertive"
+              style={[
+                styles.persistentToastCard,
+                { backgroundColor: palette.errorBg, borderColor: palette.errorBorder },
+              ]}
+            >
+              <Text
+                style={[styles.persistentToastTitle, { color: palette.errorText, fontFamily: fonts.display }]}
+              >
+                Account Removed from Server
+              </Text>
+              <Text
+                style={[styles.persistentToastBody, { color: palette.errorText, fontFamily: fonts.body }]}
+              >
+                {persistentToast}
+              </Text>
+            </View>
+          ) : requestBanner ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.persistentToastCard,
+                requestBanner.kind === 'approved'
+                  ? { backgroundColor: palette.badgeSuccessBg, borderColor: palette.badgeSuccessBorder }
+                  : requestBanner.kind === 'expired'
+                    ? { backgroundColor: palette.badgeWarnBg, borderColor: palette.badgeWarnBorder }
+                    : { backgroundColor: palette.errorBg, borderColor: palette.errorBorder },
+              ]}
+              onPress={() => {
+                if (requestBanner.kind === 'approved' && pendingReg) {
+                  setServerUrl(pendingReg.serverUrl);
+                  setHasKnownServer(true);
+                  setEmail(pendingReg.email);
+                  transitionTo('waiting_admin');
+                }
+              }}
+            >
+              <Text
+                style={[
+                  styles.persistentToastTitle,
+                  {
+                    color:
+                      requestBanner.kind === 'approved'
+                        ? palette.badgeSuccessText
+                        : requestBanner.kind === 'expired'
+                          ? palette.badgeWarnText
+                          : palette.errorText,
+                    fontFamily: fonts.display,
+                  },
+                ]}
+              >
+                {requestBanner.title}
+              </Text>
+              <Text
+                style={[
+                  styles.persistentToastBody,
+                  {
+                    color:
+                      requestBanner.kind === 'approved'
+                        ? palette.badgeSuccessText
+                        : requestBanner.kind === 'expired'
+                          ? palette.badgeWarnText
+                          : palette.errorText,
+                    fontFamily: fonts.body,
+                  },
+                ]}
+              >
+                {requestBanner.body}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.welcomeSpacer} />
+          )}
 
           <View style={styles.heroCenter}>
             <Text
@@ -1077,6 +1205,10 @@ export function QrOnboardingScreen({
                     if (step === 'forgot') {
                       setForgotStep('request');
                       transitionTo('existing_login');
+                      return;
+                    }
+                    if (step === 'join_group' || step === 'join_server') {
+                      transitionTo('first_time_choice');
                       return;
                     }
                     if (step === 'existing_server' && existingServerReturnToLogin) {
@@ -1716,53 +1848,92 @@ export function QrOnboardingScreen({
                     </View>
                   </View>
 
-                  <View style={styles.fieldGroup}>
-                    <View style={styles.labelRow}>
+                  <View style={styles.photoBtnRow}>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="Attach and crop 1 by 1 profile photo from device"
+                      activeOpacity={0.8}
+                      disabled={pickingAvatar}
+                      style={[
+                        styles.photoPickBtn,
+                        { backgroundColor: palette.surface, borderColor: palette.borderStrong },
+                      ]}
+                      onPress={() => void handlePickPhotoFromDisk()}
+                    >
+                      {pickingAvatar ? (
+                        <ActivityIndicator color={palette.ink} size="small" />
+                      ) : (
+                        <Text
+                          style={[
+                            styles.photoPickBtnText,
+                            { color: palette.ink, fontFamily: fonts.display },
+                          ]}
+                        >
+                          {avatarUrl ? 'Change Photo (1:1)' : 'Choose Photo (1:1 Crop)'}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      hitSlop={8}
+                      style={[
+                        styles.photoToggleBtn,
+                        { backgroundColor: palette.surface, borderColor: palette.border },
+                      ]}
+                      onPress={() => setShowPhotoUrlInput((v) => !v)}
+                    >
                       <Text
                         style={[
-                          styles.fieldLabel,
-                          { color: palette.inkSubtle, fontFamily: fonts.heading },
+                          styles.inlineLinkText,
+                          { color: palette.inkMuted, fontFamily: fonts.heading },
                         ]}
                       >
-                        Profile Photo URL
+                        {showPhotoUrlInput ? 'Hide URL' : 'Paste URL'}
                       </Text>
-                      {avatarUrl.trim().length > 0 && (
-                        <TouchableOpacity
-                          accessibilityRole="button"
-                          hitSlop={8}
-                          onPress={() => setAvatarUrl('')}
+                    </TouchableOpacity>
+
+                    {avatarUrl.trim().length > 0 && (
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        hitSlop={8}
+                        onPress={() => setAvatarUrl('')}
+                      >
+                        <Text
+                          style={[
+                            styles.inlineLinkText,
+                            { color: palette.errorText, fontFamily: fonts.heading },
+                          ]}
                         >
-                          <Text
-                            style={[
-                              styles.inlineLinkText,
-                              { color: palette.inkMuted, fontFamily: fonts.heading },
-                            ]}
-                          >
-                            Clear
-                          </Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                    <TextInput
-                      accessibilityLabel="Profile photo URL"
-                      style={[
-                        styles.input,
-                        {
-                          backgroundColor: palette.surface,
-                          borderColor: palette.border,
-                          color: palette.ink,
-                          fontFamily: fonts.body,
-                        },
-                      ]}
-                      value={avatarUrl}
-                      onChangeText={setAvatarUrl}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType="url"
-                      placeholder="https://example.com/photo.jpg"
-                      placeholderTextColor={palette.placeholder}
-                    />
+                          Remove
+                        </Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
+
+                  {showPhotoUrlInput && (
+                    <View style={styles.fieldGroup}>
+                      <TextInput
+                        accessibilityLabel="Profile photo URL"
+                        style={[
+                          styles.input,
+                          {
+                            backgroundColor: palette.surface,
+                            borderColor: palette.border,
+                            color: palette.ink,
+                            fontFamily: fonts.body,
+                          },
+                        ]}
+                        value={avatarUrl.startsWith('data:') ? '' : avatarUrl}
+                        onChangeText={setAvatarUrl}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="url"
+                        placeholder="https://example.com/photo.jpg"
+                        placeholderTextColor={palette.placeholder}
+                      />
+                    </View>
+                  )}
 
                   <View style={styles.fieldGroup}>
                     <View style={styles.labelRow}>
@@ -1778,10 +1949,7 @@ export function QrOnboardingScreen({
                         <TouchableOpacity
                           accessibilityRole="button"
                           hitSlop={8}
-                          onPress={() => {
-                            setHaloColor(null);
-                            setCustomHexInput('');
-                          }}
+                          onPress={() => setHaloColor(null)}
                         >
                           <Text
                             style={[
@@ -1806,37 +1974,42 @@ export function QrOnboardingScreen({
                             activeOpacity={0.78}
                             style={[
                               styles.swatchOuter,
-                              {
-                                borderColor: active ? palette.ink : 'transparent',
-                              },
+                              { borderColor: active ? palette.ink : 'transparent' },
                             ]}
-                            onPress={() => {
-                              setHaloColor(preset.hex);
-                              setCustomHexInput(preset.hex);
-                            }}
+                            onPress={() => setHaloColor(preset.hex)}
                           >
                             <View style={[styles.swatchDot, { backgroundColor: preset.hex }]} />
                           </TouchableOpacity>
                         );
                       })}
-                      <TextInput
-                        accessibilityLabel="Custom hex color"
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel="Open custom hex color picker"
+                        activeOpacity={0.78}
                         style={[
-                          styles.hexInput,
+                          styles.customColorPill,
                           {
                             backgroundColor: palette.surface,
-                            borderColor: palette.border,
-                            color: palette.ink,
-                            fontFamily: fonts.mono,
+                            borderColor: haloColor ? haloColor : palette.borderStrong,
                           },
                         ]}
-                        value={customHexInput}
-                        onChangeText={handleSelectCustomHex}
-                        placeholder="#0ea5e9"
-                        placeholderTextColor={palette.placeholder}
-                        autoCapitalize="none"
-                        maxLength={7}
-                      />
+                        onPress={() => setColorPickerOpen(true)}
+                      >
+                        <View
+                          style={[
+                            styles.customColorDot,
+                            { backgroundColor: haloColor ?? DEFAULT_EXACT_HALO_COLOR },
+                          ]}
+                        />
+                        <Text
+                          style={[
+                            styles.customColorText,
+                            { color: palette.ink, fontFamily: fonts.mono },
+                          ]}
+                        >
+                          {haloColor ?? 'Custom'}
+                        </Text>
+                      </TouchableOpacity>
                     </View>
                   </View>
                 </View>
@@ -3017,6 +3190,18 @@ export function QrOnboardingScreen({
           </Animated.View>
         </ScrollView>
       )}
+
+      <ColorPickerSheet
+        visible={colorPickerOpen}
+        initialHex={haloColor}
+        palette={palette}
+        fonts={fonts}
+        onApply={(hex) => {
+          setHaloColor(hex);
+          setColorPickerOpen(false);
+        }}
+        onClose={() => setColorPickerOpen(false)}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -3048,17 +3233,78 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   welcomeSpacer: {
-    height: 20,
+    height: 16,
+  },
+  persistentToastCard: {
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 3,
+  },
+  persistentToastTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  persistentToastBody: {
+    fontSize: 12,
+    lineHeight: 17,
   },
   heroCenter: {
     alignItems: 'center',
     paddingHorizontal: 8,
   },
   brandCenterTitle: {
-    fontSize: 22,
+    fontSize: 38,
+    lineHeight: 44,
     fontWeight: '700',
-    letterSpacing: 1.6,
-    marginBottom: 14,
+    letterSpacing: -0.7,
+    marginBottom: 16,
+  },
+  photoBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  photoPickBtn: {
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    minHeight: 38,
+    justifyContent: 'center',
+  },
+  photoPickBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  photoToggleBtn: {
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    minHeight: 38,
+    justifyContent: 'center',
+  },
+  customColorPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1.5,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    minHeight: 34,
+  },
+  customColorDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 999,
+  },
+  customColorText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   heroHeadline: {
     marginTop: 22,

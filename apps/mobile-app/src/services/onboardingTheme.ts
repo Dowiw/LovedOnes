@@ -211,3 +211,70 @@ export function validateAuthForm(input: AuthFormValidationInput): string | null 
   }
   return null;
 }
+
+export interface HsvColor {
+  h: number;
+  s: number;
+  v: number;
+}
+
+export function hsvToHex({ h, s, v }: HsvColor): string {
+  const safeH = ((h % 360) + 360) % 360;
+  const safeS = Math.max(0, Math.min(1, s));
+  const safeV = Math.max(0, Math.min(1, v));
+  const c = safeV * safeS;
+  const x = c * (1 - Math.abs(((safeH / 60) % 2) - 1));
+  const m = safeV - c;
+
+  let r1 = 0;
+  let g1 = 0;
+  let b1 = 0;
+  if (safeH < 60) {
+    r1 = c;
+    g1 = x;
+  } else if (safeH < 120) {
+    r1 = x;
+    g1 = c;
+  } else if (safeH < 180) {
+    g1 = c;
+    b1 = x;
+  } else if (safeH < 240) {
+    g1 = x;
+    b1 = c;
+  } else if (safeH < 300) {
+    r1 = x;
+    b1 = c;
+  } else {
+    r1 = c;
+    b1 = x;
+  }
+
+  const toHex = (n: number) =>
+    Math.round((n + m) * 255)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${toHex(r1)}${toHex(g1)}${toHex(b1)}`;
+}
+
+export function hexToHsv(rawHex: string): HsvColor {
+  const clean = rawHex.trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) {
+    return { h: 199, s: 0.94, v: 0.91 };
+  }
+  const r = Number.parseInt(clean.slice(0, 2), 16) / 255;
+  const g = Number.parseInt(clean.slice(2, 4), 16) / 255;
+  const b = Number.parseInt(clean.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = 60 * (((g - b) / d) % 6);
+    else if (max === g) h = 60 * ((b - r) / d + 2);
+    else h = 60 * ((r - g) / d + 4);
+  }
+  if (h < 0) h += 360;
+  const s = max === 0 ? 0 : d / max;
+  return { h, s, v: max };
+}

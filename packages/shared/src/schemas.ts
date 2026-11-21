@@ -299,6 +299,14 @@ function parseNonNegativeFinite(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+export const AccountRemovedEventSchema = z.object({
+  userId: z.string().uuid(),
+  email: z.string().optional(),
+  reason: z.string(),
+  removedAt: z.string(),
+});
+export type AccountRemovedEvent = z.infer<typeof AccountRemovedEventSchema>;
+
 export const LocationPointSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),

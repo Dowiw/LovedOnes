@@ -206,6 +206,7 @@ export interface AttachAuthTelemetryOptions {
   verifyAccessToken: (token: string) => Promise<JwtUserPayload>;
   verifyIngestionToken?: (token: string) => Promise<JwtUserPayload>;
   verifyTrackerJti?: (userId: string, jti: string) => Promise<boolean>;
+  verifyUserActive?: (userId: string) => Promise<boolean>;
   recordTelemetry: (userId: string, elapsedMs: number, eventWeight: number) => Promise<void>;
 }
 
@@ -249,7 +250,18 @@ export function attachAuthAndTelemetry(
       return;
     }
     try {
-      request.authUser = await options.verifyAccessToken(token);
+      const decoded = await options.verifyAccessToken(token);
+      if (options.verifyUserActive) {
+        const active = await options.verifyUserActive(decoded.id);
+        if (!active) {
+          await reply.code(401).send({
+            error: 'Your account was removed from this server.',
+            code: 'ACCOUNT_REMOVED',
+          });
+          return;
+        }
+      }
+      request.authUser = decoded;
     } catch {
       await reply.code(401).send({ error: 'Unauthorized' });
     }
@@ -279,6 +291,16 @@ export function attachAuthAndTelemetry(
             await reply.code(401).send({ error: 'Tracker token revoked or rotated' });
             return;
           }
+        }
+      }
+      if (options.verifyUserActive) {
+        const active = await options.verifyUserActive(decoded.id);
+        if (!active) {
+          await reply.code(401).send({
+            error: 'Your account was removed from this server.',
+            code: 'ACCOUNT_REMOVED',
+          });
+          return;
         }
       }
       request.authUser = decoded;

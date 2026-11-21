@@ -18,6 +18,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState<MobileStoredConfig | null>(null);
   const [pendingInviteUrl, setPendingInviteUrl] = useState<string | null>(null);
+  const [persistentRemovedToast, setPersistentRemovedToast] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -71,22 +72,29 @@ export default function App() {
         {isAuthenticated && config ? (
           <MobileMapScreen
             config={config}
-            onSignedOut={() =>
+            onSignedOut={(removedReason) => {
+              if (removedReason) {
+                setPersistentRemovedToast(removedReason);
+              }
               setConfig((prev) => ({
                 serverUrl: prev?.serverUrl ?? null,
                 accessToken: null,
                 refreshToken: null,
                 user: null,
                 activeGroupId: null,
-              }))
-            }
+              }));
+            }}
           />
         ) : (
           <QrOnboardingScreen
             initialServerUrl={config?.serverUrl ?? null}
             pendingInviteUrl={pendingInviteUrl}
+            persistentToast={persistentRemovedToast}
             onConsumePendingInvite={() => setPendingInviteUrl(null)}
-            onAuthenticated={setConfig}
+            onAuthenticated={(nextConfig) => {
+              setPersistentRemovedToast(null);
+              setConfig(nextConfig);
+            }}
           />
         )}
       </View>
