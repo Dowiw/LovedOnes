@@ -205,6 +205,11 @@ export interface SessionStore {
     fuzzCircleColor?: string | null;
     groupIds: string[];
   }): Promise<void>;
+  publishPrivacyUpdated?(event: {
+    userId: string;
+    groupId: string;
+    privacy: PrivacyMode;
+  }): Promise<void>;
   saveEmailChallenge?(
     key: string,
     record: EmailChallengeRecord,
@@ -951,6 +956,11 @@ export class AuthGroupModule {
     const updated = await this.store.updateMembershipPrivacy(userId, groupId, normalized);
     if (!updated) {
       throw new DomainError(404, 'Membership not found');
+    }
+    if (this.sessionStore.publishPrivacyUpdated) {
+      await this.sessionStore
+        .publishPrivacyUpdated({ userId, groupId, privacy: updated })
+        .catch(() => {});
     }
     return { groupId, privacy: updated };
   }

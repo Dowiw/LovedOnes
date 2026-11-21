@@ -4,7 +4,9 @@ import {
   createGroupPlaceRecord,
   createLocationRequestRecord,
   deleteGroupPlaceRecord,
+  deletePlaceById,
   evaluateAndRecordPlaceTransitions,
+  findPlaceById,
   getGroupMembershipPrivacyInfo,
   getGroupTrails,
   getLatestGroupLocations,
@@ -12,9 +14,11 @@ import {
   getUserPublicProfile,
   GroupTrailQueryOptions,
   insertLocationBatch,
+  listAccessiblePlaces,
   listEffectiveMembershipsForUser,
   listGroupPlaces,
   listLocationRequestsForUser,
+  listPrivatePlaces,
   listRecentPlaceTransitions,
   respondToLocationRequestRecord,
 } from '@loved-ones/db';
@@ -103,7 +107,8 @@ export class PostgresRealtimeStore implements RealtimeStore {
   }
 
   createGroupPlace(input: {
-    groupId: string;
+    groupId: string | null;
+    isPrivate?: boolean;
     name: string;
     latitude: number;
     longitude: number;
@@ -115,6 +120,22 @@ export class PostgresRealtimeStore implements RealtimeStore {
 
   listGroupPlaces(groupId: string) {
     return listGroupPlaces(this.pool, groupId);
+  }
+
+  listPrivatePlaces(userId: string) {
+    return listPrivatePlaces(this.pool, userId);
+  }
+
+  listAccessiblePlaces(userId: string, groupId?: string) {
+    return listAccessiblePlaces(this.pool, userId, groupId);
+  }
+
+  findPlaceById(placeId: string) {
+    return findPlaceById(this.pool, placeId);
+  }
+
+  deletePlaceById(placeId: string) {
+    return deletePlaceById(this.pool, placeId);
   }
 
   deleteGroupPlace(groupId: string, placeId: string) {
@@ -208,6 +229,10 @@ export class SocketIoBroadcaster implements RealtimeBroadcaster {
     this.io.to(`group:${groupId}`).emit('location:update', update);
   }
 
+  broadcastLocationRemoved(groupId: string, userId: string): void {
+    this.io.to(`group:${groupId}`).emit('location:removed', { groupId, userId });
+  }
+
   broadcastChatMessage(groupId: string, message: ChatMessage): void {
     this.io.to(`group:${groupId}`).emit('chat:message', message);
   }
@@ -234,5 +259,9 @@ export class SocketIoBroadcaster implements RealtimeBroadcaster {
 
   broadcastPlacesUpdated(groupId: string, places: GroupPlace[]): void {
     this.io.to(`group:${groupId}`).emit('place:updated', { groupId, places });
+  }
+
+  broadcastPrivatePlacesUpdated(userId: string, places: GroupPlace[]): void {
+    this.io.to(`user:${userId}`).emit('place:private:updated', { places });
   }
 }

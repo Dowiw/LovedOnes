@@ -59,7 +59,7 @@ function AppRootContent({
         { backgroundColor: isAuthenticated ? '#ffffff' : palette.canvas },
       ]}
     >
-      <StatusBar style={isAuthenticated ? 'light' : palette.statusBarStyle} />
+      <StatusBar style={isAuthenticated ? 'dark' : palette.statusBarStyle} />
       {/* Keep every UI component, orb, and overlay strictly above the bottom navigation bar */}
       <View
         style={[

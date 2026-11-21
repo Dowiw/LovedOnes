@@ -663,7 +663,9 @@ export async function respondToLocationRequestRecord(
 
 interface RawGroupPlaceRow {
   id: string;
-  group_id: string;
+  group_id: string | null;
+  group_name?: string | null;
+  is_private?: boolean;
   name: string;
   latitude: number;
   longitude: number;
@@ -676,6 +678,8 @@ function mapGroupPlaceRow(row: RawGroupPlaceRow): GroupPlace {
   return {
     id: row.id,
     groupId: row.group_id,
+    groupName: row.group_name ?? null,
+    isPrivate: Boolean(row.is_private),
     name: row.name,
     latitude: Number(row.latitude),
     longitude: Number(row.longitude),
@@ -688,7 +692,8 @@ function mapGroupPlaceRow(row: RawGroupPlaceRow): GroupPlace {
 export async function createGroupPlaceRecord(
   pool: pg.Pool,
   input: {
-    groupId: string;
+    groupId: string | null;
+    isPrivate?: boolean;
     name: string;
     latitude: number;
     longitude: number;
@@ -696,15 +701,23 @@ export async function createGroupPlaceRecord(
     createdBy: string;
   },
 ): Promise<GroupPlace> {
+  const isPrivate = Boolean(input.isPrivate || !input.groupId);
+  const groupId = isPrivate ? null : input.groupId;
   const res = await pool.query<RawGroupPlaceRow>(
-    `INSERT INTO group_places (group_id, name, center, radius_meters, created_by)
-     VALUES ($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography, $5, $6)
-     RETURNING id, group_id, name,
-               ST_Y(center::geometry) AS latitude,
-               ST_X(center::geometry) AS longitude,
-               radius_meters, created_by, created_at`,
+    `WITH inserted AS (
+       INSERT INTO group_places (group_id, is_private, name, center, radius_meters, created_by)
+       VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6, $7)
+       RETURNING id, group_id, is_private, name,
+                 ST_Y(center::geometry) AS latitude,
+                 ST_X(center::geometry) AS longitude,
+                 radius_meters, created_by, created_at
+     )
+     SELECT i.*, g.name AS group_name
+     FROM inserted i
+     LEFT JOIN groups g ON g.id = i.group_id`,
     [
-      input.groupId,
+      groupId,
+      isPrivate,
       input.name,
       input.longitude,
       input.latitude,
@@ -717,16 +730,79 @@ export async function createGroupPlaceRecord(
 
 export async function listGroupPlaces(pool: pg.Pool, groupId: string): Promise<GroupPlace[]> {
   const res = await pool.query<RawGroupPlaceRow>(
-    `SELECT id, group_id, name,
+    `SELECT gp.id, gp.group_id, g.name AS group_name, gp.is_private, gp.name,
+            ST_Y(gp.center::geometry) AS latitude,
+            ST_X(gp.center::geometry) AS longitude,
+            gp.radius_meters, gp.created_by, gp.created_at
+     FROM group_places gp
+     LEFT JOIN groups g ON g.id = gp.group_id
+     WHERE gp.group_id = $1 AND gp.is_private = FALSE
+     ORDER BY gp.created_at ASC`,
+    [groupId],
+  );
+  return res.rows.map(mapGroupPlaceRow);
+}
+
+export async function listPrivatePlaces(pool: pg.Pool, userId: string): Promise<GroupPlace[]> {
+  const res = await pool.query<RawGroupPlaceRow>(
+    `SELECT id, group_id, NULL::text AS group_name, is_private, name,
             ST_Y(center::geometry) AS latitude,
             ST_X(center::geometry) AS longitude,
             radius_meters, created_by, created_at
      FROM group_places
-     WHERE group_id = $1
+     WHERE created_by = $1 AND is_private = TRUE
      ORDER BY created_at ASC`,
-    [groupId],
+    [userId],
   );
   return res.rows.map(mapGroupPlaceRow);
+}
+
+export async function listAccessiblePlaces(
+  pool: pg.Pool,
+  userId: string,
+  groupId?: string,
+): Promise<GroupPlace[]> {
+  const params: unknown[] = [userId];
+  const groupFilter = groupId
+    ? (() => {
+        params.push(groupId);
+        return `gp.is_private = FALSE AND gp.group_id = $${params.length}`;
+      })()
+    : `gp.is_private = FALSE AND gp.group_id IN (SELECT group_id FROM group_memberships WHERE user_id = $1)`;
+
+  const res = await pool.query<RawGroupPlaceRow>(
+    `SELECT gp.id, gp.group_id, g.name AS group_name, gp.is_private, gp.name,
+            ST_Y(gp.center::geometry) AS latitude,
+            ST_X(gp.center::geometry) AS longitude,
+            gp.radius_meters, gp.created_by, gp.created_at
+     FROM group_places gp
+     LEFT JOIN groups g ON g.id = gp.group_id
+     WHERE (gp.is_private = TRUE AND gp.created_by = $1)
+        OR (${groupFilter})
+     ORDER BY gp.is_private DESC, gp.created_at ASC`,
+    params,
+  );
+  return res.rows.map(mapGroupPlaceRow);
+}
+
+export async function findPlaceById(pool: pg.Pool, placeId: string): Promise<GroupPlace | null> {
+  const res = await pool.query<RawGroupPlaceRow>(
+    `SELECT gp.id, gp.group_id, g.name AS group_name, gp.is_private, gp.name,
+            ST_Y(gp.center::geometry) AS latitude,
+            ST_X(gp.center::geometry) AS longitude,
+            gp.radius_meters, gp.created_by, gp.created_at
+     FROM group_places gp
+     LEFT JOIN groups g ON g.id = gp.group_id
+     WHERE gp.id = $1
+     LIMIT 1`,
+    [placeId],
+  );
+  return res.rows[0] ? mapGroupPlaceRow(res.rows[0]) : null;
+}
+
+export async function deletePlaceById(pool: pg.Pool, placeId: string): Promise<boolean> {
+  const res = await pool.query('DELETE FROM group_places WHERE id = $1', [placeId]);
+  return (res.rowCount ?? 0) > 0;
 }
 
 export async function deleteGroupPlaceRecord(
@@ -809,7 +885,7 @@ export async function evaluateAndRecordPlaceTransitions(
      FROM group_places gp
      LEFT JOIN group_place_states gps
        ON gps.place_id = gp.id AND gps.user_id = $2
-     WHERE gp.group_id = $1`,
+     WHERE gp.group_id = $1 AND gp.is_private = FALSE`,
     [input.groupId, input.userId, input.longitude, input.latitude],
   );
 

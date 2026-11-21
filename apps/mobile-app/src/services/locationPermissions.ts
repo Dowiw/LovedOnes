@@ -9,11 +9,58 @@ export interface LocationPermissionResult {
 export interface LocationPermissionAdapter {
   requestForegroundPermissionsAsync(): Promise<{ status: string; canAskAgain?: boolean }>;
   requestBackgroundPermissionsAsync(): Promise<{ status: string; canAskAgain?: boolean }>;
+  getForegroundPermissionsAsync?(): Promise<{ status: string; canAskAgain?: boolean }>;
+  getBackgroundPermissionsAsync?(): Promise<{ status: string; canAskAgain?: boolean }>;
 }
 
 async function getDefaultLocationAdapter(): Promise<LocationPermissionAdapter> {
   const Location = await import('expo-location');
   return Location;
+}
+
+/**
+ * Checks current foreground and background location permission level without
+ * triggering OS dialogs.
+ */
+export async function getLocationPermissionStatus(
+  adapter?: LocationPermissionAdapter,
+): Promise<LocationPermissionResult> {
+  const loc = adapter ?? (await getDefaultLocationAdapter());
+  if (!loc.getForegroundPermissionsAsync) {
+    return {
+      level: 'denied',
+      canAskAgain: true,
+      label: 'Location Permission: Not Granted',
+    };
+  }
+  const fg = await loc.getForegroundPermissionsAsync();
+  if (fg.status !== 'granted') {
+    return {
+      level: 'denied',
+      canAskAgain: Boolean(fg.canAskAgain ?? true),
+      label: 'Location Permission: Not Granted',
+    };
+  }
+  if (!loc.getBackgroundPermissionsAsync) {
+    return {
+      level: 'foreground',
+      canAskAgain: true,
+      label: 'Location Permission: While Using App',
+    };
+  }
+  const bg = await loc.getBackgroundPermissionsAsync().catch(() => ({ status: 'denied', canAskAgain: true }));
+  if (bg.status === 'granted') {
+    return {
+      level: 'always',
+      canAskAgain: true,
+      label: 'Location Permission: Allow All the Time',
+    };
+  }
+  return {
+    level: 'foreground',
+    canAskAgain: Boolean(bg.canAskAgain ?? true),
+    label: 'Location Permission: While Using App (Test)',
+  };
 }
 
 /**

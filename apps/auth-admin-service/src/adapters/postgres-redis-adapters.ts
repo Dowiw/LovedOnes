@@ -13,6 +13,7 @@ import {
   TELEMETRY_USER_PREFIX,
   TRACKER_JTI_USER_PREFIX,
   USER_ACCOUNT_REMOVED_CHANNEL,
+  USER_PRIVACY_UPDATED_CHANNEL,
   USER_PROFILE_UPDATED_CHANNEL,
 } from '@loved-ones/shared/telemetry';
 import {
@@ -603,6 +604,14 @@ export class RedisSessionStore implements SessionStore {
     groupIds: string[];
   }): Promise<void> {
     await this.redis.publish(USER_PROFILE_UPDATED_CHANNEL, JSON.stringify(event));
+  }
+
+  async publishPrivacyUpdated(event: {
+    userId: string;
+    groupId: string;
+    privacy: PrivacyMode;
+  }): Promise<void> {
+    await this.redis.publish(USER_PRIVACY_UPDATED_CHANNEL, JSON.stringify(event));
   }
 
   async markAccountRemoved(userId: string, email?: string): Promise<void> {

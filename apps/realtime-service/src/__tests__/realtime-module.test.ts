@@ -78,10 +78,12 @@ function createInMemoryRealtimeHarness() {
     m.privacyOverrideUntil && m.privacyOverrideUntil > now ? 'EXACT' : m.privacy;
 
   const locationBroadcasts: LocationBroadcast[] = [];
+  const locationRemovals: Array<{ groupId: string; userId: string }> = [];
   const chatBroadcasts: ChatMessage[] = [];
   const checkinRequestBroadcasts: LocationRequestItem[] = [];
   const checkinResponseBroadcasts: LocationRequestItem[] = [];
   const placeTransitionBroadcasts: PlaceTransitionEvent[] = [];
+  const privatePlacesUpdates: GroupPlace[][] = [];
 
   const store: RealtimeStore = {
     async isGroupMember(userId, groupId) {
@@ -277,6 +279,7 @@ function createInMemoryRealtimeHarness() {
       const place: GroupPlace = {
         id: `eeeeeeee-eeee-4eee-8eee-${String(storedPlaces.length + 1).padStart(12, '0')}`,
         groupId: input.groupId,
+        isPrivate: Boolean(input.isPrivate || !input.groupId),
         name: input.name,
         latitude: input.latitude,
         longitude: input.longitude,
@@ -288,7 +291,26 @@ function createInMemoryRealtimeHarness() {
       return place;
     },
     async listGroupPlaces(groupId) {
-      return storedPlaces.filter((p) => p.groupId === groupId);
+      return storedPlaces.filter((p) => p.groupId === groupId && !p.isPrivate);
+    },
+    async listPrivatePlaces(userId) {
+      return storedPlaces.filter((p) => p.isPrivate && p.createdBy === userId);
+    },
+    async listAccessiblePlaces(userId, groupId) {
+      return storedPlaces.filter(
+        (p) =>
+          (p.isPrivate && p.createdBy === userId) ||
+          (!p.isPrivate && (groupId ? p.groupId === groupId : true)),
+      );
+    },
+    async findPlaceById(placeId) {
+      return storedPlaces.find((p) => p.id === placeId) ?? null;
+    },
+    async deletePlaceById(placeId) {
+      const idx = storedPlaces.findIndex((p) => p.id === placeId);
+      if (idx === -1) return false;
+      storedPlaces.splice(idx, 1);
+      return true;
     },
     async deleteGroupPlace(groupId, placeId) {
       const idx = storedPlaces.findIndex((p) => p.groupId === groupId && p.id === placeId);
@@ -333,6 +355,9 @@ function createInMemoryRealtimeHarness() {
     broadcastLocation(_groupId, update) {
       locationBroadcasts.push(update);
     },
+    broadcastLocationRemoved(groupId, userId) {
+      locationRemovals.push({ groupId, userId });
+    },
     broadcastChatMessage(_groupId, message) {
       chatBroadcasts.push(message);
     },
@@ -346,6 +371,9 @@ function createInMemoryRealtimeHarness() {
       placeTransitionBroadcasts.push(event);
     },
     broadcastPlacesUpdated() {},
+    broadcastPrivatePlacesUpdated(_userId, places) {
+      privatePlacesUpdates.push(places);
+    },
   };
 
   const mod = new RealtimeModule({ store, broadcaster, now: () => currentNowMs });
@@ -353,10 +381,12 @@ function createInMemoryRealtimeHarness() {
     mod,
     store,
     locationBroadcasts,
+    locationRemovals,
     chatBroadcasts,
     checkinRequestBroadcasts,
     checkinResponseBroadcasts,
     placeTransitionBroadcasts,
+    privatePlacesUpdates,
     storedPoints,
     memberships,
     setNowMs: (ms: number) => {
@@ -891,5 +921,59 @@ describe('RealtimeModule domain interface', () => {
     expect(harness.locationBroadcasts.length).toBeGreaterThan(0);
     expect(harness.locationBroadcasts[0]?.username).toBe('Alice New');
     expect(harness.locationBroadcasts[0]?.avatarUrl).toBe('https://cdn.example.com/alice.png');
+  });
+
+  it('supports private places per user and shared group places cleanly', async () => {
+    const harness = createInMemoryRealtimeHarness();
+    harness.memberships.push({
+      userId: outsider.id,
+      username: outsider.username,
+      groupId: GROUP_EXACT,
+      role: 'MEMBER',
+      privacy: 'EXACT',
+    });
+    const priv = await harness.mod.createPlace(alice, {
+      name: 'Secret Bakery',
+      latitude: 52.51,
+      longitude: 13.41,
+      radiusMeters: 120,
+      isPrivate: true,
+    });
+    expect(priv.isPrivate).toBe(true);
+    expect(priv.groupId).toBeNull();
+    expect(harness.privatePlacesUpdates).toHaveLength(1);
+
+    const alicePlaces = await harness.mod.listAccessiblePlaces(alice, GROUP_EXACT);
+    expect(alicePlaces.places.some((p) => p.id === priv.id)).toBe(true);
+
+    const bobPlaces = await harness.mod.listAccessiblePlaces(outsider, GROUP_EXACT);
+    expect(bobPlaces.places.some((p) => p.id === priv.id)).toBe(false);
+
+    await expect(harness.mod.deletePlace(outsider, priv.id)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+
+    await harness.mod.deletePlace(alice, priv.id);
+    const aliceAfter = await harness.mod.listAccessiblePlaces(alice, GROUP_EXACT);
+    expect(aliceAfter.places.some((p) => p.id === priv.id)).toBe(false);
+  });
+
+  it('immediately removes pin when switching to GHOST and re-broadcasts on switch back', async () => {
+    const harness = createInMemoryRealtimeHarness();
+    await harness.mod.ingestLocationBatch(alice, {
+      points: [{ latitude: 52.52, longitude: 13.405, recordedAt: '2026-11-21T12:00:00.000Z' }],
+    });
+    harness.locationBroadcasts.length = 0;
+
+    const exactMembership = harness.memberships.find((m) => m.groupId === GROUP_EXACT)!;
+    exactMembership.privacy = 'GHOST';
+    await harness.mod.handleMemberPrivacyUpdated(alice.id, GROUP_EXACT);
+    expect(harness.locationRemovals).toEqual([{ groupId: GROUP_EXACT, userId: alice.id }]);
+
+    exactMembership.privacy = 'FUZZED';
+    await harness.mod.handleMemberPrivacyUpdated(alice.id, GROUP_EXACT);
+    expect(harness.locationBroadcasts).toHaveLength(1);
+    expect(harness.locationBroadcasts[0]?.privacyMode).toBe('FUZZED');
+    expect(harness.locationBroadcasts[0]?.isFuzzed).toBe(true);
   });
 });

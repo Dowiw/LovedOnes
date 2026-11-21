@@ -185,6 +185,13 @@ export const MemberProfileUpdatedSchema = z.object({
 });
 export type MemberProfileUpdatedEvent = z.infer<typeof MemberProfileUpdatedSchema>;
 
+export const MemberPrivacyUpdatedSchema = z.object({
+  userId: z.string().uuid(),
+  groupId: z.string().uuid(),
+  privacy: PrivacyModeSchema,
+});
+export type MemberPrivacyUpdatedEvent = z.infer<typeof MemberPrivacyUpdatedSchema>;
+
 export const LoginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
@@ -464,12 +471,16 @@ export const CreateGroupPlaceSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   radiusMeters: z.number().min(25).max(10000).default(150),
+  isPrivate: z.boolean().default(false),
+  groupId: z.string().uuid().nullable().optional(),
 });
 export type CreateGroupPlaceInput = z.infer<typeof CreateGroupPlaceSchema>;
 
 export const GroupPlaceSchema = z.object({
   id: z.string().uuid(),
-  groupId: z.string().uuid(),
+  groupId: z.string().uuid().nullable(),
+  groupName: z.string().nullable().optional(),
+  isPrivate: z.boolean().default(false),
   name: z.string(),
   latitude: z.number(),
   longitude: z.number(),

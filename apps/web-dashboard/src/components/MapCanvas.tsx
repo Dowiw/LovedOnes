@@ -1005,10 +1005,11 @@ export function MapCanvas({
       activePlaceIds.add(place.id);
       const existing = placeMarkersRef.current.get(place.id);
       const safeName = escapeHtml(place.name);
+      const visibilityTag = place.isPrivate ? 'Private' : 'Shared Group';
       const popupHtml = `
         <div class="text-xs space-y-0.5">
           <div class="font-semibold text-zinc-900">${safeName}</div>
-          <div class="text-zinc-500">Geofence radius: ${Math.round(place.radiusMeters)} m</div>
+          <div class="text-zinc-500">${visibilityTag} · ${Math.round(place.radiusMeters)} m</div>
         </div>
       `;
       if (existing) {
@@ -1021,12 +1022,14 @@ export function MapCanvas({
         innerWrap.className =
           'lo-pin-drop flex flex-col items-center transition-transform duration-200 ease-out hover:scale-110';
         const label = document.createElement('div');
-        label.className =
-          'rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-900 shadow-sm backdrop-blur';
-        label.textContent = `${place.name} · ${Math.round(place.radiusMeters)}m`;
+        label.className = place.isPrivate
+          ? 'rounded-lg border border-indigo-200/90 bg-indigo-50/95 px-2.5 py-0.5 text-[10px] font-semibold text-indigo-950 shadow-sm backdrop-blur'
+          : 'rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-900 shadow-sm backdrop-blur';
+        label.textContent = `${place.name} · ${Math.round(place.radiusMeters)}m${place.isPrivate ? ' (Private)' : ''}`;
         const dot = document.createElement('div');
-        dot.className =
-          'mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-dashed border-zinc-800 bg-white/80 shadow';
+        dot.className = place.isPrivate
+          ? 'mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-dashed border-indigo-600 bg-white/80 shadow'
+          : 'mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-dashed border-zinc-800 bg-white/80 shadow';
         const inner = document.createElement('div');
         inner.className = 'h-1.5 w-1.5 rounded-full bg-zinc-900';
         dot.appendChild(inner);
