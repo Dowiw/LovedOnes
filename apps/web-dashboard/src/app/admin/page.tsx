@@ -5,7 +5,9 @@ import Link from 'next/link';
 import {
   AlertTriangle,
   ArrowUpCircle,
+  Check,
   CheckCircle2,
+  Clock,
   CloudDownload,
   Cpu,
   Database,
@@ -16,21 +18,30 @@ import {
   RefreshCw,
   Terminal,
   Trash2,
+  UserPlus,
+  X,
 } from 'lucide-react';
-import type {
-  MapDownloadJob,
-  MapRegion,
-  SystemTelemetry,
-  SystemUpdateStatus,
+import {
+  DEFAULT_EXACT_HALO_COLOR,
+  formatCountdownRemaining,
+  isSafeAvatarUrl,
+  type MapDownloadJob,
+  type MapRegion,
+  type RegistrationRequestItem,
+  type SystemTelemetry,
+  type SystemUpdateStatus,
 } from '@loved-ones/shared';
 import { LiveLogTerminal } from '@/components/LiveLogTerminal';
 import { NavBar } from '@/components/NavBar';
 import { QrInvitePanel } from '@/components/QrInviteModal';
 import {
+  apiApproveRegistrationRequest,
   apiDeleteMapRegion,
+  apiDenyRegistrationRequest,
   apiFetchGroups,
   apiFetchMapJobs,
   apiFetchMapRegions,
+  apiFetchRegistrationRequests,
   apiFetchSystemUpdateStatus,
   apiFetchTelemetry,
   apiTriggerSystemUpdate,
@@ -47,6 +58,9 @@ export default function AdminDashboardPage() {
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
   const [mapJobs, setMapJobs] = useState<MapDownloadJob[]>([]);
+  const [registrationRequests, setRegistrationRequests] = useState<RegistrationRequestItem[]>([]);
+  const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [updateStatus, setUpdateStatus] = useState<SystemUpdateStatus | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [startingUpdate, setStartingUpdate] = useState(false);
@@ -62,17 +76,21 @@ export default function AdminDashboardPage() {
 
   const refreshData = useCallback(async (token: string) => {
     try {
-      const [stats, grpList, regionsData, jobs, sysUpdate] = await Promise.all([
+      const [stats, grpList, regionsData, jobs, sysUpdate, regReqs] = await Promise.all([
         apiFetchTelemetry(token),
         apiFetchGroups(token),
         apiFetchMapRegions(),
         apiFetchMapJobs(token),
         apiFetchSystemUpdateStatus(token, false).catch(() => null),
+        apiFetchRegistrationRequests(token).catch(() => null),
       ]);
       setTelemetry(stats);
       setGroups(grpList);
       setMapRegions(regionsData.regions);
       setMapJobs(jobs);
+      if (regReqs) {
+        setRegistrationRequests(regReqs);
+      }
       if (sysUpdate) {
         setUpdateStatus(sysUpdate);
         setReconnectingDuringUpdate(false);
@@ -82,6 +100,32 @@ export default function AdminDashboardPage() {
       setError(err instanceof Error ? err.message : 'Failed to load telemetry');
     }
   }, []);
+
+  useEffect(() => {
+    if (!registrationRequests.some((r) => r.status === 'PENDING')) return;
+    const ticker = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(ticker);
+  }, [registrationRequests]);
+
+  const handleReviewRegistrationRequest = useCallback(
+    async (requestId: string, action: 'approve' | 'deny') => {
+      if (!session) return;
+      setReviewingRequestId(requestId);
+      try {
+        if (action === 'approve') {
+          await apiApproveRegistrationRequest(session.accessToken, requestId);
+        } else {
+          await apiDenyRegistrationRequest(session.accessToken, requestId);
+        }
+        await refreshData(session.accessToken);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : `Failed to ${action} account request`);
+      } finally {
+        setReviewingRequestId(null);
+      }
+    },
+    [session, refreshData],
+  );
 
   const handleCheckForUpdates = useCallback(async () => {
     if (!session) return;
@@ -240,6 +284,132 @@ export default function AdminDashboardPage() {
             onClose={() => setShowInviteModal(false)}
           />
         )}
+
+        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-5 py-3.5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-950">
+              <UserPlus className="h-4 w-4 text-zinc-700" />
+              Account Requests
+              {registrationRequests.filter((r) => r.status === 'PENDING').length > 0 && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                  {registrationRequests.filter((r) => r.status === 'PENDING').length} pending
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] text-zinc-500">
+              1 request per IP · Expires automatically after 24h
+            </span>
+          </div>
+
+          {registrationRequests.length === 0 ? (
+            <div className="px-5 py-5 text-xs text-zinc-500">
+              No pending or recent account requests yet. New mobile onboarding requests appear here
+              with a 24-hour countdown timer.
+            </div>
+          ) : (
+            <div className="divide-y divide-zinc-100">
+              {registrationRequests.map((req) => {
+                const isPending = req.status === 'PENDING';
+                const countdown = isPending ? formatCountdownRemaining(req.expiresAt, nowMs) : null;
+                const halo = req.haloColor ?? DEFAULT_EXACT_HALO_COLOR;
+                const busy = reviewingRequestId === req.id;
+                const initials = req.username
+                  .trim()
+                  .split(/\s+/)
+                  .map((p) => p[0] ?? '')
+                  .join('')
+                  .slice(0, 2)
+                  .toUpperCase();
+
+                return (
+                  <div
+                    key={req.id}
+                    className="flex flex-wrap items-center justify-between gap-4 px-5 py-3.5"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-bold text-zinc-800"
+                        style={{ boxShadow: `0 0 0 2.5px ${halo}` }}
+                      >
+                        {isSafeAvatarUrl(req.avatarUrl) ? (
+                          <img
+                            src={req.avatarUrl}
+                            alt={req.username}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          initials || '?'
+                        )}
+                      </div>
+                      <div className="space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-zinc-950">
+                            {req.username}
+                          </span>
+                          <span className="text-xs text-zinc-500">{req.email}</span>
+                          {req.groupName && (
+                            <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] font-medium text-zinc-700">
+                              Group: {req.groupName}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 text-[11px] text-zinc-500">
+                          <span className="font-mono">IP {req.requesterIp}</span>
+                          {isPending && countdown && (
+                            <span className="inline-flex items-center gap-1 font-mono text-amber-700">
+                              <Clock className="h-3 w-3" />
+                              Expires in {countdown}
+                            </span>
+                          )}
+                          {!isPending && (
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                req.status === 'APPROVED'
+                                  ? 'bg-emerald-50 text-emerald-700'
+                                  : req.status === 'DENIED'
+                                    ? 'bg-rose-50 text-rose-700'
+                                    : 'bg-zinc-100 text-zinc-500'
+                              }`}
+                            >
+                              {req.status}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {isPending && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleReviewRegistrationRequest(req.id, 'approve')}
+                          className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
+                        >
+                          {busy ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Check className="h-3.5 w-3.5" />
+                          )}
+                          Accept
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleReviewRegistrationRequest(req.id, 'deny')}
+                          className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          Deny
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
 
         <section className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl">
           <div className="flex flex-wrap items-start justify-between gap-4">

@@ -13,16 +13,22 @@ import {
   formatCacheBytes,
 } from '../services/pmtilesStyle';
 import {
+  clearPendingRegistration,
   clearSessionConfig,
   createMemoryKeyValueStore,
   extractInviteCandidateFromUrl,
+  getPendingRegistration,
+  getPingedServers,
   getStoredConfig,
+  isPendingRecordActive,
   parseAndBindQrInvite,
+  savePendingRegistration,
   saveStoredConfig,
 } from '../services/secureConfig';
 import {
   formatServerHostLabel,
   getDefaultServerUrl,
+  getGeometricFonts,
   getOnboardingPalette,
   validateAuthForm,
 } from '../services/onboardingTheme';
@@ -424,5 +430,40 @@ describe('@loved-ones/mobile-app', () => {
         password: 'password123',
       }),
     ).toBeNull();
+
+    expect(getGeometricFonts('ios').display).toContain('AvenirNext');
+    expect(getGeometricFonts('android').display).toBe('sans-serif-medium');
+  });
+
+  it('tracks pending registration requests and prevents re-pinging the same server within 24h', async () => {
+    const store = createMemoryKeyValueStore();
+    const now = Date.now();
+    const activeExpires = new Date(now + 12 * 60 * 60 * 1000).toISOString();
+    const expiredAt = new Date(now - 1000).toISOString();
+
+    const record = {
+      requestId: '11111111-1111-4111-8111-111111111111',
+      serverUrl: 'https://home.example.com/',
+      email: 'newbie@example.com',
+      username: 'Alex',
+      haloColor: '#0ea5e9',
+      status: 'PENDING' as const,
+      createdAt: new Date(now).toISOString(),
+      expiresAt: activeExpires,
+    };
+
+    const mapAfterFirst = await savePendingRegistration(record, store);
+    expect(Object.keys(mapAfterFirst)).toEqual(['https://home.example.com']);
+    expect(isPendingRecordActive(await getPendingRegistration(store), now)).toBe(true);
+
+    // Expired entries are automatically pruned by getPingedServers
+    const mapAfterExpiry = await getPingedServers(store, new Date(activeExpires).getTime() + 1000);
+    expect(Object.keys(mapAfterExpiry)).toEqual([]);
+    expect(isPendingRecordActive({ ...record, expiresAt: expiredAt }, now)).toBe(false);
+
+    // Clearing the server removes it from pingedServers
+    const cleared = await clearPendingRegistration('https://home.example.com', store);
+    expect(Object.keys(cleared)).toEqual([]);
+    expect(await getPendingRegistration(store)).toBeNull();
   });
 });

@@ -548,5 +548,130 @@ describe('@loved-ones/auth-admin-service integration', () => {
     });
     expect(manualPruneRes.statusCode).toBe(200);
     expect(manualPruneRes.json().settings.retentionDays).toBe(3);
+
+    // 16. Onboarding IP handshake + 1-per-IP 24h admin-approved registration requests
+    const memberReqListForbidden = await app.inject({
+      method: 'GET',
+      url: '/api/admin/registration-requests',
+      headers: { Authorization: `Bearer ${memberData.accessToken}` },
+    });
+    expect(memberReqListForbidden.statusCode).toBe(403);
+
+    const handshakeBefore = await app.inject({
+      method: 'POST',
+      url: '/api/auth/onboarding/handshake',
+      headers: { 'x-forwarded-for': '203.0.113.10' },
+      payload: {},
+    });
+    expect(handshakeBefore.statusCode).toBe(200);
+    expect(handshakeBefore.json()).toMatchObject({
+      ok: true,
+      requesterIp: '203.0.113.10',
+      alreadyPinged: false,
+      activeRequest: null,
+    });
+
+    const createReqRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/registration-requests',
+      headers: { 'x-forwarded-for': '203.0.113.10' },
+      payload: {
+        username: 'PendingCasey',
+        email: 'casey@example.com',
+        password: 'CaseyPassword123!',
+        avatarUrl: 'https://cdn.example.com/casey.png',
+        haloColor: '#0EA5E9',
+      },
+    });
+    expect(createReqRes.statusCode).toBe(201);
+    const createdReq = createReqRes.json().request;
+    expect(createdReq.status).toBe('PENDING');
+    expect(createdReq.requesterIp).toBe('203.0.113.10');
+    expect(createdReq.haloColor).toBe('#0ea5e9');
+    expect(new Date(createdReq.expiresAt).getTime()).toBeGreaterThan(Date.now() + 23 * 3600 * 1000);
+
+    // Same IP cannot submit a second pending request or re-ping as fresh
+    const duplicateIpReq = await app.inject({
+      method: 'POST',
+      url: '/api/auth/registration-requests',
+      headers: { 'x-forwarded-for': '203.0.113.10' },
+      payload: {
+        username: 'AnotherUser',
+        email: 'another@example.com',
+        password: 'AnotherPassword123!',
+      },
+    });
+    expect(duplicateIpReq.statusCode).toBe(409);
+    expect(duplicateIpReq.json().details?.activeRequest?.id).toBe(createdReq.id);
+
+    const handshakeAfter = await app.inject({
+      method: 'POST',
+      url: '/api/auth/onboarding/handshake',
+      headers: { 'x-forwarded-for': '203.0.113.10' },
+      payload: {},
+    });
+    expect(handshakeAfter.statusCode).toBe(200);
+    expect(handshakeAfter.json().alreadyPinged).toBe(true);
+    expect(handshakeAfter.json().activeRequest?.id).toBe(createdReq.id);
+
+    // Different IP can submit a request that admin denies
+    const secondReqRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/registration-requests',
+      headers: { 'x-forwarded-for': '203.0.113.22' },
+      payload: {
+        username: 'DeniedDana',
+        email: 'dana@example.com',
+        password: 'DanaPassword123!',
+      },
+    });
+    expect(secondReqRes.statusCode).toBe(201);
+    const secondReq = secondReqRes.json().request;
+
+    const adminListRes = await app.inject({
+      method: 'GET',
+      url: '/api/admin/registration-requests',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(adminListRes.statusCode).toBe(200);
+    expect(adminListRes.json().requests.length).toBeGreaterThanOrEqual(2);
+
+    // Admin approves Casey -> Casey can now sign in with chosen profile/color
+    const approveRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/registration-requests/${createdReq.id}/approve`,
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(approveRes.statusCode).toBe(200);
+    expect(approveRes.json().request.status).toBe('APPROVED');
+
+    const caseyStatusRes = await app.inject({
+      method: 'GET',
+      url: `/api/auth/registration-requests/status?id=${createdReq.id}`,
+      headers: { 'x-forwarded-for': '203.0.113.10' },
+    });
+    expect(caseyStatusRes.statusCode).toBe(200);
+    expect(caseyStatusRes.json().request?.status).toBe('APPROVED');
+
+    const caseyLoginRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email: 'casey@example.com', password: 'CaseyPassword123!' },
+    });
+    expect(caseyLoginRes.statusCode).toBe(200);
+    expect(caseyLoginRes.json().user).toMatchObject({
+      username: 'PendingCasey',
+      avatarUrl: 'https://cdn.example.com/casey.png',
+      haloColor: '#0ea5e9',
+    });
+
+    // Admin denies Dana -> status reflects DENIED
+    const denyRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/registration-requests/${secondReq.id}/deny`,
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(denyRes.statusCode).toBe(200);
+    expect(denyRes.json().request.status).toBe('DENIED');
   });
 });

@@ -42,6 +42,10 @@ import {
   MapRegionsModuleOptions,
 } from './domain/map-regions-module.js';
 import {
+  normalizeRequesterIp,
+  RegistrationRequestModule,
+} from './domain/registration-request-module.js';
+import {
   SystemUpdateDriver,
   SystemUpdateModule,
 } from './domain/system-update-module.js';
@@ -136,6 +140,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     emailSender,
     publicServerUrl,
   });
+  const registrationRequests = new RegistrationRequestModule(pool);
   const telemetryQuery = new TelemetryQueryModule({
     store: new PostgresRedisTelemetryStore(pool, redis, logDir),
     logDir,
@@ -277,6 +282,64 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   });
 
   // ---- Auth & Onboarding Endpoints ----
+
+  app.post('/api/auth/onboarding/handshake', async (request: AuthenticatedRequest) => {
+    request.skipTelemetry = true;
+    const requesterIp = normalizeRequesterIp(
+      request.headers['x-forwarded-for'] ?? request.headers['x-real-ip'],
+      request.ip,
+    );
+    const result = await registrationRequests.handshake(request.body, requesterIp);
+    loggerHandle.logger.info(
+      {
+        action: 'onboarding.handshake',
+        requesterIp,
+        alreadyPinged: result.alreadyPinged,
+        groupName: result.invite?.groupName ?? null,
+      },
+      `Onboarding handshake from ${requesterIp}${
+        result.invite ? ` (group "${result.invite.groupName}")` : ''
+      }${result.alreadyPinged ? ' [active request pending]' : ''}`,
+    );
+    return result;
+  });
+
+  app.post('/api/auth/registration-requests', async (request: AuthenticatedRequest, reply) => {
+    request.skipTelemetry = true;
+    const requesterIp = normalizeRequesterIp(
+      request.headers['x-forwarded-for'] ?? request.headers['x-real-ip'],
+      request.ip,
+    );
+    const result = await registrationRequests.createRequest(request.body, requesterIp);
+    loggerHandle.logger.info(
+      {
+        action: 'registration_request.created',
+        requestId: result.request.id,
+        requesterIp,
+        email: result.request.email,
+        username: result.request.username,
+        groupName: result.request.groupName,
+        expiresAt: result.request.expiresAt,
+      },
+      `New account request from ${result.request.username} (${result.request.email}) via ${requesterIp}${
+        result.request.groupName ? ` for group "${result.request.groupName}"` : ''
+      }`,
+    );
+    return reply.code(201).send(result);
+  });
+
+  app.get('/api/auth/registration-requests/status', async (request: AuthenticatedRequest) => {
+    request.skipTelemetry = true;
+    const requesterIp = normalizeRequesterIp(
+      request.headers['x-forwarded-for'] ?? request.headers['x-real-ip'],
+      request.ip,
+    );
+    const query = (request.query ?? {}) as { id?: string };
+    return registrationRequests.getStatus({
+      requestId: typeof query.id === 'string' && query.id.trim() ? query.id.trim() : undefined,
+      requesterIp,
+    });
+  });
 
   app.post('/api/auth/register', async (request: AuthenticatedRequest, reply) => {
     request.skipTelemetry = true;
@@ -687,6 +750,57 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   app.get('/api/admin/telemetry', { preHandler: [requireHostAdmin] }, async () => {
     return telemetryQuery.getSystemTelemetry();
   });
+
+  app.get('/api/admin/registration-requests', { preHandler: [requireHostAdmin] }, async () => {
+    return registrationRequests.listForAdmin();
+  });
+
+  app.post(
+    '/api/admin/registration-requests/:id/approve',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const { id } = request.params as { id: string };
+      const result = await registrationRequests.approveRequest(id, actor.id);
+      loggerHandle.logger.info(
+        {
+          action: 'registration_request.approved',
+          userId: actor.id,
+          username: actor.username,
+          requestId: result.request.id,
+          approvedUserId: result.user.id,
+          approvedEmail: result.user.email,
+          approvedUsername: result.user.username,
+          requesterIp: result.request.requesterIp,
+          groupName: result.joinedGroup?.groupName ?? null,
+        },
+        `${actor.username} approved account request for ${result.user.username} (${result.user.email})`,
+      );
+      return result;
+    },
+  );
+
+  app.post(
+    '/api/admin/registration-requests/:id/deny',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const { id } = request.params as { id: string };
+      const result = await registrationRequests.denyRequest(id, actor.id);
+      loggerHandle.logger.info(
+        {
+          action: 'registration_request.denied',
+          userId: actor.id,
+          username: actor.username,
+          requestId: result.request.id,
+          deniedEmail: result.request.email,
+          requesterIp: result.request.requesterIp,
+        },
+        `${actor.username} denied account request for ${result.request.username} (${result.request.email})`,
+      );
+      return result;
+    },
+  );
 
   app.get('/api/admin/logs/recent', { preHandler: [requireHostAdmin] }, async () => {
     const retention = await loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb });

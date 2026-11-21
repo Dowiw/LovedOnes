@@ -174,3 +174,33 @@ CREATE INDEX IF NOT EXISTS idx_users_recovery_email_lower
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS halo_color VARCHAR(7) NULL,
     ADD COLUMN IF NOT EXISTS fuzz_circle_color VARCHAR(7) NULL;
+
+DO $$ BEGIN
+    CREATE TYPE registration_request_status AS ENUM ('PENDING', 'APPROVED', 'DENIED', 'EXPIRED');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS registration_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email VARCHAR(255) NOT NULL,
+    username VARCHAR(64) NOT NULL,
+    password_hash TEXT NOT NULL,
+    avatar_url TEXT NULL,
+    halo_color VARCHAR(7) NULL,
+    fuzz_circle_color VARCHAR(7) NULL,
+    invite_token VARCHAR(128) NULL REFERENCES group_invites(token) ON DELETE SET NULL,
+    group_name VARCHAR(100) NULL,
+    requester_ip VARCHAR(128) NOT NULL,
+    status registration_request_status NOT NULL DEFAULT 'PENDING',
+    reviewed_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_at TIMESTAMPTZ NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_registration_requests_ip_status
+    ON registration_requests (requester_ip, status, expires_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_registration_requests_status_created
+    ON registration_requests (status, created_at DESC);

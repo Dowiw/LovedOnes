@@ -1,4 +1,9 @@
-import { QrInvitePayload, QrInvitePayloadSchema, SystemRole } from '@loved-ones/shared';
+import {
+  QrInvitePayload,
+  QrInvitePayloadSchema,
+  RegistrationRequestStatus,
+  SystemRole,
+} from '@loved-ones/shared';
 import { formatUserError } from './errorFormatter';
 
 export interface MobileUser {
@@ -21,6 +26,22 @@ export interface MobileStoredConfig {
   activeGroupId: string | null;
 }
 
+export interface PendingRegistrationRecord {
+  requestId: string;
+  serverUrl: string;
+  email: string;
+  username: string;
+  avatarUrl?: string | null;
+  haloColor?: string | null;
+  groupName?: string | null;
+  requesterIp?: string | null;
+  status: RegistrationRequestStatus;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export type PingedServersMap = Record<string, PendingRegistrationRecord>;
+
 export interface SecureKeyValueStore {
   getItemAsync(key: string): Promise<string | null>;
   setItemAsync(key: string, value: string): Promise<void>;
@@ -33,7 +54,23 @@ const KEYS = {
   refreshToken: 'lovedones.refreshToken',
   user: 'lovedones.user',
   activeGroupId: 'lovedones.activeGroupId',
+  pendingRegistration: 'lovedones.pendingRegistration',
+  pingedServers: 'lovedones.pingedServers',
 } as const;
+
+export function normalizeServerUrlKey(rawUrl: string): string {
+  return rawUrl.trim().replace(/\/+$/, '').toLowerCase();
+}
+
+export function isPendingRecordActive(
+  record: PendingRegistrationRecord | null | undefined,
+  nowMs = Date.now(),
+): boolean {
+  if (!record) return false;
+  if (record.status !== 'PENDING') return false;
+  const expiresMs = new Date(record.expiresAt).getTime();
+  return Number.isFinite(expiresMs) && expiresMs > nowMs;
+}
 
 export function createMemoryKeyValueStore(): SecureKeyValueStore {
   const map = new Map<string, string>();
@@ -138,6 +175,82 @@ export async function clearSessionConfig(store?: SecureKeyValueStore): Promise<v
     s.deleteItemAsync(KEYS.user),
     s.deleteItemAsync(KEYS.activeGroupId),
   ]);
+}
+
+export async function getPendingRegistration(
+  store?: SecureKeyValueStore,
+): Promise<PendingRegistrationRecord | null> {
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(KEYS.pendingRegistration);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PendingRegistrationRecord;
+  } catch {
+    return null;
+  }
+}
+
+export async function getPingedServers(
+  store?: SecureKeyValueStore,
+  nowMs = Date.now(),
+): Promise<PingedServersMap> {
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(KEYS.pingedServers);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as PingedServersMap;
+    const pruned: PingedServersMap = {};
+    for (const [key, rec] of Object.entries(parsed)) {
+      if (isPendingRecordActive(rec, nowMs)) {
+        pruned[key] = rec;
+      }
+    }
+    return pruned;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persists an active pending admin-approval request and records its server so
+ * the user cannot re-ping the same server twice and First Time? stays locked on waiting.
+ */
+export async function savePendingRegistration(
+  record: PendingRegistrationRecord,
+  store?: SecureKeyValueStore,
+): Promise<PingedServersMap> {
+  const s = store ?? (await getExpoSecureStore());
+  const serverKey = normalizeServerUrlKey(record.serverUrl);
+  const existing = await getPingedServers(s);
+  const nextMap: PingedServersMap = { ...existing };
+  if (isPendingRecordActive(record)) {
+    nextMap[serverKey] = record;
+  } else {
+    delete nextMap[serverKey];
+  }
+  await Promise.all([
+    s.setItemAsync(KEYS.pendingRegistration, JSON.stringify(record)),
+    s.setItemAsync(KEYS.pingedServers, JSON.stringify(nextMap)),
+    s.setItemAsync(KEYS.serverUrl, record.serverUrl.replace(/\/+$/, '')),
+  ]);
+  return nextMap;
+}
+
+export async function clearPendingRegistration(
+  serverUrl?: string,
+  store?: SecureKeyValueStore,
+): Promise<PingedServersMap> {
+  const s = store ?? (await getExpoSecureStore());
+  const existing = await getPingedServers(s);
+  const nextMap: PingedServersMap = { ...existing };
+  if (serverUrl) {
+    delete nextMap[normalizeServerUrlKey(serverUrl)];
+  }
+  await Promise.all([
+    s.deleteItemAsync(KEYS.pendingRegistration),
+    s.setItemAsync(KEYS.pingedServers, JSON.stringify(nextMap)),
+  ]);
+  return nextMap;
 }
 
 /**

@@ -1,5 +1,21 @@
 export type OnboardingColorScheme = 'light' | 'dark';
 
+export const ONBOARDING_COLOR_PRESETS = [
+  { label: 'Amber', hex: '#f59e0b' },
+  { label: 'Sky', hex: '#0ea5e9' },
+  { label: 'Emerald', hex: '#10b981' },
+  { label: 'Violet', hex: '#8b5cf6' },
+  { label: 'Rose', hex: '#f43f5e' },
+  { label: 'Ink', hex: '#18181b' },
+] as const;
+
+export interface GeometricFontFamily {
+  display: string;
+  heading: string;
+  body: string;
+  mono: string;
+}
+
 export interface OnboardingPalette {
   scheme: OnboardingColorScheme;
   statusBarStyle: 'dark' | 'light';
@@ -21,10 +37,14 @@ export interface OnboardingPalette {
   secondaryText: string;
   orbBg: string;
   pulseRing: string;
+  electricGlow: string;
   badgeSuccessBg: string;
   badgeSuccessBorder: string;
   badgeSuccessText: string;
   badgeSuccessDot: string;
+  badgeWarnBg: string;
+  badgeWarnBorder: string;
+  badgeWarnText: string;
   noticeBg: string;
   noticeBorder: string;
   noticeText: string;
@@ -53,11 +73,15 @@ const LIGHT_PALETTE: OnboardingPalette = {
   secondaryBorder: '#e4e4e7',
   secondaryText: '#18181b',
   orbBg: 'rgba(24, 24, 27, 0.045)',
-  pulseRing: 'rgba(24, 24, 27, 0.14)',
+  pulseRing: 'rgba(24, 24, 27, 0.16)',
+  electricGlow: '#0ea5e9',
   badgeSuccessBg: '#ecfdf5',
   badgeSuccessBorder: '#a7f3d0',
   badgeSuccessText: '#065f46',
   badgeSuccessDot: '#10b981',
+  badgeWarnBg: '#fffbeb',
+  badgeWarnBorder: '#fde68a',
+  badgeWarnText: '#92400e',
   noticeBg: '#f4f4f5',
   noticeBorder: '#e4e4e7',
   noticeText: '#18181b',
@@ -86,11 +110,15 @@ const DARK_PALETTE: OnboardingPalette = {
   secondaryBorder: '#3f3f46',
   secondaryText: '#fafafa',
   orbBg: 'rgba(250, 250, 250, 0.05)',
-  pulseRing: 'rgba(250, 250, 250, 0.18)',
+  pulseRing: 'rgba(250, 250, 250, 0.2)',
+  electricGlow: '#38bdf8',
   badgeSuccessBg: 'rgba(16, 185, 129, 0.14)',
   badgeSuccessBorder: 'rgba(52, 211, 153, 0.34)',
   badgeSuccessText: '#6ee7b7',
   badgeSuccessDot: '#34d399',
+  badgeWarnBg: 'rgba(245, 158, 11, 0.14)',
+  badgeWarnBorder: 'rgba(251, 191, 36, 0.34)',
+  badgeWarnText: '#fcd34d',
   noticeBg: '#27272a',
   noticeBorder: '#3f3f46',
   noticeText: '#fafafa',
@@ -100,9 +128,32 @@ const DARK_PALETTE: OnboardingPalette = {
 };
 
 /**
+ * Returns spatial geometric font families available natively on iOS and Android
+ * without requiring native font asset rebuilds.
+ */
+export function getGeometricFonts(platformOs: string): GeometricFontFamily {
+  if (platformOs === 'ios') {
+    return {
+      display: 'AvenirNext-DemiBold',
+      heading: 'AvenirNext-Medium',
+      body: 'Avenir Next',
+      mono: 'Menlo',
+    };
+  }
+  return {
+    display: 'sans-serif-medium',
+    heading: 'sans-serif-medium',
+    body: 'sans-serif',
+    mono: 'monospace',
+  };
+}
+
+/**
  * Returns monochrome palette tokens matching the OS Light/Dark color scheme.
  */
-export function getOnboardingPalette(scheme: 'light' | 'dark' | null | undefined): OnboardingPalette {
+export function getOnboardingPalette(
+  scheme: 'light' | 'dark' | null | undefined,
+): OnboardingPalette {
   return scheme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE;
 }
 
@@ -121,7 +172,7 @@ export function formatServerHostLabel(serverUrl: string): string {
 }
 
 /**
- * Returns a sensible local dev fallback URL when no server has been bound yet.
+ * Returns a sensible local dev fallback URL when running in dev mode.
  */
 export function getDefaultServerUrl(platformOs: string): string {
   return platformOs === 'ios' ? 'http://localhost:8080' : 'http://localhost:8080';

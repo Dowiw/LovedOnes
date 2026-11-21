@@ -25,6 +25,12 @@ export const locationRequestStatusEnum = pgEnum('location_request_status', [
   'expired',
 ]);
 export const placeTransitionTypeEnum = pgEnum('place_transition_type', ['enter', 'exit']);
+export const registrationRequestStatusEnum = pgEnum('registration_request_status', [
+  'PENDING',
+  'APPROVED',
+  'DENIED',
+  'EXPIRED',
+]);
 
 const geographyPoint = customType<{ data: string }>({
   dataType() {
@@ -180,5 +186,25 @@ export const groupPlaceEvents = pgTable('group_place_events', {
     .references(() => users.id, { onDelete: 'cascade' }),
   transition: placeTransitionTypeEnum('transition').notNull(),
   recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const registrationRequests = pgTable('registration_requests', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  email: varchar('email', { length: 255 }).notNull(),
+  username: varchar('username', { length: 64 }).notNull(),
+  passwordHash: text('password_hash').notNull(),
+  avatarUrl: text('avatar_url'),
+  haloColor: varchar('halo_color', { length: 7 }),
+  fuzzCircleColor: varchar('fuzz_circle_color', { length: 7 }),
+  inviteToken: varchar('invite_token', { length: 128 }).references(() => groupInvites.token, {
+    onDelete: 'set null',
+  }),
+  groupName: varchar('group_name', { length: 100 }),
+  requesterIp: varchar('requester_ip', { length: 128 }).notNull(),
+  status: registrationRequestStatusEnum('status').default('PENDING').notNull(),
+  reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });

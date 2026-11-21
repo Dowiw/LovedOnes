@@ -11,8 +11,10 @@ import {
   computeCityFallbackBbox,
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
+  CreateRegistrationRequestSchema,
   evaluateClientVersion,
   findCoveringRegions,
+  formatCountdownRemaining,
   haversineMeters,
   hexToRgba,
   isPointCoveredByRegions,
@@ -660,5 +662,30 @@ describe('@loved-ones/shared', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('validates registration request payloads and formats 24h countdown timers', () => {
+    const parsed = CreateRegistrationRequestSchema.parse({
+      username: 'Jordan',
+      email: 'jordan@example.com',
+      password: 'Password123!',
+      haloColor: '#0EA5E9',
+      avatarUrl: 'https://cdn.example.com/j.png',
+    });
+    expect(parsed.haloColor).toBe('#0ea5e9');
+    expect(
+      CreateRegistrationRequestSchema.safeParse({
+        username: 'Jordan',
+        email: 'jordan@example.com',
+        password: 'short',
+      }).success,
+    ).toBe(false);
+
+    const now = Date.UTC(2026, 10, 21, 12, 0, 0);
+    expect(
+      formatCountdownRemaining(new Date(now + (23 * 3600 + 5 * 60 + 9) * 1000).toISOString(), now),
+    ).toBe('23h 05m 09s');
+    expect(formatCountdownRemaining(new Date(now + 125 * 1000).toISOString(), now)).toBe('2m 05s');
+    expect(formatCountdownRemaining(new Date(now - 1000).toISOString(), now)).toBe('Expired');
   });
 });

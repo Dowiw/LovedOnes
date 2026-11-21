@@ -13,6 +13,7 @@ import type {
   PlaceTransitionEvent,
   PrivacyMode,
   QrInvitePayload,
+  RegistrationRequestItem,
   SystemRole,
   SystemTelemetry,
   SystemUpdateStatus,
@@ -483,6 +484,41 @@ export async function apiDeleteInvite(
 export async function apiFetchTelemetry(accessToken: string): Promise<SystemTelemetry> {
   const { authBase } = getServiceBaseUrls();
   return requestAuthedJson<SystemTelemetry>(`${authBase}/api/admin/telemetry`, accessToken);
+}
+
+export async function apiFetchRegistrationRequests(
+  accessToken: string,
+): Promise<RegistrationRequestItem[]> {
+  const { authBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ requests: RegistrationRequestItem[] }>(
+    `${authBase}/api/admin/registration-requests`,
+    accessToken,
+  );
+  return res.requests;
+}
+
+export async function apiApproveRegistrationRequest(
+  accessToken: string,
+  requestId: string,
+): Promise<{ request: RegistrationRequestItem }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ request: RegistrationRequestItem }>(
+    `${authBase}/api/admin/registration-requests/${encodeURIComponent(requestId)}/approve`,
+    accessToken,
+    { method: 'POST' },
+  );
+}
+
+export async function apiDenyRegistrationRequest(
+  accessToken: string,
+  requestId: string,
+): Promise<{ request: RegistrationRequestItem }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ request: RegistrationRequestItem }>(
+    `${authBase}/api/admin/registration-requests/${encodeURIComponent(requestId)}/deny`,
+    accessToken,
+    { method: 'POST' },
+  );
 }
 
 export async function apiFetchRecentLogs(accessToken: string): Promise<string[]> {

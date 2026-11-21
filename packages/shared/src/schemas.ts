@@ -774,3 +774,94 @@ export function normalizeOverlandToPoints(
 
   return points;
 }
+
+// ---- Onboarding Handshake & Admin-Approved Account Requests ----
+
+export const REGISTRATION_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
+
+export const RegistrationRequestStatusSchema = z.enum([
+  'PENDING',
+  'APPROVED',
+  'DENIED',
+  'EXPIRED',
+]);
+export type RegistrationRequestStatus = z.infer<typeof RegistrationRequestStatusSchema>;
+
+export const OnboardingHandshakeSchema = z.object({
+  inviteToken: z.string().trim().min(4).max(128).optional(),
+});
+export type OnboardingHandshakeInput = z.infer<typeof OnboardingHandshakeSchema>;
+
+export const CreateRegistrationRequestSchema = z.object({
+  email: z.string().trim().email().max(255),
+  username: z.string().trim().min(1).max(64),
+  password: z.string().min(8).max(128),
+  avatarUrl: AvatarUrlSchema.nullable().optional(),
+  haloColor: z
+    .string()
+    .trim()
+    .refine((v) => isSafeHexColor(v), { message: 'Color must be a #RRGGBB hex value' })
+    .transform((v) => v.toLowerCase())
+    .nullable()
+    .optional(),
+  fuzzCircleColor: z
+    .string()
+    .trim()
+    .refine((v) => isSafeHexColor(v), { message: 'Color must be a #RRGGBB hex value' })
+    .transform((v) => v.toLowerCase())
+    .nullable()
+    .optional(),
+  inviteToken: z.string().trim().min(4).max(128).optional(),
+});
+export type CreateRegistrationRequestInput = z.infer<typeof CreateRegistrationRequestSchema>;
+
+export const RegistrationRequestItemSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  username: z.string(),
+  avatarUrl: z.string().nullable(),
+  haloColor: z.string().nullable(),
+  fuzzCircleColor: z.string().nullable(),
+  inviteToken: z.string().nullable(),
+  groupName: z.string().nullable(),
+  requesterIp: z.string(),
+  status: RegistrationRequestStatusSchema,
+  expiresAt: z.string(),
+  createdAt: z.string(),
+  reviewedAt: z.string().nullable(),
+});
+export type RegistrationRequestItem = z.infer<typeof RegistrationRequestItemSchema>;
+
+export const OnboardingHandshakeResponseSchema = z.object({
+  ok: z.literal(true),
+  serverName: z.string(),
+  requesterIp: z.string(),
+  alreadyPinged: z.boolean(),
+  activeRequest: RegistrationRequestItemSchema.nullable(),
+  invite: z
+    .object({
+      groupId: z.string().uuid(),
+      groupName: z.string(),
+      assignedRole: GroupRoleSchema,
+    })
+    .nullable(),
+});
+export type OnboardingHandshakeResponse = z.infer<typeof OnboardingHandshakeResponseSchema>;
+
+/**
+ * Formats remaining time until an ISO expiry timestamp as `23h 59m 12s` (or `Expired`).
+ */
+export function formatCountdownRemaining(expiresAtIso: string, nowMs = Date.now()): string {
+  const targetMs = new Date(expiresAtIso).getTime();
+  if (!Number.isFinite(targetMs)) return 'Expired';
+  const remainingSec = Math.max(0, Math.floor((targetMs - nowMs) / 1000));
+  if (remainingSec <= 0) return 'Expired';
+  const hours = Math.floor(remainingSec / 3600);
+  const minutes = Math.floor((remainingSec % 3600) / 60);
+  const seconds = remainingSec % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}h ${pad(minutes)}m ${pad(seconds)}s`;
+  }
+  return `${minutes}m ${pad(seconds)}s`;
+}
