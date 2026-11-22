@@ -1,22 +1,26 @@
 import type { Metadata, Viewport } from 'next';
-import { JetBrains_Mono, Plus_Jakarta_Sans } from 'next/font/google';
+import localFont from 'next/font/local';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { MobileViewportSync } from '@/components/MobileViewportSync';
 import { ThemeSync } from '@/components/ThemeSync';
 import './globals.css';
 
-const plusJakartaSans = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+const plusJakartaSans = localFont({
+  src: './fonts/plus-jakarta-sans-latin.woff2',
+  weight: '400 700',
+  style: 'normal',
   variable: '--font-sans',
   display: 'swap',
+  fallback: ['system-ui', '-apple-system', 'sans-serif'],
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
+const jetbrainsMono = localFont({
+  src: './fonts/jetbrains-mono-latin.woff2',
+  weight: '400 600',
+  style: 'normal',
   variable: '--font-mono',
   display: 'swap',
+  fallback: ['ui-monospace', 'SFMono-Regular', 'monospace'],
 });
 
 export const metadata: Metadata = {
