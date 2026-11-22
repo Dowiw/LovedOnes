@@ -48,6 +48,13 @@ export interface SecureKeyValueStore {
   deleteItemAsync(key: string): Promise<void>;
 }
 
+export interface RecoveryGeofenceAnchor {
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  updatedAt: string;
+}
+
 const KEYS = {
   serverUrl: 'lovedones.serverUrl',
   accessToken: 'lovedones.accessToken',
@@ -57,6 +64,8 @@ const KEYS = {
   pendingRegistration: 'lovedones.pendingRegistration',
   pingedServers: 'lovedones.pingedServers',
   mapThemePreference: 'lovedones.mapThemePreference',
+  backgroundTrackingEnabled: 'lovedones.backgroundTrackingEnabled',
+  recoveryGeofenceAnchor: 'lovedones.recoveryGeofenceAnchor',
 } as const;
 
 export type MobileMapThemePreference = 'system' | 'light' | 'dark';
@@ -84,6 +93,72 @@ export async function saveMapThemePreference(
 ): Promise<void> {
   const s = store ?? (await getExpoSecureStore());
   await s.setItemAsync(KEYS.mapThemePreference, preference);
+}
+
+/**
+ * Persists whether the user opted into continuous background GPS sharing so
+ * headless geofence-recovery wake-ups and app launches respect pause/sign-out state.
+ */
+export async function getBackgroundTrackingEnabled(
+  store?: SecureKeyValueStore,
+): Promise<boolean> {
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(KEYS.backgroundTrackingEnabled);
+  return raw === 'true';
+}
+
+export async function setBackgroundTrackingEnabled(
+  enabled: boolean,
+  store?: SecureKeyValueStore,
+): Promise<void> {
+  const s = store ?? (await getExpoSecureStore());
+  if (enabled) {
+    await s.setItemAsync(KEYS.backgroundTrackingEnabled, 'true');
+  } else {
+    await s.deleteItemAsync(KEYS.backgroundTrackingEnabled);
+  }
+}
+
+export async function getRecoveryGeofenceAnchor(
+  store?: SecureKeyValueStore,
+): Promise<RecoveryGeofenceAnchor | null> {
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(KEYS.recoveryGeofenceAnchor);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<RecoveryGeofenceAnchor>;
+    if (
+      typeof parsed.latitude === 'number' &&
+      Number.isFinite(parsed.latitude) &&
+      typeof parsed.longitude === 'number' &&
+      Number.isFinite(parsed.longitude) &&
+      typeof parsed.radiusMeters === 'number' &&
+      Number.isFinite(parsed.radiusMeters) &&
+      typeof parsed.updatedAt === 'string'
+    ) {
+      return {
+        latitude: parsed.latitude,
+        longitude: parsed.longitude,
+        radiusMeters: parsed.radiusMeters,
+        updatedAt: parsed.updatedAt,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveRecoveryGeofenceAnchor(
+  anchor: RecoveryGeofenceAnchor | null,
+  store?: SecureKeyValueStore,
+): Promise<void> {
+  const s = store ?? (await getExpoSecureStore());
+  if (anchor) {
+    await s.setItemAsync(KEYS.recoveryGeofenceAnchor, JSON.stringify(anchor));
+  } else {
+    await s.deleteItemAsync(KEYS.recoveryGeofenceAnchor);
+  }
 }
 
 export function normalizeServerUrlKey(rawUrl: string): string {
@@ -189,6 +264,8 @@ export async function clearStoredConfig(store?: SecureKeyValueStore): Promise<vo
     s.deleteItemAsync(KEYS.refreshToken),
     s.deleteItemAsync(KEYS.user),
     s.deleteItemAsync(KEYS.activeGroupId),
+    s.deleteItemAsync(KEYS.backgroundTrackingEnabled),
+    s.deleteItemAsync(KEYS.recoveryGeofenceAnchor),
   ]);
 }
 
@@ -202,6 +279,8 @@ export async function clearSessionConfig(store?: SecureKeyValueStore): Promise<v
     s.deleteItemAsync(KEYS.refreshToken),
     s.deleteItemAsync(KEYS.user),
     s.deleteItemAsync(KEYS.activeGroupId),
+    s.deleteItemAsync(KEYS.backgroundTrackingEnabled),
+    s.deleteItemAsync(KEYS.recoveryGeofenceAnchor),
   ]);
 }
 
