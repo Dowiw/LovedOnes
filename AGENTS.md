@@ -22,6 +22,7 @@ The stack targets Linux, macOS, and Windows (WSL2) workstations as well as `amd6
 
 ## Commit & Verification Discipline
 
+- Before implementing any requested feature or bug fix, fetch `origin/main` and create and check out a fresh branch (`git fetch origin && git checkout -b <type>/<short-name> origin/main`) before editing files; never commit feature work directly onto `main`, detached `HEAD`, or an unrelated branch.
 - Run `pnpm typecheck`, `pnpm build`, and `pnpm test` before committing changes across packages.
 - Do not bypass Zod validation or privacy mode filtering (`EXACT`, `FUZZED`, `GHOST`) in any client or service layer.
 
