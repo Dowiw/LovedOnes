@@ -1,5 +1,10 @@
+import { createRequire } from 'node:module';
 import pg from 'pg';
-import webpush from 'web-push';
+import type * as WebPushType from 'web-push';
+
+const require = createRequire(import.meta.url);
+// web-push ships a CommonJS export without an ESM default export on Node 22.
+const webpush = require('web-push') as typeof WebPushType;
 import {
   deletePushSubscription,
   deletePushSubscriptionByEndpoint,
