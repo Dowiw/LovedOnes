@@ -1,5 +1,6 @@
 import type { LocationPoint } from '@loved-ones/shared';
 import { formatUserError } from './errorFormatter';
+import { getStoredConfig, saveStoredConfig } from './secureConfig';
 
 export interface QueuedLocationRow extends LocationPoint {
   id: number;
@@ -131,12 +132,91 @@ export async function getPendingLocationCount(storage?: OfflineQueueStorage): Pr
   return s.count();
 }
 
+export interface BackgroundAuthOptions {
+  refreshToken?: string | null;
+  onTokensRefreshed?: (tokens: { accessToken: string; refreshToken: string }) => Promise<void>;
+}
+
+/**
+ * Sends an authenticated JSON POST from background or foreground tasks, automatically
+ * refreshing an expired accessToken once via /api/auth/refresh when refreshToken is present.
+ */
+export async function postBackgroundAuthedJson(
+  serverUrl: string,
+  path: string,
+  accessToken: string,
+  payload: unknown,
+  fetchImpl: typeof fetch = fetch,
+  authOptions?: BackgroundAuthOptions,
+): Promise<Response> {
+  const cleanBase = serverUrl.replace(/\/$/, '');
+  const send = (token: string) =>
+    fetchImpl(`${cleanBase}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+  let response: Response;
+  try {
+    response = await send(accessToken);
+  } catch (err) {
+    throw new Error(
+      formatUserError(err, 'Unable to reach the server. Check your internet connection or server URL.'),
+    );
+  }
+
+  if (response.status === 401) {
+    const refreshToken =
+      authOptions && 'refreshToken' in authOptions
+        ? authOptions.refreshToken
+        : (await getStoredConfig().catch(() => null))?.refreshToken;
+    if (refreshToken) {
+      try {
+        const refreshRes = await fetchImpl(`${cleanBase}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken }),
+        });
+        if (refreshRes.ok) {
+          const tokens = (await refreshRes.json()) as {
+            accessToken?: string;
+            refreshToken?: string;
+          };
+          if (tokens.accessToken && tokens.refreshToken) {
+            if (authOptions?.onTokensRefreshed) {
+              await authOptions.onTokensRefreshed({
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+              });
+            } else {
+              await saveStoredConfig({
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+              });
+            }
+            response = await send(tokens.accessToken);
+          }
+        }
+      } catch {
+        // Return original 401 response if refresh attempt failed due to connectivity
+      }
+    }
+  }
+
+  return response;
+}
+
 export async function flushOfflineLocations(
   serverUrl: string,
   accessToken: string,
   storage?: OfflineQueueStorage,
   fetchImpl: typeof fetch = fetch,
   batchSize = 100,
+  authOptions?: BackgroundAuthOptions,
 ): Promise<{ flushed: number; remaining: number }> {
   const s = storage ?? (await getSqliteQueueStorage());
   const pending = await s.getPending(batchSize);
@@ -154,22 +234,14 @@ export async function flushOfflineLocations(
     recordedAt: row.recordedAt,
   }));
 
-  const cleanBase = serverUrl.replace(/\/$/, '');
-  let response: Response;
-  try {
-    response = await fetchImpl(`${cleanBase}/api/realtime/locations`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ points }),
-    });
-  } catch (err) {
-    throw new Error(
-      formatUserError(err, 'Unable to reach the server. Check your internet connection or server URL.'),
-    );
-  }
+  const response = await postBackgroundAuthedJson(
+    serverUrl,
+    '/api/realtime/locations',
+    accessToken,
+    { points },
+    fetchImpl,
+    authOptions,
+  );
 
   if (!response.ok) {
     const err = new Error(`HTTP ${response.status}`);

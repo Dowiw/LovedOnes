@@ -48,6 +48,7 @@ import {
   type LocationShareLinkItem,
   type MapDownloadJob,
   type MapRegion,
+  type MemberPresenceUpdate,
   type PlaceTransitionEvent,
   type PrivacyMode,
 } from '@loved-ones/shared';
@@ -66,8 +67,10 @@ import {
 import { pickAndCropSquareAvatar } from '../services/avatarPicker';
 import {
   isBackgroundTrackingActive,
+  sendPresenceHeartbeat,
   startBackgroundTracking,
   stopBackgroundTracking,
+  syncAdaptiveTrackingForPosition,
   syncRecoveryGeofenceForPosition,
 } from '../services/backgroundLocation';
 import { groupChatMessagesForDisplay } from '../services/chatFormatting';
@@ -79,6 +82,7 @@ import {
 } from '../services/locationPermissions';
 import {
   describeLastNearPlace,
+  describeMemberStatus,
   formatLastSeenRelative,
   normalizeBearingDegrees,
 } from '../services/memberDetails';
@@ -308,6 +312,7 @@ export function MobileMapScreen({
 
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
+  const [presenceNowMs, setPresenceNowMs] = useState(() => Date.now());
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
@@ -636,6 +641,13 @@ export function MobileMapScreen({
   );
 
   useEffect(() => {
+    const timer = setInterval(() => {
+      setPresenceNowMs(Date.now());
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     void checkServerAppVersion(false);
     void authedFetch('/api/auth/me').catch(() => {});
     const sub = AppState.addEventListener('change', (nextState) => {
@@ -788,6 +800,23 @@ export function MobileMapScreen({
       setLocations((prev) => {
         if (activeGroup && evt.groupId !== activeGroup.id) return prev;
         return prev.filter((p) => p.userId !== evt.userId);
+      });
+    });
+
+    socket.on('presence:update', (evt: MemberPresenceUpdate) => {
+      setLocations((prev) => {
+        if (activeGroup && evt.groupId !== activeGroup.id) return prev;
+        return prev.map((loc) =>
+          loc.userId === evt.userId
+            ? {
+                ...loc,
+                lastHeartbeatAt: evt.lastHeartbeatAt,
+                trackingState: evt.trackingState,
+                batteryLevel:
+                  evt.batteryLevel !== undefined ? evt.batteryLevel : loc.batteryLevel,
+              }
+            : loc,
+        );
       });
     });
 
@@ -955,6 +984,7 @@ export function MobileMapScreen({
       },
     ]);
     const result = await flushOfflineLocations(serverUrl, accessToken);
+    void syncAdaptiveTrackingForPosition(pos.coords.latitude, pos.coords.longitude);
     void syncRecoveryGeofenceForPosition(pos.coords.latitude, pos.coords.longitude);
     await refreshQueueCount();
     return result;
@@ -1057,7 +1087,10 @@ export function MobileMapScreen({
             ? 'Background GPS sharing active (Allow All the Time)'
             : 'Foreground GPS sharing active (While Using App)',
         );
-        await captureFocusAndSyncPosition().catch(() => null);
+        const synced = await captureFocusAndSyncPosition().catch(() => null);
+        if (!synced) {
+          void sendPresenceHeartbeat('active');
+        }
       }
     } catch (err) {
       setHubStatusMsg(formatUserError(err, 'Unable to toggle GPS sharing'));
@@ -2509,14 +2542,24 @@ export function MobileMapScreen({
                         isFuzzed: selectedMember.isFuzzed,
                         places,
                         transitions: placeTransitions,
+                        nowMs: presenceNowMs,
                       })}
                     </Text>
                   </View>
 
                   <View style={styles.detailMetaRow}>
-                    <Text style={styles.detailMetaLabel}>Last seen at</Text>
+                    <Text style={styles.detailMetaLabel}>Status</Text>
                     <Text style={styles.detailMetaValue}>
-                      {formatLastSeenRelative(selectedMember.recordedAt)}
+                      {describeMemberStatus({
+                        latitude: selectedMember.latitude,
+                        longitude: selectedMember.longitude,
+                        recordedAt: selectedMember.recordedAt,
+                        lastHeartbeatAt: selectedMember.lastHeartbeatAt,
+                        trackingState: selectedMember.trackingState,
+                        isFuzzed: selectedMember.isFuzzed,
+                        places,
+                        nowMs: presenceNowMs,
+                      }).detailText}
                       {typeof selectedMember.speed === 'number' && selectedMember.speed > 0.5
                         ? ` · ${(selectedMember.speed * 3.6).toFixed(0)} km/h`
                         : ''}

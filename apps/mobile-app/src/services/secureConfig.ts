@@ -55,6 +55,13 @@ export interface RecoveryGeofenceAnchor {
   updatedAt: string;
 }
 
+export interface AdaptiveTrackingState {
+  mode: 'moving' | 'idle';
+  anchorLatitude: number;
+  anchorLongitude: number;
+  stationarySinceMs: number;
+}
+
 const KEYS = {
   serverUrl: 'lovedones.serverUrl',
   accessToken: 'lovedones.accessToken',
@@ -66,6 +73,7 @@ const KEYS = {
   mapThemePreference: 'lovedones.mapThemePreference',
   backgroundTrackingEnabled: 'lovedones.backgroundTrackingEnabled',
   recoveryGeofenceAnchor: 'lovedones.recoveryGeofenceAnchor',
+  adaptiveTrackingState: 'lovedones.adaptiveTrackingState',
 } as const;
 
 export type MobileMapThemePreference = 'system' | 'light' | 'dark';
@@ -158,6 +166,48 @@ export async function saveRecoveryGeofenceAnchor(
     await s.setItemAsync(KEYS.recoveryGeofenceAnchor, JSON.stringify(anchor));
   } else {
     await s.deleteItemAsync(KEYS.recoveryGeofenceAnchor);
+  }
+}
+
+export async function getAdaptiveTrackingState(
+  store?: SecureKeyValueStore,
+): Promise<AdaptiveTrackingState | null> {
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(KEYS.adaptiveTrackingState);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AdaptiveTrackingState>;
+    if (
+      (parsed.mode === 'moving' || parsed.mode === 'idle') &&
+      typeof parsed.anchorLatitude === 'number' &&
+      Number.isFinite(parsed.anchorLatitude) &&
+      typeof parsed.anchorLongitude === 'number' &&
+      Number.isFinite(parsed.anchorLongitude) &&
+      typeof parsed.stationarySinceMs === 'number' &&
+      Number.isFinite(parsed.stationarySinceMs)
+    ) {
+      return {
+        mode: parsed.mode,
+        anchorLatitude: parsed.anchorLatitude,
+        anchorLongitude: parsed.anchorLongitude,
+        stationarySinceMs: parsed.stationarySinceMs,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveAdaptiveTrackingState(
+  state: AdaptiveTrackingState | null,
+  store?: SecureKeyValueStore,
+): Promise<void> {
+  const s = store ?? (await getExpoSecureStore());
+  if (state) {
+    await s.setItemAsync(KEYS.adaptiveTrackingState, JSON.stringify(state));
+  } else {
+    await s.deleteItemAsync(KEYS.adaptiveTrackingState);
   }
 }
 
@@ -266,6 +316,7 @@ export async function clearStoredConfig(store?: SecureKeyValueStore): Promise<vo
     s.deleteItemAsync(KEYS.activeGroupId),
     s.deleteItemAsync(KEYS.backgroundTrackingEnabled),
     s.deleteItemAsync(KEYS.recoveryGeofenceAnchor),
+    s.deleteItemAsync(KEYS.adaptiveTrackingState),
   ]);
 }
 
@@ -281,6 +332,7 @@ export async function clearSessionConfig(store?: SecureKeyValueStore): Promise<v
     s.deleteItemAsync(KEYS.activeGroupId),
     s.deleteItemAsync(KEYS.backgroundTrackingEnabled),
     s.deleteItemAsync(KEYS.recoveryGeofenceAnchor),
+    s.deleteItemAsync(KEYS.adaptiveTrackingState),
   ]);
 }
 

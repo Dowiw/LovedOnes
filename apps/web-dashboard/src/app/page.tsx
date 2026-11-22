@@ -42,8 +42,10 @@ import {
 } from 'lucide-react';
 import {
   buildExternalMapsUrls,
+  haversineMeters,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
+  resolveMemberPresenceStatus,
   withMinDelay,
   type AppVersionInfo,
   type ChatMessage,
@@ -53,6 +55,7 @@ import {
   type LocationShareLinkItem,
   type MapDownloadJob,
   type MapRegion,
+  type MemberPresenceUpdate,
   type PlaceTransitionEvent,
   type PrivacyMode,
 } from '@loved-ones/shared';
@@ -967,6 +970,23 @@ export default function HomePage() {
       setLocations((prev) => {
         if (activeGroup && evt.groupId !== activeGroup.id) return prev;
         return prev.filter((p) => p.userId !== evt.userId);
+      });
+    });
+
+    socket.on('presence:update', (evt: MemberPresenceUpdate) => {
+      setLocations((prev) => {
+        if (activeGroup && evt.groupId !== activeGroup.id) return prev;
+        return prev.map((loc) =>
+          loc.userId === evt.userId
+            ? {
+                ...loc,
+                lastHeartbeatAt: evt.lastHeartbeatAt,
+                trackingState: evt.trackingState,
+                batteryLevel:
+                  evt.batteryLevel !== undefined ? evt.batteryLevel : loc.batteryLevel,
+              }
+            : loc,
+        );
       });
     });
 
@@ -3174,6 +3194,28 @@ export default function HomePage() {
                     label: loc.isFuzzed ? `${loc.username} (~1km)` : loc.username,
                     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
                   });
+                  const insidePlace =
+                    !loc.isFuzzed && places.length > 0
+                      ? places.reduce<{ name: string; dist: number } | null>((best, p) => {
+                          const d = haversineMeters(
+                            loc.latitude,
+                            loc.longitude,
+                            p.latitude,
+                            p.longitude,
+                          );
+                          if (d <= p.radiusMeters && (!best || d < best.dist)) {
+                            return { name: p.name, dist: d };
+                          }
+                          return best;
+                        }, null)
+                      : null;
+                  const presence = resolveMemberPresenceStatus({
+                    recordedAt: loc.recordedAt,
+                    lastHeartbeatAt: loc.lastHeartbeatAt,
+                    trackingState: loc.trackingState,
+                    isFuzzed: loc.isFuzzed,
+                    insidePlaceName: insidePlace?.name ?? null,
+                  });
                   return (
                     <div
                       key={loc.userId}
@@ -3199,8 +3241,15 @@ export default function HomePage() {
                           <div className="truncate text-xs font-semibold text-zinc-950 dark:text-zinc-50">
                             {loc.username}
                           </div>
-                          <div className="truncate font-mono text-[10px] text-zinc-400 dark:text-zinc-500">
-                            {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
+                          <div className="flex items-center gap-1.5 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+                            <span
+                              className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                                presence.isOnline
+                                  ? 'bg-emerald-500'
+                                  : 'bg-zinc-400 dark:bg-zinc-500'
+                              }`}
+                            />
+                            <span className="truncate">{presence.shortText}</span>
                           </div>
                         </div>
                       </button>

@@ -230,7 +230,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   let lastGlobalTrimAt = 0;
 
   const realtime = new RealtimeModule({
-    store: new PostgresRealtimeStore(pool),
+    store: new PostgresRealtimeStore(pool, redis),
     broadcaster: new SocketIoBroadcaster(io),
     onLocationIngested: async (userId) => {
       const limits = await loadResourceLimitsSettings(redis);
@@ -669,6 +669,26 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         `${user.username} (${user.email}) shared ${inserted} location point(s) via Overland`,
       );
       return { result, inserted };
+    },
+  );
+
+  app.post(
+    '/api/realtime/heartbeat',
+    { preHandler: [requireIngestionAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const result = await realtime.recordHeartbeat(user, request.body);
+      loggerHandle.logger.info(
+        {
+          action: 'location.heartbeat',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          trackingState: result.trackingState,
+        },
+        `${user.username} (${user.email}) reported tracking status "${result.trackingState}"`,
+      );
+      return result;
     },
   );
 

@@ -330,6 +330,38 @@ export const LocationBatchSchema = z.object({
 });
 export type LocationBatch = z.infer<typeof LocationBatchSchema>;
 
+export const TrackingStateSchema = z.enum([
+  'active',
+  'idle',
+  'paused',
+  'permission_denied',
+  'gps_off',
+  'interrupted',
+]);
+export type TrackingState = z.infer<typeof TrackingStateSchema>;
+
+export const HeartbeatInputSchema = z.object({
+  trackingState: TrackingStateSchema.default('idle'),
+  batteryLevel: z.number().int().min(0).max(100).nullable().optional(),
+  recordedAt: z.string().datetime().optional(),
+});
+export type HeartbeatInput = z.infer<typeof HeartbeatInputSchema>;
+
+export const MemberPresenceUpdateSchema = z.object({
+  userId: z.string().uuid(),
+  groupId: z.string().uuid(),
+  lastHeartbeatAt: z.string(),
+  trackingState: TrackingStateSchema,
+  batteryLevel: z.number().int().min(0).max(100).nullable().optional(),
+});
+export type MemberPresenceUpdate = z.infer<typeof MemberPresenceUpdateSchema>;
+
+export interface UserPresenceRecord {
+  lastHeartbeatAt: string;
+  trackingState: TrackingState;
+  batteryLevel: number | null;
+}
+
 export const LocationBroadcastSchema = z.object({
   userId: z.string().uuid(),
   username: z.string(),
@@ -343,6 +375,8 @@ export const LocationBroadcastSchema = z.object({
   speed: z.number().nullable().optional(),
   batteryLevel: z.number().nullable().optional(),
   recordedAt: z.string(),
+  lastHeartbeatAt: z.string().nullable().optional(),
+  trackingState: TrackingStateSchema.nullable().optional(),
   privacyMode: PrivacyModeSchema,
   isFuzzed: z.boolean(),
 });

@@ -83,6 +83,7 @@
       "expo-notifications",
       "expo-secure-store",
       "expo-sqlite",
+      "expo-background-task",
       "@maplibre/maplibre-react-native"
     ]
   }
