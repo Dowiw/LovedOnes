@@ -84,7 +84,8 @@ export interface RealtimeStore {
     now?: Date;
   }): Promise<RespondLocationRequestDbResult>;
   createGroupPlace(input: {
-    groupId: string;
+    groupId: string | null;
+    isPrivate?: boolean;
     name: string;
     latitude: number;
     longitude: number;
@@ -92,6 +93,10 @@ export interface RealtimeStore {
     createdBy: string;
   }): Promise<GroupPlace>;
   listGroupPlaces(groupId: string): Promise<GroupPlace[]>;
+  listPrivatePlaces?(userId: string): Promise<GroupPlace[]>;
+  listAccessiblePlaces?(userId: string, groupId?: string): Promise<GroupPlace[]>;
+  findPlaceById?(placeId: string): Promise<GroupPlace | null>;
+  deletePlaceById?(placeId: string): Promise<boolean>;
   deleteGroupPlace(groupId: string, placeId: string): Promise<boolean>;
   listRecentPlaceTransitions(groupId: string, limit?: number): Promise<PlaceTransitionEvent[]>;
   evaluatePlaceTransitions(input: {
@@ -106,6 +111,7 @@ export interface RealtimeStore {
 
 export interface RealtimeBroadcaster {
   broadcastLocation(groupId: string, update: LocationBroadcast): void;
+  broadcastLocationRemoved?(groupId: string, userId: string): void;
   broadcastChatMessage(groupId: string, message: ChatMessage): void;
   broadcastLocationRequest(
     requesterId: string,
@@ -119,6 +125,7 @@ export interface RealtimeBroadcaster {
   ): void;
   broadcastPlaceTransition(groupId: string, event: PlaceTransitionEvent): void;
   broadcastPlacesUpdated(groupId: string, places: GroupPlace[]): void;
+  broadcastPrivatePlacesUpdated?(userId: string, places: GroupPlace[]): void;
 }
 
 const DEFAULT_MAX_ACCURACY_METERS = 1000;
@@ -733,5 +740,109 @@ export class RealtimeModule {
     }
     const allPlaces = await this.store.listGroupPlaces(groupId);
     this.broadcaster.broadcastPlacesUpdated(groupId, allPlaces);
+  }
+
+  async listAccessiblePlaces(
+    user: JwtUserPayload,
+    groupId?: string,
+  ): Promise<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }> {
+    if (groupId) {
+      await this.requireMembership(user.id, groupId);
+    }
+    const [places, recentTransitions] = await Promise.all([
+      this.store.listAccessiblePlaces
+        ? this.store.listAccessiblePlaces(user.id, groupId)
+        : groupId
+          ? this.store.listGroupPlaces(groupId)
+          : Promise.resolve([]),
+      groupId ? this.store.listRecentPlaceTransitions(groupId, 30) : Promise.resolve([]),
+    ]);
+    return { places, recentTransitions };
+  }
+
+  async createPlace(user: JwtUserPayload, rawInput: unknown): Promise<GroupPlace> {
+    const parsed = CreateGroupPlaceSchema.safeParse(rawInput ?? {});
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid place payload', parsed.error.flatten());
+    }
+    if (parsed.data.isPrivate || !parsed.data.groupId) {
+      const place = await this.store.createGroupPlace({
+        groupId: null,
+        isPrivate: true,
+        name: parsed.data.name,
+        latitude: parsed.data.latitude,
+        longitude: parsed.data.longitude,
+        radiusMeters: parsed.data.radiusMeters,
+        createdBy: user.id,
+      });
+      if (this.store.listPrivatePlaces) {
+        const privatePlaces = await this.store.listPrivatePlaces(user.id);
+        this.broadcaster.broadcastPrivatePlacesUpdated?.(user.id, privatePlaces);
+      }
+      return place;
+    }
+    return this.createGroupPlace(user, parsed.data.groupId, parsed.data);
+  }
+
+  async deletePlace(user: JwtUserPayload, placeId: string): Promise<void> {
+    if (!this.store.findPlaceById || !this.store.deletePlaceById) {
+      throw new DomainError(501, 'Unified place deletion not supported');
+    }
+    const place = await this.store.findPlaceById(placeId);
+    if (!place) {
+      throw new DomainError(404, 'Place not found');
+    }
+    if (place.isPrivate || !place.groupId) {
+      if (place.createdBy !== user.id) {
+        throw new DomainError(403, 'You can only delete your own private places');
+      }
+      await this.store.deletePlaceById(placeId);
+      if (this.store.listPrivatePlaces) {
+        const privatePlaces = await this.store.listPrivatePlaces(user.id);
+        this.broadcaster.broadcastPrivatePlacesUpdated?.(user.id, privatePlaces);
+      }
+      return;
+    }
+    await this.deleteGroupPlace(user, place.groupId, placeId);
+  }
+
+  async handleMemberPrivacyUpdated(userId: string, groupId: string): Promise<void> {
+    const nowDate = new Date(this.now());
+    const [membership, latest, profile] = await Promise.all([
+      this.store.getGroupMembershipPrivacyInfo(userId, groupId, nowDate),
+      this.store.getLatestUserLocation(userId),
+      this.store.getUserProfile?.(userId).catch(() => null) ?? Promise.resolve(null),
+    ]);
+    if (!membership || membership.role === 'SPECTATOR' || membership.effectivePrivacy === 'GHOST' || !latest) {
+      this.broadcaster.broadcastLocationRemoved?.(groupId, userId);
+      return;
+    }
+    const fuzzed = applyPrivacyFuzzing(
+      latest.latitude,
+      latest.longitude,
+      membership.effectivePrivacy,
+      userId,
+      Date.parse(latest.recordedAt),
+    );
+    if (!fuzzed.visible) {
+      this.broadcaster.broadcastLocationRemoved?.(groupId, userId);
+      return;
+    }
+    this.broadcaster.broadcastLocation(groupId, {
+      userId,
+      username: profile?.username ?? userId,
+      avatarUrl: profile?.avatarUrl ?? null,
+      haloColor: profile?.haloColor ?? null,
+      fuzzCircleColor: profile?.fuzzCircleColor ?? null,
+      groupId,
+      latitude: fuzzed.latitude,
+      longitude: fuzzed.longitude,
+      altitude: latest.altitude ?? null,
+      speed: latest.speed ?? null,
+      batteryLevel: latest.batteryLevel ?? null,
+      recordedAt: latest.recordedAt,
+      privacyMode: membership.effectivePrivacy,
+      isFuzzed: fuzzed.isFuzzed,
+    });
   }
 }

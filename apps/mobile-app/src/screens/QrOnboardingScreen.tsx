@@ -3292,7 +3292,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderWidth: 1.5,
-    borderRadius: 999,
+    borderRadius: 6,
     paddingHorizontal: 11,
     paddingVertical: 6,
     minHeight: 34,
@@ -3300,7 +3300,7 @@ const styles = StyleSheet.create({
   customColorDot: {
     width: 14,
     height: 14,
-    borderRadius: 999,
+    borderRadius: 3,
   },
   customColorText: {
     fontSize: 11,
@@ -3565,7 +3565,7 @@ const styles = StyleSheet.create({
   swatchOuter: {
     width: 34,
     height: 34,
-    borderRadius: 999,
+    borderRadius: 6,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
@@ -3573,7 +3573,7 @@ const styles = StyleSheet.create({
   swatchDot: {
     width: 24,
     height: 24,
-    borderRadius: 999,
+    borderRadius: 4,
   },
   hexInput: {
     minWidth: 88,

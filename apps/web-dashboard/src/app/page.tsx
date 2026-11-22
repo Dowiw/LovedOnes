@@ -63,15 +63,15 @@ import {
   ACCOUNT_REMOVED_DEFAULT_MESSAGE,
   ACCOUNT_REMOVED_EVENT,
   apiCreateGroup,
-  apiCreateGroupPlace,
+  apiCreatePlace,
   apiCreateLocationRequest,
   apiCreateShareLink,
   apiCreateTrackerToken,
-  apiDeleteGroupPlace,
+  apiDeletePlace,
+  apiFetchAccessiblePlaces,
   apiFetchAppVersion,
   apiFetchGroupLocations,
   apiFetchGroupMessages,
-  apiFetchGroupPlaces,
   apiFetchGroups,
   apiFetchGroupTrails,
   apiFetchLocationRequests,
@@ -247,6 +247,7 @@ export default function HomePage() {
   const [placeLat, setPlaceLat] = useState('');
   const [placeLon, setPlaceLon] = useState('');
   const [placeRadius, setPlaceRadius] = useState<number>(150);
+  const [placeScopeGroupId, setPlaceScopeGroupId] = useState<string>('private');
   const [placeBusy, setPlaceBusy] = useState(false);
   const [deletingPlaceId, setDeletingPlaceId] = useState<string | null>(null);
   const [placeFeedback, setPlaceFeedback] = useState<string | null>(null);
@@ -947,6 +948,32 @@ export default function HomePage() {
       });
     });
 
+    socket.on('location:removed', (evt: { groupId: string; userId: string }) => {
+      setLocations((prev) => {
+        if (activeGroup && evt.groupId !== activeGroup.id) return prev;
+        return prev.filter((p) => p.userId !== evt.userId);
+      });
+    });
+
+    socket.on(
+      'member:privacy:updated',
+      (evt: { userId: string; groupId: string; privacy: PrivacyMode }) => {
+        setGroups((prev) =>
+          prev.map((grp) =>
+            grp.id !== evt.groupId
+              ? grp
+              : {
+                  ...grp,
+                  myPrivacy: evt.userId === session.user.id ? evt.privacy : grp.myPrivacy,
+                  members: grp.members.map((m) =>
+                    m.userId === evt.userId ? { ...m, privacy: evt.privacy } : m,
+                  ),
+                },
+          ),
+        );
+      },
+    );
+
     socket.on('chat:message', (msg: ChatMessage) => {
       const isMatchingGroup = !activeGroup || msg.groupId === activeGroup.id;
       setMessages((prev) => {
@@ -1030,7 +1057,11 @@ export default function HomePage() {
 
     socket.on('place:updated', (payload: { groupId: string; places: GroupPlace[] }) => {
       if (activeGroup && payload.groupId !== activeGroup.id) return;
-      setPlaces(payload.places);
+      setPlaces((prev) => [...prev.filter((p) => p.isPrivate), ...payload.places]);
+    });
+
+    socket.on('place:private:updated', (payload: { places: GroupPlace[] }) => {
+      setPlaces((prev) => [...payload.places, ...prev.filter((p) => !p.isPrivate)]);
     });
 
     socket.on(
@@ -1139,7 +1170,8 @@ export default function HomePage() {
         setLocationRequests([]);
         setMyPrivacyOverrideUntil(null);
       });
-    void apiFetchGroupPlaces(session.accessToken, activeGroup.id)
+    setPlaceScopeGroupId(activeGroup.myRole === 'ADMIN' ? activeGroup.id : 'private');
+    void apiFetchAccessiblePlaces(session.accessToken, activeGroup.id)
       .then((res) => {
         setPlaces(res.places);
         setPlaceTransitions(res.recentTransitions);
@@ -1464,30 +1496,38 @@ export default function HomePage() {
 
   async function handleCreatePlace(e: React.FormEvent) {
     e.preventDefault();
-    if (!session || !activeGroup) return;
+    if (!session) return;
     const latitude = Number(placeLat);
     const longitude = Number(placeLon);
     if (!placeName.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       setPlaceError('Enter a name and valid coordinates (or click the map).');
       return;
     }
+    const isPrivate = placeScopeGroupId === 'private' || !placeScopeGroupId;
+    const targetGroupId = isPrivate ? null : placeScopeGroupId;
     setPlaceBusy(true);
     setPlaceError(null);
     setPlaceFeedback(null);
     try {
       const created = await withMinDelay(
-        apiCreateGroupPlace(session.accessToken, activeGroup.id, {
+        apiCreatePlace(session.accessToken, {
           name: placeName.trim(),
           latitude,
           longitude,
           radiusMeters: placeRadius,
+          isPrivate,
+          groupId: targetGroupId,
         }),
       );
       setPlaceName('');
       setPlaceLat('');
       setPlaceLon('');
-      setPlaces((prev) => (prev.some((p) => p.id === created.id) ? prev : [...prev, created]));
-      setPlaceFeedback(`Saved "${created.name}"`);
+      if (created.isPrivate || created.groupId === activeGroup?.id) {
+        setPlaces((prev) => (prev.some((p) => p.id === created.id) ? prev : [...prev, created]));
+      }
+      setPlaceFeedback(
+        `Saved "${created.name}" (${created.isPrivate ? 'Private' : 'Shared with group'})`,
+      );
     } catch (err) {
       setPlaceError(err instanceof Error ? err.message : 'Failed to create place');
     } finally {
@@ -1496,11 +1536,11 @@ export default function HomePage() {
   }
 
   async function handleDeletePlace(placeId: string) {
-    if (!session || !activeGroup) return;
+    if (!session) return;
     setDeletingPlaceId(placeId);
     setPlaceFeedback(null);
     try {
-      await withMinDelay(apiDeleteGroupPlace(session.accessToken, activeGroup.id, placeId), 500);
+      await withMinDelay(apiDeletePlace(session.accessToken, placeId), 500);
       setPlaces((prev) => prev.filter((p) => p.id !== placeId));
       setPlaceFeedback('Place removed');
     } catch {
@@ -3187,117 +3227,150 @@ export default function HomePage() {
             {/* Places Tab */}
             {inspectorTab === 'places' && (
               <div key="tab-places" className="lo-tab-enter flex-1 space-y-3 overflow-y-auto p-3">
-                {activeGroup?.myRole === 'ADMIN' && (
-                  <form
-                    onSubmit={handleCreatePlace}
-                    className="space-y-2 rounded-lg border border-zinc-200/70 bg-zinc-50/80 p-2.5"
-                  >
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-600">
-                      <span className="flex items-center gap-1 font-medium">
-                        <MapPin className="h-3 w-3 text-zinc-950" />
-                        {draftPlace
-                          ? `Pin at ${draftPlace.latitude.toFixed(4)}, ${draftPlace.longitude.toFixed(4)}`
-                          : 'Click or tap map to place pin'}
-                      </span>
-                      {(placeLat || placeLon) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPlaceLat('');
-                            setPlaceLon('');
-                          }}
-                          className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-950"
-                        >
-                          Clear
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex gap-1.5">
-                      <input
-                        type="text"
-                        value={placeName}
-                        onChange={(e) => setPlaceName(e.target.value)}
-                        placeholder="Home, School, Office..."
-                        className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
-                      />
-                      <input
-                        type="number"
-                        min={25}
-                        max={10000}
-                        value={placeRadius}
-                        onChange={(e) => setPlaceRadius(Number(e.target.value))}
-                        title="Radius (m)"
-                        className="w-16 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
-                      />
-                    </div>
-                    <div className="flex gap-1.5">
-                      <input
-                        type="text"
-                        value={placeLat}
-                        onChange={(e) => setPlaceLat(e.target.value)}
-                        placeholder="Lat (click map)"
-                        className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 focus:border-zinc-400 focus:outline-none"
-                      />
-                      <input
-                        type="text"
-                        value={placeLon}
-                        onChange={(e) => setPlaceLon(e.target.value)}
-                        placeholder="Lon (click map)"
-                        className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 focus:border-zinc-400 focus:outline-none"
-                      />
-                      <button
-                        type="submit"
-                        disabled={placeBusy}
-                        className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
-                      >
-                        {placeBusy && <Loader2 className="h-3 w-3 animate-spin" />}
-                        <span>{placeBusy ? 'Saving...' : 'Save'}</span>
-                      </button>
-                    </div>
-                    {placeError && <p className="lo-feedback-in text-[11px] text-rose-600">{placeError}</p>}
-                    {placeFeedback && (
-                      <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
-                        <Check className="h-3 w-3" />
-                        {placeFeedback}
-                      </p>
-                    )}
-                  </form>
-                )}
-
-                <div className="space-y-1.5">
-                  {places.map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2 text-xs transition hover:border-zinc-200 hover:bg-white"
-                    >
+                <form
+                  onSubmit={handleCreatePlace}
+                  className="space-y-2 rounded-lg border border-zinc-200/70 bg-zinc-50/80 p-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-600">
+                    <span className="flex items-center gap-1 font-medium">
+                      <MapPin className="h-3 w-3 text-zinc-950" />
+                      {draftPlace
+                        ? `Pin at ${draftPlace.latitude.toFixed(4)}, ${draftPlace.longitude.toFixed(4)}`
+                        : 'Click or tap map to place pin'}
+                    </span>
+                    {(placeLat || placeLon) && (
                       <button
                         type="button"
-                        onClick={() => setSelectedPlaceId(p.id)}
-                        className="min-w-0 flex-1 text-left"
+                        onClick={() => {
+                          setPlaceLat('');
+                          setPlaceLon('');
+                        }}
+                        className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-950"
                       >
-                        <div className="truncate font-semibold text-zinc-950">{p.name}</div>
-                        <div className="font-mono text-[10px] text-zinc-400">
-                          {p.latitude.toFixed(4)}, {p.longitude.toFixed(4)} ·{' '}
-                          {Math.round(p.radiusMeters)}m
-                        </div>
+                        Clear
                       </button>
-                      {activeGroup?.myRole === 'ADMIN' && (
+                    )}
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                      Share With
+                    </label>
+                    <select
+                      value={placeScopeGroupId}
+                      onChange={(e) => setPlaceScopeGroupId(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                    >
+                      <option value="private">Private (Only me)</option>
+                      {groups
+                        .filter((g) => g.myRole === 'ADMIN')
+                        .map((g) => (
+                          <option key={g.id} value={g.id}>
+                            Group: {g.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      value={placeName}
+                      onChange={(e) => setPlaceName(e.target.value)}
+                      placeholder="Home, School, Office..."
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                    />
+                    <input
+                      type="number"
+                      min={25}
+                      max={10000}
+                      value={placeRadius}
+                      onChange={(e) => setPlaceRadius(Number(e.target.value))}
+                      title="Radius (m)"
+                      className="w-16 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      value={placeLat}
+                      onChange={(e) => setPlaceLat(e.target.value)}
+                      placeholder="Lat (click map)"
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={placeLon}
+                      onChange={(e) => setPlaceLon(e.target.value)}
+                      placeholder="Lon (click map)"
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={placeBusy}
+                      className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
+                    >
+                      {placeBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                      <span>{placeBusy ? 'Saving...' : 'Save'}</span>
+                    </button>
+                  </div>
+                  {placeError && <p className="lo-feedback-in text-[11px] text-rose-600">{placeError}</p>}
+                  {placeFeedback && (
+                    <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                      <Check className="h-3 w-3" />
+                      {placeFeedback}
+                    </p>
+                  )}
+                </form>
+
+                <div className="space-y-1.5">
+                  {places.map((p) => {
+                    const canDelete = p.isPrivate
+                      ? p.createdBy === session?.user.id
+                      : activeGroup?.myRole === 'ADMIN';
+                    return (
+                      <div
+                        key={p.id}
+                        className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2 text-xs transition hover:border-zinc-200 hover:bg-white"
+                      >
                         <button
                           type="button"
-                          disabled={deletingPlaceId === p.id}
-                          onClick={() => void handleDeletePlace(p.id)}
-                          title="Delete place"
-                          className="ml-2 rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60"
+                          onClick={() => setSelectedPlaceId(p.id)}
+                          className="min-w-0 flex-1 text-left"
                         >
-                          {deletingPlaceId === p.id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-600" />
-                          ) : (
-                            <Trash2 className="h-3.5 w-3.5" />
-                          )}
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate font-semibold text-zinc-950">{p.name}</span>
+                            <span
+                              className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                                p.isPrivate
+                                  ? 'bg-indigo-50 text-indigo-700'
+                                  : 'bg-zinc-200/80 text-zinc-700'
+                              }`}
+                            >
+                              {p.isPrivate ? 'Private' : p.groupName ?? activeGroup?.name ?? 'Group'}
+                            </span>
+                          </div>
+                          <div className="font-mono text-[10px] text-zinc-400">
+                            {p.latitude.toFixed(4)}, {p.longitude.toFixed(4)} ·{' '}
+                            {Math.round(p.radiusMeters)}m
+                          </div>
                         </button>
-                      )}
-                    </div>
-                  ))}
+                        {canDelete && (
+                          <button
+                            type="button"
+                            disabled={deletingPlaceId === p.id}
+                            onClick={() => void handleDeletePlace(p.id)}
+                            title="Delete place"
+                            className="ml-2 rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60"
+                          >
+                            {deletingPlaceId === p.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-600" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                   {places.length === 0 && (
                     <p className="py-4 text-center text-xs text-zinc-400">
                       No geofenced places yet.

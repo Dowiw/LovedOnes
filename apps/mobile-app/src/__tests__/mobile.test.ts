@@ -50,7 +50,16 @@ import {
 } from '../services/appVersion';
 import { groupChatMessagesForDisplay } from '../services/chatFormatting';
 import { formatUserError } from '../services/errorFormatter';
-import { requestLocationPermissionsOnLaunch } from '../services/locationPermissions';
+import {
+  getLocationPermissionStatus,
+  requestLocationPermissionsOnLaunch,
+} from '../services/locationPermissions';
+import {
+  describeLastNearPlace,
+  findNearestPlace,
+  formatLastSeenRelative,
+  normalizeBearingDegrees,
+} from '../services/memberDetails';
 import { computeSafeAreaInsets } from '../services/safeAreaMath';
 
 describe('@loved-ones/mobile-app', () => {
@@ -567,5 +576,90 @@ describe('@loved-ones/mobile-app', () => {
       mockFetch,
     );
     expect(revoked).toBe(true);
+  });
+
+  it('normalizes map bearing and computes member Last Near and Last Seen summaries', () => {
+    expect(normalizeBearingDegrees(360)).toBe(0);
+    expect(normalizeBearingDegrees(-190)).toBe(170);
+    expect(normalizeBearingDegrees(270)).toBe(-90);
+
+    const nowMs = Date.parse('2026-11-21T16:00:00.000Z');
+    expect(formatLastSeenRelative('2026-11-21T15:59:45.000Z', nowMs)).toContain('Just now');
+    expect(formatLastSeenRelative('2026-11-21T15:52:00.000Z', nowMs)).toContain('8m ago');
+
+    const places = [
+      {
+        id: 'p1',
+        groupId: null,
+        groupName: null,
+        isPrivate: true,
+        name: 'Home Base',
+        latitude: 52.52,
+        longitude: 13.405,
+        radiusMeters: 200,
+        createdBy: 'u1',
+        createdAt: '2026-11-20T00:00:00.000Z',
+      },
+    ];
+    const match = findNearestPlace({ latitude: 52.5205, longitude: 13.4052 }, places);
+    expect(match?.inside).toBe(true);
+    expect(
+      describeLastNearPlace({
+        userId: 'u1',
+        latitude: 52.5205,
+        longitude: 13.4052,
+        isFuzzed: false,
+        places,
+        transitions: [],
+        nowMs,
+      }),
+    ).toBe('Inside Home Base · Private');
+
+    expect(
+      describeLastNearPlace({
+        userId: 'u1',
+        latitude: 52.53,
+        longitude: 13.41,
+        isFuzzed: true,
+        places,
+        transitions: [],
+        nowMs,
+      }),
+    ).toContain('FUZZED');
+  });
+
+  it('inspects current location permission level silently without prompting', async () => {
+    const statusAlways = await getLocationPermissionStatus({
+      async requestForegroundPermissionsAsync() {
+        return { status: 'granted' };
+      },
+      async requestBackgroundPermissionsAsync() {
+        return { status: 'granted' };
+      },
+      async getForegroundPermissionsAsync() {
+        return { status: 'granted', canAskAgain: true };
+      },
+      async getBackgroundPermissionsAsync() {
+        return { status: 'granted', canAskAgain: true };
+      },
+    });
+    expect(statusAlways.level).toBe('always');
+
+    const statusDenied = await getLocationPermissionStatus({
+      async requestForegroundPermissionsAsync() {
+        return { status: 'denied' };
+      },
+      async requestBackgroundPermissionsAsync() {
+        return { status: 'denied' };
+      },
+      async getForegroundPermissionsAsync() {
+        return { status: 'denied', canAskAgain: false };
+      },
+      async getBackgroundPermissionsAsync() {
+        return { status: 'denied', canAskAgain: false };
+      },
+    });
+    expect(statusDenied.level).toBe('denied');
+    expect(statusDenied.canAskAgain).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ export const TRACKER_JTI_USER_PREFIX = 'tracker:jti:user:';
 export const REMOVED_USER_PREFIX = 'removed:user:';
 export const USER_PROFILE_UPDATED_CHANNEL = 'user:profile:updated';
 export const USER_ACCOUNT_REMOVED_CHANNEL = 'user:account:removed';
+export const USER_PRIVACY_UPDATED_CHANNEL = 'user:privacy:updated';
 
 export function getCurrentMinuteBucket(nowMs = Date.now()): number {
   return Math.floor(nowMs / 60_000);

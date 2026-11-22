@@ -10,14 +10,18 @@ import { createPool, resolveAuditContext, runMigrations } from '@loved-ones/db';
 import {
   AccountRemovedEventSchema,
   JwtUserPayload,
+  MemberPrivacyUpdatedSchema,
   MemberProfileUpdatedSchema,
 } from '@loved-ones/shared';
 import {
   attachAuthAndTelemetry,
   AuthenticatedRequest,
+  createFastifyCorsDelegator,
   createTokenService,
   DomainError,
   extractBearerToken,
+  isOriginAllowed,
+  registerGracefulShutdown,
 } from '@loved-ones/shared/auth';
 import {
   createServiceLogger,
@@ -31,6 +35,7 @@ import {
   TRACKER_JTI_USER_PREFIX,
   trackUserSocket,
   USER_ACCOUNT_REMOVED_CHANNEL,
+  USER_PRIVACY_UPDATED_CHANNEL,
   USER_PROFILE_UPDATED_CHANNEL,
 } from '@loved-ones/shared/telemetry';
 import {
@@ -100,14 +105,16 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     });
   }
 
-  const app = Fastify({ logger: false });
-  await app.register(cors, {
-    origin: true,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'If-None-Match', 'If-Modified-Since'],
-    exposedHeaders: ['ETag', 'Last-Modified'],
-  });
+  const app = Fastify({ logger: false, trustProxy: true });
+  await app.register(cors, () =>
+    createFastifyCorsDelegator({
+      publicServerUrl: process.env.PUBLIC_SERVER_URL,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Authorization', 'Content-Type', 'If-None-Match', 'If-Modified-Since'],
+      exposedHeaders: ['ETag', 'Last-Modified'],
+    }),
+  );
 
   app.setErrorHandler((err, request, reply) => {
     if (err instanceof DomainError) {
@@ -164,6 +171,15 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     cors: {
       origin: true,
       credentials: true,
+    },
+    allowRequest: (req, callback) => {
+      const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+      const rawHost = req.headers['x-forwarded-host'] ?? req.headers.host;
+      const reqHost = (Array.isArray(rawHost) ? rawHost[0] : rawHost)?.split(',')[0]?.trim();
+      const allowed = isOriginAllowed(origin, reqHost, {
+        publicServerUrl: process.env.PUBLIC_SERVER_URL,
+      });
+      callback(null, allowed);
     },
     adapter: createAdapter(pubClient, subClient),
   });
@@ -253,18 +269,48 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       } catch {
         // Ignore malformed profile update pub/sub payloads
       }
+      return;
+    }
+    if (channel === USER_PRIVACY_UPDATED_CHANNEL) {
+      try {
+        const parsed = MemberPrivacyUpdatedSchema.parse(JSON.parse(message));
+        io.to([`user:${parsed.userId}`, `group:${parsed.groupId}`]).emit('member:privacy:updated', parsed);
+        void realtime.handleMemberPrivacyUpdated(parsed.userId, parsed.groupId).catch(() => {});
+      } catch {
+        // Ignore malformed privacy update pub/sub payloads
+      }
     }
   });
   await logSubClient.subscribe(
     LOGS_STREAM_CHANNEL,
     USER_PROFILE_UPDATED_CHANNEL,
+    USER_PRIVACY_UPDATED_CHANNEL,
     USER_ACCOUNT_REMOVED_CHANNEL,
   );
 
   // ---- REST Routes ----
 
-  app.get('/health', async () => {
-    return { status: 'ok', service: 'realtime-service' };
+  app.get('/health', async (_request, reply) => {
+    let pgOk = false;
+    let redisOk = false;
+    try {
+      await pool.query('SELECT 1');
+      pgOk = true;
+    } catch {
+      pgOk = false;
+    }
+    try {
+      redisOk = (await redis.ping()) === 'PONG';
+    } catch {
+      redisOk = false;
+    }
+    const status = pgOk && redisOk ? 'ok' : 'degraded';
+    return reply.code(pgOk && redisOk ? 200 : 503).send({
+      status,
+      service: 'realtime-service',
+      postgres: pgOk ? 'ok' : 'error',
+      redis: redisOk ? 'ok' : 'error',
+    });
   });
 
   app.get(
@@ -737,6 +783,57 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     },
   );
 
+  app.get(
+    '/api/realtime/places',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const q = (request.query ?? {}) as { groupId?: string };
+      return realtime.listAccessiblePlaces(
+        request.authUser!,
+        typeof q.groupId === 'string' && q.groupId ? q.groupId : undefined,
+      );
+    },
+  );
+
+  app.post(
+    '/api/realtime/places',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest, reply) => {
+      const user = request.authUser!;
+      const place = await realtime.createPlace(user, request.body);
+      const groupName = place.groupId ? await resolveGroupName(place.groupId) : 'Private';
+      loggerHandle.logger.info(
+        {
+          action: place.isPrivate ? 'place.private_created' : 'place.created',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          groupId: place.groupId,
+          groupName,
+          isPrivate: place.isPrivate,
+          placeId: place.id,
+          placeName: place.name,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          radiusMeters: place.radiusMeters,
+        },
+        `${user.username} created ${place.isPrivate ? 'private ' : ''}place "${place.name}"`,
+      );
+      return reply.code(201).send({ place });
+    },
+  );
+
+  app.delete(
+    '/api/realtime/places/:placeId',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const { placeId } = request.params as { placeId: string };
+      await realtime.deletePlace(user, placeId);
+      return { ok: true };
+    },
+  );
+
   // ---- Socket.io Auth & Handlers ----
 
   io.use(async (socket: Socket, next) => {
@@ -986,6 +1083,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
 async function main() {
   const port = Number.parseInt(process.env.PORT ?? process.env.REALTIME_PORT ?? '4002', 10);
   const { app, loggerHandle } = await createRealtimeServer();
+  registerGracefulShutdown(app, loggerHandle.logger, 'realtime-service');
   await app.listen({ port, host: '0.0.0.0' });
   loggerHandle.logger.info({ port }, 'realtime-service listening');
 }

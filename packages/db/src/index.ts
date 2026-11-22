@@ -23,16 +23,62 @@ const { Pool } = pg;
 
 export type Database = NodePgDatabase<typeof schema>;
 
-export function createPool(connectionString = process.env.DATABASE_URL): pg.Pool {
+export type PoolSslMode = 'disable' | 'require' | 'no-verify' | 'verify-full';
+
+export function resolvePoolSslConfig(
+  connectionString: string,
+  sslModeOverride?: PoolSslMode | string,
+  sslCaOverride?: string,
+): pg.PoolConfig['ssl'] {
+  const rawMode = (sslModeOverride ?? process.env.DATABASE_SSL ?? '').trim().toLowerCase();
+  let effectiveMode = rawMode;
+  if (!effectiveMode) {
+    try {
+      const parsed = new URL(connectionString);
+      const urlSslMode = parsed.searchParams.get('sslmode')?.trim().toLowerCase();
+      if (urlSslMode === 'disable' || urlSslMode === 'require' || urlSslMode === 'no-verify' || urlSslMode === 'verify-full') {
+        effectiveMode = urlSslMode;
+      }
+    } catch {
+      // ignore non-standard URI parse failures
+    }
+  }
+
+  if (!effectiveMode || effectiveMode === 'false' || effectiveMode === 'disable') {
+    return undefined;
+  }
+
+  const rawCa = (sslCaOverride ?? process.env.DATABASE_SSL_CA ?? '').trim();
+  let ca: string | undefined;
+  if (rawCa) {
+    ca = rawCa.includes('BEGIN CERTIFICATE') ? rawCa : fs.existsSync(rawCa) ? fs.readFileSync(rawCa, 'utf8') : undefined;
+  }
+
+  if (effectiveMode === 'no-verify' || effectiveMode === 'allow') {
+    return { rejectUnauthorized: false, ...(ca ? { ca } : {}) };
+  }
+  if (effectiveMode === 'true' || effectiveMode === 'require' || effectiveMode === 'verify-full' || effectiveMode === 'verify-ca') {
+    return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  }
+  return undefined;
+}
+
+export function createPool(
+  connectionString = process.env.DATABASE_URL,
+  options?: { sslMode?: PoolSslMode | string; sslCa?: string },
+): pg.Pool {
   if (!connectionString) {
     throw new Error('DATABASE_URL environment variable is required');
   }
-  return new Pool({ connectionString });
+  const ssl = resolvePoolSslConfig(connectionString, options?.sslMode, options?.sslCa);
+  return new Pool({ connectionString, ...(ssl ? { ssl } : {}) });
 }
 
 export function createDb(pool: pg.Pool): Database {
   return drizzle(pool, { schema });
 }
+
+const MIGRATIONS_ADVISORY_LOCK_KEY = 784512901;
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -45,7 +91,16 @@ export async function runMigrations(pool: pg.Pool): Promise<void> {
     throw new Error(`Migration SQL file not found. Checked: ${candidates.join(', ')}`);
   }
   const sql = fs.readFileSync(migrationFile, 'utf8');
-  await pool.query(sql);
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATIONS_ADVISORY_LOCK_KEY]);
+    await client.query(sql);
+  } finally {
+    await client
+      .query('SELECT pg_advisory_unlock($1)', [MIGRATIONS_ADVISORY_LOCK_KEY])
+      .catch(() => {});
+    client.release();
+  }
 }
 
 /**
@@ -663,7 +718,9 @@ export async function respondToLocationRequestRecord(
 
 interface RawGroupPlaceRow {
   id: string;
-  group_id: string;
+  group_id: string | null;
+  group_name?: string | null;
+  is_private?: boolean;
   name: string;
   latitude: number;
   longitude: number;
@@ -676,6 +733,8 @@ function mapGroupPlaceRow(row: RawGroupPlaceRow): GroupPlace {
   return {
     id: row.id,
     groupId: row.group_id,
+    groupName: row.group_name ?? null,
+    isPrivate: Boolean(row.is_private),
     name: row.name,
     latitude: Number(row.latitude),
     longitude: Number(row.longitude),
@@ -688,7 +747,8 @@ function mapGroupPlaceRow(row: RawGroupPlaceRow): GroupPlace {
 export async function createGroupPlaceRecord(
   pool: pg.Pool,
   input: {
-    groupId: string;
+    groupId: string | null;
+    isPrivate?: boolean;
     name: string;
     latitude: number;
     longitude: number;
@@ -696,15 +756,23 @@ export async function createGroupPlaceRecord(
     createdBy: string;
   },
 ): Promise<GroupPlace> {
+  const isPrivate = Boolean(input.isPrivate || !input.groupId);
+  const groupId = isPrivate ? null : input.groupId;
   const res = await pool.query<RawGroupPlaceRow>(
-    `INSERT INTO group_places (group_id, name, center, radius_meters, created_by)
-     VALUES ($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography, $5, $6)
-     RETURNING id, group_id, name,
-               ST_Y(center::geometry) AS latitude,
-               ST_X(center::geometry) AS longitude,
-               radius_meters, created_by, created_at`,
+    `WITH inserted AS (
+       INSERT INTO group_places (group_id, is_private, name, center, radius_meters, created_by)
+       VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6, $7)
+       RETURNING id, group_id, is_private, name,
+                 ST_Y(center::geometry) AS latitude,
+                 ST_X(center::geometry) AS longitude,
+                 radius_meters, created_by, created_at
+     )
+     SELECT i.*, g.name AS group_name
+     FROM inserted i
+     LEFT JOIN groups g ON g.id = i.group_id`,
     [
-      input.groupId,
+      groupId,
+      isPrivate,
       input.name,
       input.longitude,
       input.latitude,
@@ -717,16 +785,79 @@ export async function createGroupPlaceRecord(
 
 export async function listGroupPlaces(pool: pg.Pool, groupId: string): Promise<GroupPlace[]> {
   const res = await pool.query<RawGroupPlaceRow>(
-    `SELECT id, group_id, name,
+    `SELECT gp.id, gp.group_id, g.name AS group_name, gp.is_private, gp.name,
+            ST_Y(gp.center::geometry) AS latitude,
+            ST_X(gp.center::geometry) AS longitude,
+            gp.radius_meters, gp.created_by, gp.created_at
+     FROM group_places gp
+     LEFT JOIN groups g ON g.id = gp.group_id
+     WHERE gp.group_id = $1 AND gp.is_private = FALSE
+     ORDER BY gp.created_at ASC`,
+    [groupId],
+  );
+  return res.rows.map(mapGroupPlaceRow);
+}
+
+export async function listPrivatePlaces(pool: pg.Pool, userId: string): Promise<GroupPlace[]> {
+  const res = await pool.query<RawGroupPlaceRow>(
+    `SELECT id, group_id, NULL::text AS group_name, is_private, name,
             ST_Y(center::geometry) AS latitude,
             ST_X(center::geometry) AS longitude,
             radius_meters, created_by, created_at
      FROM group_places
-     WHERE group_id = $1
+     WHERE created_by = $1 AND is_private = TRUE
      ORDER BY created_at ASC`,
-    [groupId],
+    [userId],
   );
   return res.rows.map(mapGroupPlaceRow);
+}
+
+export async function listAccessiblePlaces(
+  pool: pg.Pool,
+  userId: string,
+  groupId?: string,
+): Promise<GroupPlace[]> {
+  const params: unknown[] = [userId];
+  const groupFilter = groupId
+    ? (() => {
+        params.push(groupId);
+        return `gp.is_private = FALSE AND gp.group_id = $${params.length}`;
+      })()
+    : `gp.is_private = FALSE AND gp.group_id IN (SELECT group_id FROM group_memberships WHERE user_id = $1)`;
+
+  const res = await pool.query<RawGroupPlaceRow>(
+    `SELECT gp.id, gp.group_id, g.name AS group_name, gp.is_private, gp.name,
+            ST_Y(gp.center::geometry) AS latitude,
+            ST_X(gp.center::geometry) AS longitude,
+            gp.radius_meters, gp.created_by, gp.created_at
+     FROM group_places gp
+     LEFT JOIN groups g ON g.id = gp.group_id
+     WHERE (gp.is_private = TRUE AND gp.created_by = $1)
+        OR (${groupFilter})
+     ORDER BY gp.is_private DESC, gp.created_at ASC`,
+    params,
+  );
+  return res.rows.map(mapGroupPlaceRow);
+}
+
+export async function findPlaceById(pool: pg.Pool, placeId: string): Promise<GroupPlace | null> {
+  const res = await pool.query<RawGroupPlaceRow>(
+    `SELECT gp.id, gp.group_id, g.name AS group_name, gp.is_private, gp.name,
+            ST_Y(gp.center::geometry) AS latitude,
+            ST_X(gp.center::geometry) AS longitude,
+            gp.radius_meters, gp.created_by, gp.created_at
+     FROM group_places gp
+     LEFT JOIN groups g ON g.id = gp.group_id
+     WHERE gp.id = $1
+     LIMIT 1`,
+    [placeId],
+  );
+  return res.rows[0] ? mapGroupPlaceRow(res.rows[0]) : null;
+}
+
+export async function deletePlaceById(pool: pg.Pool, placeId: string): Promise<boolean> {
+  const res = await pool.query('DELETE FROM group_places WHERE id = $1', [placeId]);
+  return (res.rowCount ?? 0) > 0;
 }
 
 export async function deleteGroupPlaceRecord(
@@ -809,7 +940,7 @@ export async function evaluateAndRecordPlaceTransitions(
      FROM group_places gp
      LEFT JOIN group_place_states gps
        ON gps.place_id = gp.id AND gps.user_id = $2
-     WHERE gp.group_id = $1`,
+     WHERE gp.group_id = $1 AND gp.is_private = FALSE`,
     [input.groupId, input.userId, input.longitude, input.latitude],
   );
 
@@ -1388,4 +1519,24 @@ export async function deleteShareGuestRecord(
     [input.guestId, input.shareToken, input.guestSecret],
   );
   return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * Deletes location history rows older than `retentionDays`.
+ * Values <= 0 disable pruning and return 0.
+ */
+export async function pruneLocationHistory(
+  pool: pg.Pool,
+  retentionDays: number,
+): Promise<number> {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    return 0;
+  }
+  const days = Math.floor(retentionDays);
+  const res = await pool.query(
+    `DELETE FROM location_history
+     WHERE recorded_at < NOW() - make_interval(days => $1)`,
+    [days],
+  );
+  return res.rowCount ?? 0;
 }

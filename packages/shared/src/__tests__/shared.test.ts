@@ -40,9 +40,12 @@ import {
 } from '../index.js';
 import { createServiceLogger, LOGS_RING_KEY, pruneLogArtifacts } from '../logger.js';
 import {
+  createRateLimiter,
   createTokenService,
   extractBearerToken,
   extractIngestionToken,
+  isOriginAllowed,
+  resolveClientIp,
 } from '../auth.js';
 
 describe('@loved-ones/shared', () => {
@@ -732,5 +735,78 @@ describe('@loved-ones/shared', () => {
     });
     expect(windowsWeb.primaryUrl).toBe('bingmaps:?cp=52.52~13.405&lvl=16&sp=point.52.52_13.405_Home');
     expect(windowsWeb.fallbackUrl).toBe('https://www.google.com/maps/search/?api=1&query=52.52,13.405');
+  });
+
+  it('resolves proxy client IPs, production CORS origins, and rate limits', async () => {
+    // By default (non-Cloudflare), CF-Connecting-IP is ignored to prevent header spoofing
+    expect(
+      resolveClientIp(
+        {
+          'cf-connecting-ip': '198.51.100.42',
+          'x-forwarded-for': '172.18.0.5, 10.0.0.1',
+        },
+        '::ffff:127.0.0.1',
+      ),
+    ).toBe('172.18.0.5');
+    // When TRUST_CLOUDFLARE_HEADERS is enabled, CF-Connecting-IP takes precedence
+    expect(
+      resolveClientIp(
+        {
+          'cf-connecting-ip': '198.51.100.42',
+          'x-forwarded-for': '172.18.0.5, 10.0.0.1',
+        },
+        '::ffff:127.0.0.1',
+        { trustCloudflareHeaders: true },
+      ),
+    ).toBe('198.51.100.42');
+    expect(
+      resolveClientIp({ 'x-forwarded-for': '::ffff:203.0.113.9, 10.0.0.2' }, '127.0.0.1'),
+    ).toBe('203.0.113.9');
+
+    expect(
+      isOriginAllowed('https://lovedones.example.com', 'api.internal', {
+        nodeEnv: 'production',
+        publicServerUrl: 'https://lovedones.example.com',
+      }),
+    ).toBe(true);
+    expect(
+      isOriginAllowed('http://192.168.1.50:8080', '192.168.1.50:8080', {
+        nodeEnv: 'production',
+        publicServerUrl: 'https://lovedones.example.com',
+      }),
+    ).toBe(true);
+    expect(
+      isOriginAllowed('https://evil.example.net', 'lovedones.example.com', {
+        nodeEnv: 'production',
+        publicServerUrl: 'https://lovedones.example.com',
+      }),
+    ).toBe(false);
+
+    const limiter = createRateLimiter({ prefix: 'test', max: 2, windowMs: 60_000 });
+    const statuses: number[] = [];
+    const headers: Record<string, string> = {};
+    for (let i = 0; i < 3; i += 1) {
+      let statusCode = 200;
+      await limiter(
+        { headers: { 'cf-connecting-ip': '198.51.100.77' }, ip: '127.0.0.1' } as never,
+        {
+          header(k: string, v: string) {
+            headers[k] = v;
+            return this;
+          },
+          code(c: number) {
+            statusCode = c;
+            return this;
+          },
+          send() {
+            return Promise.resolve();
+          },
+        } as never,
+      );
+      statuses.push(statusCode);
+    }
+    expect(statuses).toEqual([200, 200, 429]);
+    expect(headers['X-RateLimit-Limit']).toBe('2');
+    expect(headers['Retry-After']).toBeTruthy();
   });
 });

@@ -47,6 +47,7 @@ describe('@loved-ones/auth-admin-service integration', () => {
       logDir,
       maxLogStorageMb: 50,
       publicServerUrl: 'https://track.example.com',
+      trustCloudflareHeaders: true,
       emailSender: {
         isConfigured: () => true,
         async sendMail(msg) {
@@ -700,5 +701,28 @@ describe('@loved-ones/auth-admin-service integration', () => {
     });
     expect(caseyAfterDelete.statusCode).toBe(401);
     expect(caseyAfterDelete.json().code).toBe('ACCOUNT_REMOVED');
+
+    // 18. Deep /health readiness check + CF-Connecting-IP onboarding header priority + rate limit headers
+    const healthRes = await app.inject({ method: 'GET', url: '/health' });
+    expect(healthRes.statusCode).toBe(200);
+    expect(healthRes.json()).toMatchObject({
+      status: 'ok',
+      service: 'auth-admin-service',
+      postgres: 'ok',
+      redis: 'ok',
+    });
+
+    const cfHandshake = await app.inject({
+      method: 'POST',
+      url: '/api/auth/onboarding/handshake',
+      headers: {
+        'cf-connecting-ip': '198.51.100.99',
+        'x-forwarded-for': '172.18.0.4',
+      },
+      payload: {},
+    });
+    expect(cfHandshake.statusCode).toBe(200);
+    expect(cfHandshake.json().requesterIp).toBe('198.51.100.99');
+    expect(cfHandshake.headers['x-ratelimit-limit']).toBeDefined();
   });
 });

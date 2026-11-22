@@ -6,7 +6,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
-import { createPool, resolveAuditContext, runMigrations } from '@loved-ones/db';
+import { createPool, pruneLocationHistory, resolveAuditContext, runMigrations } from '@loved-ones/db';
 import {
   DEFAULT_APP_VERSION,
   evaluateClientVersion,
@@ -16,9 +16,13 @@ import {
 import {
   attachAuthAndTelemetry,
   AuthenticatedRequest,
+  createFastifyCorsDelegator,
+  createRateLimiter,
   createTokenService,
   DomainError,
   extractBearerToken,
+  registerGracefulShutdown,
+  resolveClientIp,
 } from '@loved-ones/shared/auth';
 import {
   createServiceLogger,
@@ -44,10 +48,7 @@ import {
   MapRegionsModule,
   MapRegionsModuleOptions,
 } from './domain/map-regions-module.js';
-import {
-  normalizeRequesterIp,
-  RegistrationRequestModule,
-} from './domain/registration-request-module.js';
+import { RegistrationRequestModule } from './domain/registration-request-module.js';
 import {
   SystemUpdateDriver,
   SystemUpdateModule,
@@ -76,6 +77,13 @@ export interface AuthAdminOptions {
     downloadUrl?: string;
     releaseNotes?: string | null;
   };
+  rateLimit?: {
+    disabled?: boolean;
+    authMax?: number;
+    windowMs?: number;
+  };
+  trustCloudflareHeaders?: boolean;
+  locationRetentionDays?: number;
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
 }
@@ -153,7 +161,14 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     getLogRetention: () => loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb }),
   });
 
-  // Periodic automatic cleanup of expired log files and stale Redis log buffer entries
+  const locationRetentionDays =
+    options.locationRetentionDays ??
+    (Number.parseInt(process.env.LOCATION_RETENTION_DAYS ?? '0', 10) || 0);
+
+  // Periodic automatic cleanup of expired log files, Redis buffers, and optional location retention
+  if (locationRetentionDays > 0) {
+    void pruneLocationHistory(pool, locationRetentionDays).catch(() => {});
+  }
   const pruneInterval = setInterval(() => {
     void loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb })
       .then((settings) => {
@@ -165,6 +180,9 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
         });
       })
       .catch(() => {});
+    if (locationRetentionDays > 0) {
+      void pruneLocationHistory(pool, locationRetentionDays).catch(() => {});
+    }
   }, 60 * 60 * 1000);
   pruneInterval.unref();
   const mapRegions = new MapRegionsModule({
@@ -183,12 +201,14 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
       process.env.ALLOW_REMOTE_SYSTEM_UPDATE !== 'false',
   });
 
-  const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
-  await app.register(cors, {
-    origin: true,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  });
+  const app = Fastify({ logger: false, bodyLimit: 1024 * 1024, trustProxy: true });
+  await app.register(cors, () =>
+    createFastifyCorsDelegator({
+      publicServerUrl,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    }),
+  );
   await app.register(fastifyWebsocket);
 
   app.setErrorHandler((err, request, reply) => {
@@ -236,8 +256,65 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     await authGroup.assertAdmin(request.authUser!);
   }
 
-  app.get('/health', async () => {
-    return { status: 'ok', service: 'auth-admin-service' };
+  app.get('/health', async (_request, reply) => {
+    let pgOk = false;
+    let redisOk = false;
+    try {
+      await pool.query('SELECT 1');
+      pgOk = true;
+    } catch {
+      pgOk = false;
+    }
+    try {
+      redisOk = (await redis.ping()) === 'PONG';
+    } catch {
+      redisOk = false;
+    }
+    const status = pgOk && redisOk ? 'ok' : 'degraded';
+    return reply.code(pgOk && redisOk ? 200 : 503).send({
+      status,
+      service: 'auth-admin-service',
+      postgres: pgOk ? 'ok' : 'error',
+      redis: redisOk ? 'ok' : 'error',
+    });
+  });
+
+  const rateLimitDisabled =
+    options.rateLimit?.disabled ?? process.env.RATE_LIMIT_ENABLED === 'false';
+  const authWindowMs =
+    options.rateLimit?.windowMs ??
+    (Number.parseInt(process.env.RATE_LIMIT_AUTH_WINDOW_MS ?? '', 10) || 15 * 60 * 1000);
+  const authMax =
+    options.rateLimit?.authMax ??
+    (Number.parseInt(process.env.RATE_LIMIT_AUTH_MAX ?? '', 10) || 30);
+
+  const trustCloudflareHeaders =
+    options.trustCloudflareHeaders ??
+    process.env.TRUST_CLOUDFLARE_HEADERS?.trim().toLowerCase() === 'true';
+
+  const authRateLimit = createRateLimiter({
+    prefix: 'auth',
+    max: authMax,
+    windowMs: authWindowMs,
+    redis,
+    disabled: rateLimitDisabled,
+    trustCloudflareHeaders,
+  });
+  const onboardingRateLimit = createRateLimiter({
+    prefix: 'onboarding',
+    max: Math.max(authMax, 40),
+    windowMs: 5 * 60 * 1000,
+    redis,
+    disabled: rateLimitDisabled,
+    trustCloudflareHeaders,
+  });
+  const refreshRateLimit = createRateLimiter({
+    prefix: 'refresh',
+    max: Math.max(authMax * 2, 60),
+    windowMs: 5 * 60 * 1000,
+    redis,
+    disabled: rateLimitDisabled,
+    trustCloudflareHeaders,
   });
 
   const resolvedServerVersion =
@@ -297,57 +374,56 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
 
   // ---- Auth & Onboarding Endpoints ----
 
-  app.post('/api/auth/onboarding/handshake', async (request: AuthenticatedRequest) => {
-    request.skipTelemetry = true;
-    const requesterIp = normalizeRequesterIp(
-      request.headers['x-forwarded-for'] ?? request.headers['x-real-ip'],
-      request.ip,
-    );
-    const result = await registrationRequests.handshake(request.body, requesterIp);
-    loggerHandle.logger.info(
-      {
-        action: 'onboarding.handshake',
-        requesterIp,
-        alreadyPinged: result.alreadyPinged,
-        groupName: result.invite?.groupName ?? null,
-      },
-      `Onboarding handshake from ${requesterIp}${
-        result.invite ? ` (group "${result.invite.groupName}")` : ''
-      }${result.alreadyPinged ? ' [active request pending]' : ''}`,
-    );
-    return result;
-  });
+  app.post(
+    '/api/auth/onboarding/handshake',
+    { preHandler: [onboardingRateLimit] },
+    async (request: AuthenticatedRequest) => {
+      request.skipTelemetry = true;
+      const requesterIp = resolveClientIp(request.headers, request.ip, { trustCloudflareHeaders });
+      const result = await registrationRequests.handshake(request.body, requesterIp);
+      loggerHandle.logger.info(
+        {
+          action: 'onboarding.handshake',
+          requesterIp,
+          alreadyPinged: result.alreadyPinged,
+          groupName: result.invite?.groupName ?? null,
+        },
+        `Onboarding handshake from ${requesterIp}${
+          result.invite ? ` (group "${result.invite.groupName}")` : ''
+        }${result.alreadyPinged ? ' [active request pending]' : ''}`,
+      );
+      return result;
+    },
+  );
 
-  app.post('/api/auth/registration-requests', async (request: AuthenticatedRequest, reply) => {
-    request.skipTelemetry = true;
-    const requesterIp = normalizeRequesterIp(
-      request.headers['x-forwarded-for'] ?? request.headers['x-real-ip'],
-      request.ip,
-    );
-    const result = await registrationRequests.createRequest(request.body, requesterIp);
-    loggerHandle.logger.info(
-      {
-        action: 'registration_request.created',
-        requestId: result.request.id,
-        requesterIp,
-        email: result.request.email,
-        username: result.request.username,
-        groupName: result.request.groupName,
-        expiresAt: result.request.expiresAt,
-      },
-      `New account request from ${result.request.username} (${result.request.email}) via ${requesterIp}${
-        result.request.groupName ? ` for group "${result.request.groupName}"` : ''
-      }`,
-    );
-    return reply.code(201).send(result);
-  });
+  app.post(
+    '/api/auth/registration-requests',
+    { preHandler: [authRateLimit] },
+    async (request: AuthenticatedRequest, reply) => {
+      request.skipTelemetry = true;
+      const requesterIp = resolveClientIp(request.headers, request.ip, { trustCloudflareHeaders });
+      const result = await registrationRequests.createRequest(request.body, requesterIp);
+      loggerHandle.logger.info(
+        {
+          action: 'registration_request.created',
+          requestId: result.request.id,
+          requesterIp,
+          email: result.request.email,
+          username: result.request.username,
+          groupName: result.request.groupName,
+          expiresAt: result.request.expiresAt,
+        },
+        `New account request from ${result.request.username} (${result.request.email}) via ${requesterIp}${
+          result.request.groupName ? ` for group "${result.request.groupName}"` : ''
+        }`,
+      );
+      return reply.code(201).send(result);
+    },
+  );
 
   app.get('/api/auth/registration-requests/status', async (request: AuthenticatedRequest) => {
     request.skipTelemetry = true;
-    const requesterIp = normalizeRequesterIp(
-      request.headers['x-forwarded-for'] ?? request.headers['x-real-ip'],
-      request.ip,
-    );
+    const requesterIp = resolveClientIp(request.headers, request.ip, { trustCloudflareHeaders });
     const query = (request.query ?? {}) as { id?: string };
     return registrationRequests.getStatus({
       requestId: typeof query.id === 'string' && query.id.trim() ? query.id.trim() : undefined,
@@ -355,60 +431,72 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     });
   });
 
-  app.post('/api/auth/register', async (request: AuthenticatedRequest, reply) => {
-    request.skipTelemetry = true;
-    const result = await authGroup.register(request.body);
-    loggerHandle.logger.info(
-      {
-        action: 'auth.register',
-        userId: result.user.id,
-        username: result.user.username,
-        email: result.user.email,
-        role: result.user.role,
-        groupId: result.joinedGroup?.groupId,
-        groupName: result.joinedGroup?.groupName,
-        assignedRole: result.joinedGroup?.role,
-      },
-      `${result.user.username} (${result.user.email}) registered as ${result.user.role}${
-        result.joinedGroup
-          ? ` and joined group "${result.joinedGroup.groupName}" as ${result.joinedGroup.role}`
-          : ''
-      }`,
-    );
-    return reply.code(201).send(result);
-  });
+  app.post(
+    '/api/auth/register',
+    { preHandler: [authRateLimit] },
+    async (request: AuthenticatedRequest, reply) => {
+      request.skipTelemetry = true;
+      const result = await authGroup.register(request.body);
+      loggerHandle.logger.info(
+        {
+          action: 'auth.register',
+          userId: result.user.id,
+          username: result.user.username,
+          email: result.user.email,
+          role: result.user.role,
+          groupId: result.joinedGroup?.groupId,
+          groupName: result.joinedGroup?.groupName,
+          assignedRole: result.joinedGroup?.role,
+        },
+        `${result.user.username} (${result.user.email}) registered as ${result.user.role}${
+          result.joinedGroup
+            ? ` and joined group "${result.joinedGroup.groupName}" as ${result.joinedGroup.role}`
+            : ''
+        }`,
+      );
+      return reply.code(201).send(result);
+    },
+  );
 
-  app.post('/api/auth/login', async (request: AuthenticatedRequest) => {
-    request.skipTelemetry = true;
-    const result = await authGroup.login(request.body);
-    loggerHandle.logger.info(
-      {
-        action: 'auth.login',
-        userId: result.user.id,
-        username: result.user.username,
-        email: result.user.email,
-        role: result.user.role,
-      },
-      `${result.user.username} (${result.user.email}) signed in`,
-    );
-    return result;
-  });
+  app.post(
+    '/api/auth/login',
+    { preHandler: [authRateLimit] },
+    async (request: AuthenticatedRequest) => {
+      request.skipTelemetry = true;
+      const result = await authGroup.login(request.body);
+      loggerHandle.logger.info(
+        {
+          action: 'auth.login',
+          userId: result.user.id,
+          username: result.user.username,
+          email: result.user.email,
+          role: result.user.role,
+        },
+        `${result.user.username} (${result.user.email}) signed in`,
+      );
+      return result;
+    },
+  );
 
-  app.post('/api/auth/refresh', async (request: AuthenticatedRequest) => {
-    request.skipTelemetry = true;
-    const { tokens, userId } = await authGroup.refresh(request.body);
-    const ctx = await resolveAuditContext(pool, { userId });
-    loggerHandle.logger.info(
-      {
-        action: 'auth.refresh',
-        userId,
-        username: ctx.actorUsername,
-        email: ctx.actorEmail,
-      },
-      `${ctx.actorUsername ?? userId} refreshed access session`,
-    );
-    return tokens;
-  });
+  app.post(
+    '/api/auth/refresh',
+    { preHandler: [refreshRateLimit] },
+    async (request: AuthenticatedRequest) => {
+      request.skipTelemetry = true;
+      const { tokens, userId } = await authGroup.refresh(request.body);
+      const ctx = await resolveAuditContext(pool, { userId });
+      loggerHandle.logger.info(
+        {
+          action: 'auth.refresh',
+          userId,
+          username: ctx.actorUsername,
+          email: ctx.actorEmail,
+        },
+        `${ctx.actorUsername ?? userId} refreshed access session`,
+      );
+      return tokens;
+    },
+  );
 
   app.get('/api/auth/me', { preHandler: [requireAuth] }, async (request: AuthenticatedRequest) => {
     return authGroup.getMe(request.authUser!.id);
@@ -512,33 +600,41 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     },
   );
 
-  app.post('/api/auth/forgot-password/request', async (request: AuthenticatedRequest) => {
-    request.skipTelemetry = true;
-    const email =
-      typeof (request.body as { email?: unknown } | undefined)?.email === 'string'
-        ? (request.body as { email: string }).email.trim().toLowerCase()
-        : undefined;
-    const result = await authGroup.requestPasswordReset(request.body);
-    loggerHandle.logger.info(
-      { action: 'auth.forgot_password_requested', email },
-      `Password reset code requested for ${email ?? 'account'}`,
-    );
-    return result;
-  });
+  app.post(
+    '/api/auth/forgot-password/request',
+    { preHandler: [authRateLimit] },
+    async (request: AuthenticatedRequest) => {
+      request.skipTelemetry = true;
+      const email =
+        typeof (request.body as { email?: unknown } | undefined)?.email === 'string'
+          ? (request.body as { email: string }).email.trim().toLowerCase()
+          : undefined;
+      const result = await authGroup.requestPasswordReset(request.body);
+      loggerHandle.logger.info(
+        { action: 'auth.forgot_password_requested', email },
+        `Password reset code requested for ${email ?? 'account'}`,
+      );
+      return result;
+    },
+  );
 
-  app.post('/api/auth/forgot-password/reset', async (request: AuthenticatedRequest) => {
-    request.skipTelemetry = true;
-    const email =
-      typeof (request.body as { email?: unknown } | undefined)?.email === 'string'
-        ? (request.body as { email: string }).email.trim().toLowerCase()
-        : undefined;
-    const result = await authGroup.resetPasswordWithCode(request.body);
-    loggerHandle.logger.info(
-      { action: 'auth.forgot_password_completed', email },
-      `Password reset completed via verified recovery email (${email ?? 'unknown'})`,
-    );
-    return result;
-  });
+  app.post(
+    '/api/auth/forgot-password/reset',
+    { preHandler: [authRateLimit] },
+    async (request: AuthenticatedRequest) => {
+      request.skipTelemetry = true;
+      const email =
+        typeof (request.body as { email?: unknown } | undefined)?.email === 'string'
+          ? (request.body as { email: string }).email.trim().toLowerCase()
+          : undefined;
+      const result = await authGroup.resetPasswordWithCode(request.body);
+      loggerHandle.logger.info(
+        { action: 'auth.forgot_password_completed', email },
+        `Password reset completed via verified recovery email (${email ?? 'unknown'})`,
+      );
+      return result;
+    },
+  );
 
   app.get(
     '/api/auth/tracker-token',
@@ -1123,6 +1219,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
 async function main() {
   const port = Number.parseInt(process.env.PORT ?? process.env.AUTH_ADMIN_PORT ?? '4001', 10);
   const { app, loggerHandle } = await createAuthAdminServer();
+  registerGracefulShutdown(app, loggerHandle.logger, 'auth-admin-service');
   await app.listen({ port, host: '0.0.0.0' }); // listen to local and port
   loggerHandle.logger.info({ port }, 'auth-admin-service listening');
 }

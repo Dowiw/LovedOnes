@@ -1,28 +1,19 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
-  PanResponder,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import WheelColorPicker from 'react-native-wheel-color-picker';
 import { isSafeHexColor } from '@loved-ones/shared';
 import {
   type GeometricFontFamily,
-  hexToHsv,
-  type HsvColor,
-  hsvToHex,
   type OnboardingPalette,
 } from '../services/onboardingTheme';
 import { useSafeAreaInsets } from '../services/safeArea';
-
-export { hexToHsv, type HsvColor, hsvToHex };
-
-const HUE_STOPS = Array.from({ length: 24 }, (_, idx) => (idx / 23) * 360);
-const SAT_SHADE_ROWS = [1, 0.8, 0.6, 0.4, 0.2];
-const SAT_SHADE_COLS = [0.15, 0.35, 0.55, 0.75, 0.92, 1];
 
 interface ColorPickerSheetProps {
   visible: boolean;
@@ -34,7 +25,8 @@ interface ColorPickerSheetProps {
 }
 
 /**
- * Interactive visual custom hex color picker for Android & iOS (Hue bar + Sat/Value grid + #RRGGBB).
+ * Interactive custom color wheel + brightness slider + direct #RRGGBB hex editor
+ * powered by react-native-wheel-color-picker with minimal rounded-square framing.
  */
 export function ColorPickerSheet({
   visible,
@@ -45,43 +37,26 @@ export function ColorPickerSheet({
   onClose,
 }: ColorPickerSheetProps) {
   const insets = useSafeAreaInsets();
-  const startHex = initialHex && isSafeHexColor(initialHex) ? initialHex : '#0ea5e9';
-  const [hsv, setHsv] = useState<HsvColor>(() => hexToHsv(startHex));
-  const [hexInput, setHexInput] = useState<string>(startHex);
-  const hueBarWidthRef = useRef(260);
+  const fallbackHex = initialHex && isSafeHexColor(initialHex) ? initialHex.toLowerCase() : '#0ea5e9';
+  const [wheelSeedColor, setWheelSeedColor] = useState<string>(fallbackHex);
+  const [liveHex, setLiveHex] = useState<string>(fallbackHex);
+  const [hexInput, setHexInput] = useState<string>(fallbackHex);
 
-  const liveHex = useMemo(() => hsvToHex(hsv), [hsv]);
-
-  const huePan = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: (evt) => {
-          const w = Math.max(1, hueBarWidthRef.current);
-          const ratio = Math.max(0, Math.min(1, evt.nativeEvent.locationX / w));
-          const next = { ...hsv, h: ratio * 359 };
-          setHsv(next);
-          setHexInput(hsvToHex(next));
-        },
-        onPanResponderMove: (evt) => {
-          const w = Math.max(1, hueBarWidthRef.current);
-          const ratio = Math.max(0, Math.min(1, evt.nativeEvent.locationX / w));
-          setHsv((prev) => {
-            const next = { ...prev, h: ratio * 359 };
-            setHexInput(hsvToHex(next));
-            return next;
-          });
-        },
-      }),
-    [hsv],
-  );
+  useEffect(() => {
+    if (!visible) return;
+    const seed = initialHex && isSafeHexColor(initialHex) ? initialHex.toLowerCase() : '#0ea5e9';
+    setWheelSeedColor(seed);
+    setLiveHex(seed);
+    setHexInput(seed);
+  }, [visible, initialHex]);
 
   function handleHexText(raw: string) {
     setHexInput(raw);
     const trimmed = raw.trim();
     if (isSafeHexColor(trimmed)) {
-      setHsv(hexToHsv(trimmed));
+      const normalized = trimmed.toLowerCase();
+      setLiveHex(normalized);
+      setWheelSeedColor(normalized);
     }
   }
 
@@ -89,140 +64,107 @@ export function ColorPickerSheet({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View pointerEvents="box-none" style={styles.modalOuter}>
         <View style={[styles.backdrop, { marginBottom: insets.bottom }]}>
-        <View
-          style={[
-            styles.card,
-            { backgroundColor: palette.surface, borderColor: palette.border },
-          ]}
-        >
-          <View style={styles.headerRow}>
-            <View>
-              <Text style={[styles.title, { color: palette.ink, fontFamily: fonts.display }]}>
-                Custom Accent Color
-              </Text>
-              <Text style={[styles.subtitle, { color: palette.inkMuted, fontFamily: fonts.body }]}>
-                Pick a shade or type any #RRGGBB hex code.
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.livePreview,
-                { backgroundColor: liveHex, borderColor: palette.borderStrong },
-              ]}
-            />
-          </View>
-
-          {/* Saturation x Brightness Grid for selected Hue */}
-          <View style={[styles.gridWrap, { borderColor: palette.border }]}>
-            {SAT_SHADE_ROWS.map((vVal) => (
-              <View key={vVal} style={styles.gridRow}>
-                {SAT_SHADE_COLS.map((sVal) => {
-                  const cellHex = hsvToHex({ h: hsv.h, s: sVal, v: vVal });
-                  const selected =
-                    Math.abs(hsv.s - sVal) < 0.09 && Math.abs(hsv.v - vVal) < 0.09;
-                  return (
-                    <TouchableOpacity
-                      key={`${vVal}-${sVal}`}
-                      activeOpacity={0.85}
-                      style={[
-                        styles.gridCell,
-                        { backgroundColor: cellHex },
-                        selected && { borderWidth: 2.5, borderColor: '#ffffff' },
-                      ]}
-                      onPress={() => {
-                        const next = { ...hsv, s: sVal, v: vVal };
-                        setHsv(next);
-                        setHexInput(hsvToHex(next));
-                      }}
-                    />
-                  );
-                })}
+          <View
+            style={[
+              styles.card,
+              { backgroundColor: palette.surface, borderColor: palette.border },
+            ]}
+          >
+            <View style={styles.headerRow}>
+              <View>
+                <Text style={[styles.title, { color: palette.ink, fontFamily: fonts.display }]}>
+                  Custom Accent Color
+                </Text>
+                <Text style={[styles.subtitle, { color: palette.inkMuted, fontFamily: fonts.body }]}>
+                  Drag the color wheel or type a #RRGGBB hex code.
+                </Text>
               </View>
-            ))}
-          </View>
-
-          {/* Continuous Hue Spectrum Slider */}
-          <View style={styles.hueSection}>
-            <Text style={[styles.label, { color: palette.inkSubtle, fontFamily: fonts.heading }]}>
-              Hue Spectrum
-            </Text>
-            <View
-              onLayout={(e) => {
-                hueBarWidthRef.current = e.nativeEvent.layout.width;
-              }}
-              {...huePan.panHandlers}
-              style={[styles.hueBar, { borderColor: palette.border }]}
-            >
-              {HUE_STOPS.map((stopH) => (
-                <View
-                  key={stopH}
-                  style={[styles.hueSlice, { backgroundColor: hsvToHex({ h: stopH, s: 1, v: 1 }) }]}
-                />
-              ))}
               <View
-                pointerEvents="none"
                 style={[
-                  styles.hueThumb,
-                  {
-                    left: `${(hsv.h / 360) * 92}%`,
-                    backgroundColor: hsvToHex({ h: hsv.h, s: 1, v: 1 }),
-                  },
+                  styles.livePreview,
+                  { backgroundColor: liveHex, borderColor: palette.borderStrong },
                 ]}
               />
             </View>
-          </View>
 
-          {/* Direct Hex Entry */}
-          <View style={styles.hexRow}>
-            <Text style={[styles.label, { color: palette.inkSubtle, fontFamily: fonts.heading }]}>
-              Hex Code
-            </Text>
-            <TextInput
-              accessibilityLabel="Custom hex color code"
+            <View
               style={[
-                styles.hexInput,
-                {
-                  backgroundColor: palette.surfaceMuted,
-                  borderColor: palette.border,
-                  color: palette.ink,
-                  fontFamily: fonts.mono,
-                },
-              ]}
-              value={hexInput}
-              onChangeText={handleHexText}
-              autoCapitalize="none"
-              autoCorrect={false}
-              maxLength={7}
-              placeholder="#0ea5e9"
-              placeholderTextColor={palette.placeholder}
-            />
-          </View>
-
-          <View style={styles.actionsRow}>
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={[
-                styles.secondaryBtn,
+                styles.wheelContainer,
                 { backgroundColor: palette.surfaceMuted, borderColor: palette.border },
               ]}
-              onPress={onClose}
             >
-              <Text style={[styles.secondaryText, { color: palette.ink, fontFamily: fonts.heading }]}>
-                Cancel
+              <WheelColorPicker
+                color={wheelSeedColor}
+                thumbSize={26}
+                sliderSize={22}
+                gapSize={14}
+                noSnap
+                swatches={false}
+                useNativeLayout
+                shadeSliderThumb
+                onColorChange={(hex) => {
+                  const normalized = hex.toLowerCase();
+                  setLiveHex(normalized);
+                  setHexInput(normalized);
+                }}
+                onColorChangeComplete={(hex) => {
+                  const normalized = hex.toLowerCase();
+                  setLiveHex(normalized);
+                  setHexInput(normalized);
+                }}
+              />
+            </View>
+
+            <View style={styles.hexRow}>
+              <Text style={[styles.label, { color: palette.inkSubtle, fontFamily: fonts.heading }]}>
+                Hex Code
               </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={[styles.primaryBtn, { backgroundColor: palette.ctaBg }]}
-              onPress={() => onApply(liveHex)}
-            >
-              <Text style={[styles.primaryText, { color: palette.ctaText, fontFamily: fonts.display }]}>
-                Use {liveHex}
-              </Text>
-            </TouchableOpacity>
+              <TextInput
+                accessibilityLabel="Custom hex color code"
+                style={[
+                  styles.hexInput,
+                  {
+                    backgroundColor: palette.surfaceMuted,
+                    borderColor: palette.borderStrong,
+                    color: palette.ink,
+                    fontFamily: fonts.mono,
+                  },
+                ]}
+                value={hexInput}
+                onChangeText={handleHexText}
+                autoCapitalize="none"
+                autoCorrect={false}
+                maxLength={7}
+                placeholder="#0ea5e9"
+                placeholderTextColor={palette.placeholder}
+              />
+            </View>
+
+            <View style={styles.actionsRow}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                style={[
+                  styles.secondaryBtn,
+                  { backgroundColor: palette.surfaceMuted, borderColor: palette.border },
+                ]}
+                onPress={onClose}
+              >
+                <Text style={[styles.secondaryText, { color: palette.ink, fontFamily: fonts.heading }]}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityRole="button"
+                style={[styles.primaryBtn, { backgroundColor: palette.ctaBg }]}
+                onPress={() => onApply(liveHex)}
+              >
+                <Text style={[styles.primaryText, { color: palette.ctaText, fontFamily: fonts.display }]}>
+                  Use {liveHex}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
-      </View>
       </View>
     </Modal>
   );
@@ -240,9 +182,9 @@ const styles = StyleSheet.create({
   },
   card: {
     borderWidth: 1,
-    borderRadius: 22,
+    borderRadius: 10,
     padding: 20,
-    gap: 16,
+    gap: 14,
   },
   headerRow: {
     flexDirection: 'row',
@@ -259,51 +201,20 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   livePreview: {
-    width: 40,
-    height: 40,
-    borderRadius: 999,
-    borderWidth: 2,
+    width: 38,
+    height: 38,
+    borderRadius: 6,
+    borderWidth: 1.5,
   },
-  gridWrap: {
+  wheelContainer: {
+    height: 274,
     borderWidth: 1,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  gridRow: {
-    flexDirection: 'row',
-    height: 30,
-  },
-  gridCell: {
-    flex: 1,
-  },
-  hueSection: {
-    gap: 8,
+    borderRadius: 8,
+    padding: 14,
   },
   label: {
     fontSize: 12,
     fontWeight: '600',
-  },
-  hueBar: {
-    height: 28,
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: 'row',
-    overflow: 'hidden',
-    position: 'relative',
-    alignItems: 'center',
-  },
-  hueSlice: {
-    flex: 1,
-    height: '100%',
-  },
-  hueThumb: {
-    position: 'absolute',
-    width: 24,
-    height: 24,
-    borderRadius: 999,
-    borderWidth: 2.5,
-    borderColor: '#ffffff',
-    elevation: 3,
   },
   hexRow: {
     flexDirection: 'row',
@@ -315,7 +226,7 @@ const styles = StyleSheet.create({
     minWidth: 130,
     height: 42,
     borderWidth: 1,
-    borderRadius: 11,
+    borderRadius: 6,
     paddingHorizontal: 12,
     fontSize: 14,
     textAlign: 'center',
@@ -327,7 +238,7 @@ const styles = StyleSheet.create({
   secondaryBtn: {
     flex: 1,
     minHeight: 46,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -339,7 +250,7 @@ const styles = StyleSheet.create({
   primaryBtn: {
     flex: 1.4,
     minHeight: 46,
-    borderRadius: 12,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },

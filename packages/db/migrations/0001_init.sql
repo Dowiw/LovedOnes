@@ -175,6 +175,14 @@ ALTER TABLE users
     ADD COLUMN IF NOT EXISTS halo_color VARCHAR(7) NULL,
     ADD COLUMN IF NOT EXISTS fuzz_circle_color VARCHAR(7) NULL;
 
+ALTER TABLE group_places
+    ALTER COLUMN group_id DROP NOT NULL,
+    ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_group_places_created_by
+    ON group_places (created_by)
+    WHERE is_private = TRUE;
+
 DO $$ BEGIN
     CREATE TYPE registration_request_status AS ENUM ('PENDING', 'APPROVED', 'DENIED', 'EXPIRED');
 EXCEPTION

@@ -736,6 +736,18 @@ export async function apiFetchGroupPlaces(
   );
 }
 
+export async function apiFetchAccessiblePlaces(
+  accessToken: string,
+  groupId?: string,
+): Promise<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const qs = groupId ? `?groupId=${encodeURIComponent(groupId)}` : '';
+  return requestAuthedJson<{ places: GroupPlace[]; recentTransitions: PlaceTransitionEvent[] }>(
+    `${realtimeBase}/api/realtime/places${qs}`,
+    accessToken,
+  );
+}
+
 export async function apiCreateGroupPlace(
   accessToken: string,
   groupId: string,
@@ -753,6 +765,29 @@ export async function apiCreateGroupPlace(
   return res.place;
 }
 
+export async function apiCreatePlace(
+  accessToken: string,
+  payload: {
+    name: string;
+    latitude: number;
+    longitude: number;
+    radiusMeters: number;
+    isPrivate: boolean;
+    groupId?: string | null;
+  },
+): Promise<GroupPlace> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ place: GroupPlace }>(
+    `${realtimeBase}/api/realtime/places`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+  return res.place;
+}
+
 export async function apiDeleteGroupPlace(
   accessToken: string,
   groupId: string,
@@ -761,6 +796,18 @@ export async function apiDeleteGroupPlace(
   const { realtimeBase } = getServiceBaseUrls();
   await requestAuthedJson<{ ok: boolean }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/places/${placeId}`,
+    accessToken,
+    { method: 'DELETE' },
+  );
+}
+
+export async function apiDeletePlace(
+  accessToken: string,
+  placeId: string,
+): Promise<void> {
+  const { realtimeBase } = getServiceBaseUrls();
+  await requestAuthedJson<{ ok: boolean }>(
+    `${realtimeBase}/api/realtime/places/${placeId}`,
     accessToken,
     { method: 'DELETE' },
   );

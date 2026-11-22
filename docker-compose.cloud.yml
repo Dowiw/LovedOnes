@@ -1,0 +1,25 @@
+# Compose override for cloud / external managed Postgres & Redis deployments
+# and hosts without Docker socket access (disables bundled postgres, redis, system-updater).
+#
+# Usage:
+#   DOCKER_DATABASE_URL=postgresql://user:pass@db.example.com:5432/lovedones \
+#   DATABASE_SSL=require \
+#   DOCKER_REDIS_URL=rediss://redis.example.com:6379 \
+#   docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --build
+services:
+  postgres:
+    profiles: ["disabled"]
+
+  redis:
+    profiles: ["disabled"]
+
+  system-updater:
+    profiles: ["disabled"]
+
+  auth-admin-service:
+    depends_on: !reset []
+    environment:
+      ALLOW_REMOTE_SYSTEM_UPDATE: "false"
+
+  realtime-service:
+    depends_on: !reset []

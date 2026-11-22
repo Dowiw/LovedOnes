@@ -145,9 +145,8 @@ export const locationRequests = pgTable('location_requests', {
 
 export const groupPlaces = pgTable('group_places', {
   id: uuid('id').defaultRandom().primaryKey(),
-  groupId: uuid('group_id')
-    .notNull()
-    .references(() => groups.id, { onDelete: 'cascade' }),
+  groupId: uuid('group_id').references(() => groups.id, { onDelete: 'cascade' }),
+  isPrivate: boolean('is_private').default(false).notNull(),
   name: varchar('name', { length: 100 }).notNull(),
   center: geographyPoint('center').notNull(),
   radiusMeters: doublePrecision('radius_meters').notNull(),
