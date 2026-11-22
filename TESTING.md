@@ -25,13 +25,14 @@ docker compose -f docker-compose.dev.yml down
 docker compose ps
 ```
 
-All 6 default containers must be `Up` (with `lovedones-postgres` and `lovedones-redis` showing `(healthy)`):
+All 7 default containers must be `Up` (with `lovedones-postgres` and `lovedones-redis` showing `(healthy)`):
 - `lovedones-gateway` (`0.0.0.0:8080->80/tcp`, also serves `/tiles/*` directly)
 - `lovedones-web-dashboard` (`3000/tcp` internal)
 - `lovedones-auth-admin` (`4001/tcp` internal)
 - `lovedones-realtime` (`4002/tcp` internal)
 - `lovedones-postgres` (`5432/tcp` internal)
 - `lovedones-redis` (`6379/tcp` internal)
+- `lovedones-system-updater` (`4010/tcp` internal)
 
 *(Optional standalone range server: `docker compose --profile standalone-maps up -d map-service`)*
 
