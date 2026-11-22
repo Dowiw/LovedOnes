@@ -20,6 +20,7 @@ import {
   LocationPoint,
   LocationRequestItem,
   LocationSnapshotQuerySchema,
+  MatchedUserTrail,
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
   parseBoundingBox,
@@ -29,6 +30,7 @@ import {
   SendMessageSchema,
   TrailQuerySchema,
 } from '@loved-ones/shared';
+import { RoadTrailMatcher } from './road-trail-matcher.js';
 export { haversineMeters };
 import { DomainError } from '@loved-ones/shared/auth';
 
@@ -278,6 +280,7 @@ export interface RealtimeModuleOptions extends CoordinateFilterOptions {
   broadcaster: RealtimeBroadcaster;
   now?: () => number;
   onPlaceTransition?: (event: PlaceTransitionEvent) => void;
+  roadMatcher?: RoadTrailMatcher;
 }
 
 /**
@@ -291,6 +294,7 @@ export class RealtimeModule {
   private readonly filterOptions: CoordinateFilterOptions;
   private readonly now: () => number;
   private readonly onPlaceTransition?: (event: PlaceTransitionEvent) => void;
+  private readonly roadMatcher?: RoadTrailMatcher;
 
   constructor(options: RealtimeModuleOptions) {
     this.store = options.store;
@@ -302,6 +306,7 @@ export class RealtimeModule {
     };
     this.now = options.now ?? (() => Date.now());
     this.onPlaceTransition = options.onPlaceTransition;
+    this.roadMatcher = options.roadMatcher;
   }
 
   private async requireMembership(
@@ -529,6 +534,23 @@ export class RealtimeModule {
       if (filtered.length >= parsed.data.limit) break;
     }
     return filtered;
+  }
+
+  async getGroupTrailsWithMatches(
+    user: JwtUserPayload,
+    groupId: string,
+    rawQuery: unknown = {},
+  ): Promise<{ trails: LocationBroadcast[]; matchedTrails: MatchedUserTrail[] }> {
+    const trails = await this.getGroupTrails(user, groupId, rawQuery);
+    if (!this.roadMatcher || trails.length === 0) {
+      return { trails, matchedTrails: [] };
+    }
+    try {
+      const matchedTrails = await this.roadMatcher.matchTrails(trails);
+      return { trails, matchedTrails };
+    } catch {
+      return { trails, matchedTrails: [] };
+    }
   }
 
   async getGroupMessages(user: JwtUserPayload, groupId: string): Promise<ChatMessage[]> {

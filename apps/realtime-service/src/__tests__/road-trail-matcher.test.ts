@@ -1,0 +1,308 @@
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { BoundingBox, TrailPingLike } from '@loved-ones/shared';
+import {
+  PmtilesRoadTileProvider,
+  RoadEdgeFeature,
+  RoadTileProvider,
+  RoadTrailMatcher,
+} from '../domain/road-trail-matcher.js';
+
+function createMemoryRoadProvider(
+  edges: RoadEdgeFeature[],
+  rev = 'test-rev-1',
+): RoadTileProvider & { calls: number } {
+  return {
+    calls: 0,
+    async getRevisionKey() {
+      return rev;
+    },
+    async getRoadFeaturesForBbox(_bbox: BoundingBox) {
+      this.calls += 1;
+      return edges;
+    },
+  };
+}
+
+describe('RoadTrailMatcher', () => {
+  it('snaps two stops around city blocks along streets and bridges >15m off-road stops with spurs', async () => {
+    // 2x2 street grid around 52.5200..52.5240, 13.4000..13.4050 (~445m x 340m)
+    const gridEdges: RoadEdgeFeature[] = [
+      // South avenue (lat 52.5200)
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.4, 52.52],
+          [13.405, 52.52],
+        ],
+      },
+      // East street (lon 13.4050)
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.405, 52.52],
+          [13.405, 52.524],
+        ],
+      },
+      // North avenue (lat 52.5240)
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.4, 52.524],
+          [13.405, 52.524],
+        ],
+      },
+      // West street (lon 13.4000)
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.4, 52.52],
+          [13.4, 52.524],
+        ],
+      },
+      // Middle cross street (lat 52.5220)
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.4, 52.522],
+          [13.405, 52.522],
+        ],
+      },
+    ];
+
+    const provider = createMemoryRoadProvider(gridEdges);
+    const matcher = new RoadTrailMatcher({ tileProvider: provider });
+
+    // Start inside a building ~30m north of South Ave, end inside a building ~30m west of East St
+    const pings: TrailPingLike[] = [
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.52028, // ~31m north of 52.5200
+        longitude: 13.4005,
+        recordedAt: '2026-11-22T10:00:00.000Z',
+        speed: 8,
+      },
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.5235,
+        longitude: 13.40455, // ~30m west of 13.4050
+        recordedAt: '2026-11-22T10:03:00.000Z',
+        speed: 8,
+      },
+    ];
+
+    const [matched] = await matcher.matchTrails(pings);
+    expect(matched.hasRoadMatches).toBe(true);
+    expect(matched.stops).toHaveLength(2);
+
+    const roadSegs = matched.segments.filter((s) => s.kind === 'road');
+    const spurSegs = matched.segments.filter((s) => s.kind === 'spur');
+    const directSegs = matched.segments.filter((s) => s.kind === 'direct');
+
+    expect(roadSegs).toHaveLength(1);
+    expect(directSegs).toHaveLength(0);
+    expect(spurSegs).toHaveLength(2);
+    // Road path must turn at an intersection (>= 3 vertices), not a 2-point straight diagonal
+    expect(roadSegs[0].coordinates.length).toBeGreaterThanOrEqual(3);
+
+    // Second identical query hits result cache without calling provider again
+    await matcher.matchTrails(pings);
+    expect(provider.calls).toBe(1);
+  });
+
+  it('prefers footpaths for walking speeds and roads for driving speeds', async () => {
+    // Two parallel links between (13.400, 52.520) and (13.405, 52.520):
+    // - A direct park 'path' straight across
+    // - A slightly longer 'major_road' detour via 52.5208
+    const edges: RoadEdgeFeature[] = [
+      {
+        kind: 'path',
+        coords: [
+          [13.4, 52.52],
+          [13.405, 52.52],
+        ],
+      },
+      {
+        kind: 'major_road',
+        coords: [
+          [13.4, 52.52],
+          [13.4, 52.5208],
+          [13.405, 52.5208],
+          [13.405, 52.52],
+        ],
+      },
+    ];
+
+    const matcher = new RoadTrailMatcher({ tileProvider: createMemoryRoadProvider(edges) });
+
+    const [walkMatch] = await matcher.matchTrails([
+      {
+        userId: 'walker',
+        username: 'Walk',
+        latitude: 52.52,
+        longitude: 13.4,
+        recordedAt: '2026-11-22T10:00:00.000Z',
+        speed: 1.3,
+      },
+      {
+        userId: 'walker',
+        username: 'Walk',
+        latitude: 52.52,
+        longitude: 13.405,
+        recordedAt: '2026-11-22T10:05:00.000Z',
+        speed: 1.4,
+      },
+    ]);
+    expect(walkMatch.segments[0].kind).toBe('road');
+    expect(walkMatch.segments[0].roadKind).toBe('path');
+
+    const [driveMatch] = await matcher.matchTrails([
+      {
+        userId: 'driver',
+        username: 'Drive',
+        latitude: 52.52,
+        longitude: 13.4,
+        recordedAt: '2026-11-22T10:00:00.000Z',
+        speed: 14,
+      },
+      {
+        userId: 'driver',
+        username: 'Drive',
+        latitude: 52.52,
+        longitude: 13.405,
+        recordedAt: '2026-11-22T10:00:30.000Z',
+        speed: 14,
+      },
+    ]);
+    expect(driveMatch.segments[0].kind).toBe('road');
+    expect(driveMatch.segments[0].roadKind).toBe('major_road');
+  });
+
+  it('keeps FUZZED trails un-snapped, breaks >30m time gaps, and falls back to direct when off-road', async () => {
+    const edges: RoadEdgeFeature[] = [
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.4, 52.52],
+          [13.405, 52.52],
+        ],
+      },
+    ];
+    const matcher = new RoadTrailMatcher({ tileProvider: createMemoryRoadProvider(edges) });
+
+    // 1. FUZZED stays direct even when right on top of a road
+    const [fuzzed] = await matcher.matchTrails([
+      {
+        userId: 'fuzzed-user',
+        username: 'Fuzzed',
+        latitude: 52.52,
+        longitude: 13.4,
+        recordedAt: '2026-11-22T10:00:00.000Z',
+        isFuzzed: true,
+      },
+      {
+        userId: 'fuzzed-user',
+        username: 'Fuzzed',
+        latitude: 52.52,
+        longitude: 13.405,
+        recordedAt: '2026-11-22T10:02:00.000Z',
+        isFuzzed: true,
+      },
+    ]);
+    expect(fuzzed.hasRoadMatches).toBe(false);
+    expect(fuzzed.segments).toEqual([
+      {
+        kind: 'direct',
+        coordinates: [
+          [13.4, 52.52],
+          [13.405, 52.52],
+        ],
+      },
+    ]);
+
+    // 2. Time gap > 30 min splits trip cleanly (no fabricated segment across the break)
+    const [gapUser] = await matcher.matchTrails([
+      {
+        userId: 'gap-user',
+        username: 'Gap',
+        latitude: 52.52,
+        longitude: 13.4,
+        recordedAt: '2026-11-22T08:00:00.000Z',
+      },
+      {
+        userId: 'gap-user',
+        username: 'Gap',
+        latitude: 52.52,
+        longitude: 13.405,
+        recordedAt: '2026-11-22T09:00:00.000Z',
+      },
+    ]);
+    expect(gapUser.stops).toHaveLength(2);
+    expect(gapUser.segments).toHaveLength(0);
+
+    // 3. Off-road (>150m from any road) falls back to direct dashed segment
+    const [offRoad] = await matcher.matchTrails([
+      {
+        userId: 'off-user',
+        username: 'Off',
+        latitude: 52.53,
+        longitude: 13.4,
+        recordedAt: '2026-11-22T10:00:00.000Z',
+      },
+      {
+        userId: 'off-user',
+        username: 'Off',
+        latitude: 52.53,
+        longitude: 13.405,
+        recordedAt: '2026-11-22T10:04:00.000Z',
+      },
+    ]);
+    expect(offRoad.hasRoadMatches).toBe(false);
+    expect(offRoad.segments).toHaveLength(1);
+    expect(offRoad.segments[0].kind).toBe('direct');
+  });
+
+  it('ignores placeholder/empty PMTiles archives and falls back cleanly to direct trails', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lovedones-pmtiles-empty-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'region.pmtiles'), Buffer.alloc(264, 0));
+      const provider = new PmtilesRoadTileProvider({ tilesDir: tmpDir });
+      const matcher = new RoadTrailMatcher({ tileProvider: provider });
+
+      const [matched] = await matcher.matchTrails([
+        {
+          userId: 'u1',
+          username: 'Alice',
+          latitude: 52.52,
+          longitude: 13.4,
+          recordedAt: '2026-11-22T10:00:00.000Z',
+        },
+        {
+          userId: 'u1',
+          username: 'Alice',
+          latitude: 52.522,
+          longitude: 13.404,
+          recordedAt: '2026-11-22T10:05:00.000Z',
+        },
+      ]);
+
+      expect(matched.hasRoadMatches).toBe(false);
+      expect(matched.segments).toEqual([
+        {
+          kind: 'direct',
+          coordinates: [
+            [13.4, 52.52],
+            [13.404, 52.522],
+          ],
+        },
+      ]);
+      await matcher.close();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

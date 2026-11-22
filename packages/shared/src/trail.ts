@@ -1,4 +1,7 @@
 export const DEFAULT_TRAIL_CLUSTER_RADIUS_METERS = 85;
+export const DEFAULT_TRAIL_MAX_TIME_GAP_MS = 30 * 60 * 1000;
+export const DEFAULT_TRAIL_MAX_DISTANCE_METERS = 15_000;
+export const DEFAULT_TRAIL_SPUR_THRESHOLD_METERS = 15;
 const EARTH_RADIUS_METERS = 6_371_000;
 const METERS_PER_DEGREE_LAT = 111_320;
 
@@ -9,6 +12,7 @@ export interface TrailPingLike {
   longitude: number;
   recordedAt: string;
   isFuzzed?: boolean;
+  speed?: number | null;
 }
 
 export interface AveragedTrailStop {
@@ -22,12 +26,63 @@ export interface AveragedTrailStop {
   isFuzzed: boolean;
 }
 
+export interface TrailStopVisit {
+  stopIndex: number;
+  latitude: number;
+  longitude: number;
+  firstRecordedAt: string;
+  lastRecordedAt: string;
+  isFuzzed: boolean;
+  maxSpeedMps: number | null;
+}
+
 export interface CompactUserTrail {
   userId: string;
   username: string;
   stops: AveragedTrailStop[];
   /** Chronological [longitude, latitude] vertices with consecutive same-stop duplicates collapsed. */
   pathCoordinates: [number, number][];
+  /** Chronological visit sequence with per-visit timestamps and speed hints for trip splitting & road snapping. */
+  visits?: TrailStopVisit[];
+}
+
+export type TrailSegmentKind = 'road' | 'direct' | 'spur';
+
+export type TrailDisplayMode = 'roads' | 'raw';
+
+export interface TrailPathSegment {
+  kind: TrailSegmentKind;
+  /** Chronological [longitude, latitude] coordinates for this segment. */
+  coordinates: [number, number][];
+  /** Road class hint when kind === 'road' (e.g. 'highway', 'major_road', 'minor_road', 'path'). */
+  roadKind?: string;
+}
+
+export interface MatchedUserTrail {
+  userId: string;
+  username: string;
+  stops: AveragedTrailStop[];
+  /** Ordered segments combining road-snapped routes ('road'), unmatched/fuzzed gaps ('direct'), and >15m off-road spurs ('spur'). */
+  segments: TrailPathSegment[];
+  /** True when at least one segment was matched onto road/path geometry. */
+  hasRoadMatches: boolean;
+}
+
+export interface TrailGeoJsonFeature {
+  type: 'Feature';
+  geometry:
+    | { type: 'LineString'; coordinates: [number, number][] }
+    | { type: 'Point'; coordinates: [number, number] };
+  properties: {
+    kind: 'stop' | TrailSegmentKind;
+    userId: string;
+    username: string;
+    pingCount?: number;
+    firstRecordedAt?: string;
+    lastRecordedAt?: string;
+    isFuzzed?: boolean;
+    roadKind?: string;
+  };
 }
 
 export interface AverageTrailPingsOptions {
@@ -171,7 +226,7 @@ function compactSingleUserTrail(
 
   const latestUsername = sorted[sorted.length - 1]?.username ?? 'Member';
   if (sorted.length === 0) {
-    return { userId, username: latestUsername, stops: [], pathCoordinates: [] };
+    return { userId, username: latestUsername, stops: [], pathCoordinates: [], visits: [] };
   }
 
   if (radiusMeters <= 0 || sorted.length === 1) {
@@ -185,11 +240,24 @@ function compactSingleUserTrail(
       lastRecordedAt: pt.recordedAt,
       isFuzzed: Boolean(pt.isFuzzed),
     }));
+    const visits: TrailStopVisit[] = stops.map((stop, idx) => ({
+      stopIndex: idx,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      firstRecordedAt: stop.firstRecordedAt,
+      lastRecordedAt: stop.lastRecordedAt,
+      isFuzzed: stop.isFuzzed,
+      maxSpeedMps:
+        typeof sorted[idx]?.speed === 'number' && Number.isFinite(sorted[idx].speed!)
+          ? sorted[idx].speed!
+          : null,
+    }));
     return {
       userId,
       username: latestUsername,
       stops,
       pathCoordinates: stops.map((s) => [s.longitude, s.latitude]),
+      visits,
     };
   }
 
@@ -399,17 +467,19 @@ function compactSingleUserTrail(
     enqueueNeighbors(a, 0);
   }
 
-  const stopByClusterId = new Map<number, AveragedTrailStop>();
+  const stopByClusterId = new Map<number, { stop: AveragedTrailStop; stopIndex: number }>();
   const stops: AveragedTrailStop[] = [];
   const pathCoordinates: [number, number][] = [];
+  const visits: TrailStopVisit[] = [];
   let lastClusterId: number | null = null;
 
   for (let i = 0; i < sorted.length; i += 1) {
+    const pt = sorted[i];
     const cid = resolveClusterId(pingToCluster[i]);
-    let stop = stopByClusterId.get(cid);
-    if (!stop) {
+    let entry = stopByClusterId.get(cid);
+    if (!entry) {
       const c = clusters[cid];
-      stop = {
+      const stop: AveragedTrailStop = {
         userId,
         username: c.username,
         latitude: roundCoord(c.centroidLat),
@@ -419,12 +489,32 @@ function compactSingleUserTrail(
         lastRecordedAt: c.lastRecordedAt,
         isFuzzed: c.isFuzzed,
       };
-      stopByClusterId.set(cid, stop);
+      const stopIndex = stops.length;
       stops.push(stop);
+      entry = { stop, stopIndex };
+      stopByClusterId.set(cid, entry);
     }
+    const speedVal =
+      typeof pt.speed === 'number' && Number.isFinite(pt.speed) && pt.speed >= 0 ? pt.speed : null;
+
     if (lastClusterId !== cid) {
-      pathCoordinates.push([stop.longitude, stop.latitude]);
+      pathCoordinates.push([entry.stop.longitude, entry.stop.latitude]);
+      visits.push({
+        stopIndex: entry.stopIndex,
+        latitude: entry.stop.latitude,
+        longitude: entry.stop.longitude,
+        firstRecordedAt: pt.recordedAt,
+        lastRecordedAt: pt.recordedAt,
+        isFuzzed: entry.stop.isFuzzed,
+        maxSpeedMps: speedVal,
+      });
       lastClusterId = cid;
+    } else if (visits.length > 0) {
+      const curVisit = visits[visits.length - 1];
+      curVisit.lastRecordedAt = pt.recordedAt;
+      if (speedVal !== null && (curVisit.maxSpeedMps === null || speedVal > curVisit.maxSpeedMps)) {
+        curVisit.maxSpeedMps = speedVal;
+      }
     }
   }
 
@@ -433,6 +523,7 @@ function compactSingleUserTrail(
     username: latestUsername,
     stops,
     pathCoordinates,
+    visits,
   };
 }
 
@@ -475,4 +566,167 @@ export function averageNearbyTrailPings(
     results.push(compactSingleUserTrail(userId, points, radiusMeters));
   }
   return results;
+}
+
+export interface SplitTripsOptions {
+  maxTimeGapMs?: number;
+  maxDistanceMeters?: number;
+}
+
+/**
+ * Splits a user's chronological stop visits into contiguous trips, breaking
+ * whenever a gap exceeds `maxTimeGapMs` (default 30 min) or `maxDistanceMeters` (default 15 km),
+ * or when transitioning between EXACT and FUZZED privacy modes.
+ */
+export function splitVisitsIntoTrips(
+  visits: readonly TrailStopVisit[],
+  options: SplitTripsOptions = {},
+): TrailStopVisit[][] {
+  if (visits.length === 0) return [];
+  const maxTimeGapMs = options.maxTimeGapMs ?? DEFAULT_TRAIL_MAX_TIME_GAP_MS;
+  const maxDistanceMeters = options.maxDistanceMeters ?? DEFAULT_TRAIL_MAX_DISTANCE_METERS;
+
+  const trips: TrailStopVisit[][] = [[visits[0]]];
+  for (let i = 1; i < visits.length; i += 1) {
+    const prev = visits[i - 1];
+    const curr = visits[i];
+    const prevExitMs = Date.parse(prev.lastRecordedAt);
+    const currEnterMs = Date.parse(curr.firstRecordedAt);
+    const timeGapMs =
+      Number.isFinite(prevExitMs) && Number.isFinite(currEnterMs)
+        ? Math.max(0, currEnterMs - prevExitMs)
+        : 0;
+    const distMeters = haversineMeters(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+
+    if (
+      prev.isFuzzed !== curr.isFuzzed ||
+      timeGapMs > maxTimeGapMs ||
+      distMeters > maxDistanceMeters
+    ) {
+      trips.push([curr]);
+    } else {
+      trips[trips.length - 1].push(curr);
+    }
+  }
+  return trips;
+}
+
+/** Appends coordinates to a polyline while skipping consecutive duplicate vertices. */
+export function mergeTrailCoordinates(
+  chunks: readonly (readonly [number, number][])[],
+): [number, number][] {
+  const merged: [number, number][] = [];
+  for (const chunk of chunks) {
+    for (const pt of chunk) {
+      const prev = merged[merged.length - 1];
+      if (!prev || prev[0] !== pt[0] || prev[1] !== pt[1]) {
+        merged.push([pt[0], pt[1]]);
+      }
+    }
+  }
+  return merged;
+}
+
+export interface BuildTrailGeoJsonOptions {
+  trails: readonly TrailPingLike[];
+  matchedTrails?: readonly MatchedUserTrail[] | null;
+  mode?: TrailDisplayMode;
+  filterUserId?: string | null;
+}
+
+/**
+ * Converts either road-snapped `MatchedUserTrail[]` or raw `TrailPingLike[]`
+ * into MapLibre-ready GeoJSON Point/LineString features shared across web and mobile.
+ */
+export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
+  features: TrailGeoJsonFeature[];
+  stopsCount: number;
+  hasRoadMatches: boolean;
+} {
+  const mode = options.mode ?? 'roads';
+  const filterUserId = options.filterUserId ?? null;
+  const features: TrailGeoJsonFeature[] = [];
+  let stopsCount = 0;
+  let hasRoadMatches = false;
+
+  const usableMatched =
+    mode === 'roads' && options.matchedTrails && options.matchedTrails.length > 0
+      ? options.matchedTrails.filter((t) => !filterUserId || t.userId === filterUserId)
+      : null;
+
+  if (usableMatched && usableMatched.length > 0) {
+    for (const userTrail of usableMatched) {
+      if (userTrail.hasRoadMatches) hasRoadMatches = true;
+      for (const stop of userTrail.stops) {
+        stopsCount += 1;
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [stop.longitude, stop.latitude] },
+          properties: {
+            kind: 'stop',
+            userId: stop.userId,
+            username: stop.username,
+            pingCount: stop.pingCount,
+            firstRecordedAt: stop.firstRecordedAt,
+            lastRecordedAt: stop.lastRecordedAt,
+            isFuzzed: stop.isFuzzed,
+          },
+        });
+      }
+      for (const seg of userTrail.segments) {
+        if (seg.coordinates.length < 2) continue;
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: seg.coordinates },
+          properties: {
+            kind: seg.kind,
+            userId: userTrail.userId,
+            username: userTrail.username,
+            ...(seg.roadKind ? { roadKind: seg.roadKind } : {}),
+          },
+        });
+      }
+    }
+    return { features, stopsCount, hasRoadMatches };
+  }
+
+  const rawFiltered = filterUserId
+    ? options.trails.filter((t) => t.userId === filterUserId)
+    : options.trails;
+  if (rawFiltered.length === 0) {
+    return { features, stopsCount: 0, hasRoadMatches: false };
+  }
+
+  const compacted = averageNearbyTrailPings(rawFiltered);
+  for (const userTrail of compacted) {
+    for (const stop of userTrail.stops) {
+      stopsCount += 1;
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [stop.longitude, stop.latitude] },
+        properties: {
+          kind: 'stop',
+          userId: stop.userId,
+          username: stop.username,
+          pingCount: stop.pingCount,
+          firstRecordedAt: stop.firstRecordedAt,
+          lastRecordedAt: stop.lastRecordedAt,
+          isFuzzed: stop.isFuzzed,
+        },
+      });
+    }
+    if (userTrail.pathCoordinates.length >= 2) {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: userTrail.pathCoordinates },
+        properties: {
+          kind: 'direct',
+          userId: userTrail.userId,
+          username: userTrail.username,
+        },
+      });
+    }
+  }
+
+  return { features, stopsCount, hasRoadMatches: false };
 }

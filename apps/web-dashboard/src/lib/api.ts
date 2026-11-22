@@ -11,6 +11,7 @@ import type {
   LogRetentionSettings,
   MapDownloadJob,
   MapRegion,
+  MatchedUserTrail,
   PlaceTransitionEvent,
   PrivacyMode,
   PublicLocationShareSnapshot,
@@ -824,18 +825,24 @@ export async function apiFetchGroupTrails(
   accessToken: string,
   groupId: string,
   options: { from?: string; to?: string; limit?: number } = {},
-): Promise<LocationBroadcast[]> {
+): Promise<{ trails: LocationBroadcast[]; matchedTrails: MatchedUserTrail[] }> {
   const { realtimeBase } = getServiceBaseUrls();
   const params = new URLSearchParams();
   if (options.from) params.set('from', options.from);
   if (options.to) params.set('to', options.to);
   if (options.limit) params.set('limit', String(options.limit));
   const qs = params.toString();
-  const res = await requestAuthedJson<{ trails: LocationBroadcast[] }>(
+  const res = await requestAuthedJson<{
+    trails: LocationBroadcast[];
+    matchedTrails?: MatchedUserTrail[];
+  }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/trails${qs ? `?${qs}` : ''}`,
     accessToken,
   );
-  return res.trails;
+  return {
+    trails: res.trails ?? [],
+    matchedTrails: res.matchedTrails ?? [],
+  };
 }
 
 export async function apiFetchMapRegions(): Promise<{

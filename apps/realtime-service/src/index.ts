@@ -50,6 +50,7 @@ import {
   WebPushTransport,
 } from './adapters/web-push-adapter.js';
 import { PushNotificationsModule } from './domain/push-notifications-module.js';
+import { RoadTrailMatcher } from './domain/road-trail-matcher.js';
 import { ShareLinksModule } from './domain/share-links-module.js';
 import { matchesIfNoneMatch, RealtimeModule } from './domain/realtime-module.js';
 
@@ -58,6 +59,7 @@ export interface RealtimeServiceOptions {
   redisUrl?: string;
   jwtSecret?: string;
   logDir?: string;
+  tilesDir?: string;
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
   trustCloudflareHeaders?: boolean;
@@ -219,9 +221,14 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     return undefined;
   };
 
+  const roadMatcher = new RoadTrailMatcher({
+    tilesDir: options.tilesDir ?? process.env.TILES_DIR,
+  });
+
   const realtime = new RealtimeModule({
     store: new PostgresRealtimeStore(pool),
     broadcaster: new SocketIoBroadcaster(io),
+    roadMatcher,
     onPlaceTransition: (evt) => {
       void resolveGroupName(evt.groupId)
         .then((groupName) => {
@@ -640,12 +647,11 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest) => {
       const { groupId } = request.params as { groupId: string };
-      const trails = await realtime.getGroupTrails(
+      return realtime.getGroupTrailsWithMatches(
         request.authUser!,
         groupId,
         request.query,
       );
-      return { trails };
     },
   );
 
@@ -1187,6 +1193,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
 
   app.addHook('onClose', async () => {
     io.disconnectSockets(true);
+    await roadMatcher.close().catch(() => {});
     await loggerHandle.close();
     await logSubClient.unsubscribe().catch(() => {});
     logSubClient.disconnect();

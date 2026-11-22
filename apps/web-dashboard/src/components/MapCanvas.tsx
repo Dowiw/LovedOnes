@@ -4,9 +4,9 @@ import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import { PMTiles, Protocol } from 'pmtiles';
 import {
-  averageNearbyTrailPings,
   buildExternalMapsUrls,
   buildGeodesicCircleRing,
+  buildTrailGeoJsonFeatures,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
   DEFAULT_FUZZED_HALO_COLOR,
@@ -17,6 +17,8 @@ import {
   type GroupPlace,
   type LocationBroadcast,
   type MapRegion,
+  type MatchedUserTrail,
+  type TrailDisplayMode,
 } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
 import { getMapPaintOverrides, type ResolvedMapTheme } from '@/lib/mapTheme';
@@ -182,6 +184,8 @@ function registerCompositePmtilesProtocol(defaultTilesBase: string): void {
 
 const TRAIL_SOURCE_ID = 'lovedones-trails-src';
 const TRAIL_LINE_LAYER_ID = 'lovedones-trails-line';
+const TRAIL_DIRECT_LINE_LAYER_ID = 'lovedones-trails-direct-line';
+const TRAIL_SPUR_LINE_LAYER_ID = 'lovedones-trails-spur-line';
 const TRAIL_POINT_LAYER_ID = 'lovedones-trails-pts';
 
 export type MapLabelLanguage = 'en' | 'local';
@@ -435,6 +439,8 @@ interface MapCanvasProps {
   locations: LocationBroadcast[];
   places?: GroupPlace[];
   trails?: LocationBroadcast[];
+  matchedTrails?: MatchedUserTrail[];
+  trailMode?: TrailDisplayMode;
   regions?: MapRegion[];
   regionsRevision?: number;
   showTrails?: boolean;
@@ -459,6 +465,8 @@ export function MapCanvas({
   locations,
   places = [],
   trails = [],
+  matchedTrails = [],
+  trailMode = 'roads',
   regions,
   regionsRevision = 0,
   showTrails = false,
@@ -1230,43 +1238,13 @@ export function MapCanvas({
     if (!map) return;
 
     const applyTrailsLayer = () => {
-      const features: Array<{
-        type: 'Feature';
-        geometry: { type: 'LineString'; coordinates: [number, number][] } | { type: 'Point'; coordinates: [number, number] };
-        properties: {
-          username: string;
-          pingCount?: number;
-          firstRecordedAt?: string;
-          lastRecordedAt?: string;
-          isFuzzed?: boolean;
-        };
-      }> = [];
-
-      if (showTrails && trails.length > 0) {
-        const compacted = averageNearbyTrailPings(trails);
-        for (const userTrail of compacted) {
-          for (const stop of userTrail.stops) {
-            features.push({
-              type: 'Feature',
-              geometry: { type: 'Point', coordinates: [stop.longitude, stop.latitude] },
-              properties: {
-                username: stop.username,
-                pingCount: stop.pingCount,
-                firstRecordedAt: stop.firstRecordedAt,
-                lastRecordedAt: stop.lastRecordedAt,
-                isFuzzed: stop.isFuzzed,
-              },
-            });
-          }
-          if (userTrail.pathCoordinates.length >= 2) {
-            features.push({
-              type: 'Feature',
-              geometry: { type: 'LineString', coordinates: userTrail.pathCoordinates },
-              properties: { username: userTrail.username },
-            });
-          }
-        }
-      }
+      const { features } = showTrails
+        ? buildTrailGeoJsonFeatures({
+            trails,
+            matchedTrails,
+            mode: trailMode,
+          })
+        : { features: [] };
 
       const geojson = { type: 'FeatureCollection' as const, features };
       const existingSource = map.getSource(TRAIL_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
@@ -1279,12 +1257,47 @@ export function MapCanvas({
         id: TRAIL_LINE_LAYER_ID,
         type: 'line',
         source: TRAIL_SOURCE_ID,
-        filter: ['==', ['geometry-type'], 'LineString'],
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'road']],
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
+          'line-width': 3.5,
+          'line-opacity': 0.9,
+        },
+      });
+      map.addLayer({
+        id: TRAIL_DIRECT_LINE_LAYER_ID,
+        type: 'line',
+        source: TRAIL_SOURCE_ID,
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'direct']],
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
         paint: {
           'line-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
           'line-width': 2.5,
           'line-dasharray': [2, 1.5],
           'line-opacity': 0.75,
+        },
+      });
+      map.addLayer({
+        id: TRAIL_SPUR_LINE_LAYER_ID,
+        type: 'line',
+        source: TRAIL_SOURCE_ID,
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'spur']],
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': mapThemeRef.current === 'dark' ? '#a1a1aa' : '#52525b',
+          'line-width': 1.75,
+          'line-dasharray': [1.2, 1.5],
+          'line-opacity': 0.6,
         },
       });
       map.addLayer({
@@ -1306,7 +1319,7 @@ export function MapCanvas({
     } else {
       map.once('load', applyTrailsLayer);
     }
-  }, [trails, showTrails]);
+  }, [trails, matchedTrails, trailMode, showTrails]);
 
   useEffect(() => {
     const map = mapRef.current;
