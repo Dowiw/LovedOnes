@@ -6,7 +6,13 @@ import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
-import { createPool, pruneLocationHistory, resolveAuditContext, runMigrations } from '@loved-ones/db';
+import {
+  createPool,
+  pruneExpiredShareLinks,
+  pruneLocationHistory,
+  resolveAuditContext,
+  runMigrations,
+} from '@loved-ones/db';
 import {
   DEFAULT_APP_VERSION,
   evaluateClientVersion,
@@ -165,7 +171,24 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     options.locationRetentionDays ??
     (Number.parseInt(process.env.LOCATION_RETENTION_DAYS ?? '0', 10) || 0);
 
-  // Periodic automatic cleanup of expired log files, Redis buffers, and optional location retention
+  // Periodic automatic cleanup of expired log files, Redis buffers, expired share links, and optional location retention
+  const runShareLinkCleanup = () => {
+    void pruneExpiredShareLinks(pool)
+      .then((res) => {
+        if (res.deletedLinks > 0 || res.deletedGuests > 0) {
+          loggerHandle.logger.info(
+            {
+              action: 'share_link.pruned',
+              deletedLinks: res.deletedLinks,
+              deletedGuests: res.deletedGuests,
+            },
+            `Pruned ${res.deletedLinks} expired share link(s) and ${res.deletedGuests} stale guest ping(s)`,
+          );
+        }
+      })
+      .catch(() => {});
+  };
+  runShareLinkCleanup();
   if (locationRetentionDays > 0) {
     void pruneLocationHistory(pool, locationRetentionDays).catch(() => {});
   }
@@ -180,6 +203,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
         });
       })
       .catch(() => {});
+    runShareLinkCleanup();
     if (locationRetentionDays > 0) {
       void pruneLocationHistory(pool, locationRetentionDays).catch(() => {});
     }

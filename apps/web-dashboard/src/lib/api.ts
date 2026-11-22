@@ -6,12 +6,14 @@ import type {
   LocationBroadcast,
   LocationPoint,
   LocationRequestItem,
+  LocationShareLinkItem,
   LogPruneResult,
   LogRetentionSettings,
   MapDownloadJob,
   MapRegion,
   PlaceTransitionEvent,
   PrivacyMode,
+  PublicLocationShareSnapshot,
   QrInvitePayload,
   RegistrationRequestItem,
   SystemRole,
@@ -919,4 +921,176 @@ export async function apiFetchAppVersion(
     throw new Error(`Version check failed (${res.status})`);
   }
   return (await res.json()) as AppVersionInfo;
+}
+
+export async function apiFetchVapidPublicKey(accessToken: string): Promise<string> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ publicKey: string }>(
+    `${realtimeBase}/api/realtime/push/vapid-public-key`,
+    accessToken,
+  );
+  return res.publicKey;
+}
+
+export async function apiSubscribeWebPush(
+  accessToken: string,
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
+): Promise<{ subscribed: boolean }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ subscribed: boolean }>(
+    `${realtimeBase}/api/realtime/push/subscribe`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify(subscription),
+    },
+  );
+}
+
+export async function apiUnsubscribeWebPush(
+  accessToken: string,
+  endpoint: string,
+): Promise<{ unsubscribed: boolean }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ unsubscribed: boolean }>(
+    `${realtimeBase}/api/realtime/push/subscribe`,
+    accessToken,
+    {
+      method: 'DELETE',
+      body: JSON.stringify({ endpoint }),
+    },
+  );
+}
+
+export async function apiTestWebPush(
+  accessToken: string,
+): Promise<{ sent: number; failed: number }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ sent: number; failed: number }>(
+    `${realtimeBase}/api/realtime/push/test`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function apiListShareLinks(accessToken: string): Promise<LocationShareLinkItem[]> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ links: LocationShareLinkItem[] }>(
+    `${realtimeBase}/api/realtime/share-links`,
+    accessToken,
+  );
+  return res.links;
+}
+
+export async function apiCreateShareLink(
+  accessToken: string,
+  payload: {
+    groupId: string;
+    durationMinutes: number;
+    label?: string;
+    allowGuestSharing: boolean;
+  },
+): Promise<LocationShareLinkItem> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ link: LocationShareLinkItem }>(
+    `${realtimeBase}/api/realtime/share-links`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+  return res.link;
+}
+
+export async function apiRevokeShareLink(
+  accessToken: string,
+  token: string,
+): Promise<{ revoked: boolean }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ revoked: boolean }>(
+    `${realtimeBase}/api/realtime/share-links/${encodeURIComponent(token)}`,
+    accessToken,
+    { method: 'DELETE' },
+  );
+}
+
+export async function apiFetchPublicShareSnapshot(
+  token: string,
+): Promise<PublicLocationShareSnapshot> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await fetch(
+    `${realtimeBase}/api/realtime/public/share/${encodeURIComponent(token)}`,
+    { cache: 'no-store' },
+  );
+  if (!res.ok) {
+    let message = `Share link unavailable (${res.status})`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      // ignore invalid json
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as PublicLocationShareSnapshot;
+}
+
+export async function apiSendPublicSharePing(
+  token: string,
+  payload: {
+    displayName: string;
+    latitude: number;
+    longitude: number;
+    accuracy?: number | null;
+    guestId?: string;
+    guestSecret?: string;
+  },
+): Promise<{ guestId: string; guestSecret: string; snapshot: PublicLocationShareSnapshot }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await fetch(
+    `${realtimeBase}/api/realtime/public/share/${encodeURIComponent(token)}/ping`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!res.ok) {
+    let message = `Failed to share location (${res.status})`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      // ignore invalid json
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as {
+    guestId: string;
+    guestSecret: string;
+    snapshot: PublicLocationShareSnapshot;
+  };
+}
+
+export async function apiStopPublicSharePing(
+  token: string,
+  payload: { guestId: string; guestSecret: string },
+): Promise<{ stopped: boolean; snapshot: PublicLocationShareSnapshot }> {
+  const { realtimeBase } = getServiceBaseUrls();
+  const res = await fetch(
+    `${realtimeBase}/api/realtime/public/share/${encodeURIComponent(token)}/ping`,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to stop sharing (${res.status})`);
+  }
+  return (await res.json()) as { stopped: boolean; snapshot: PublicLocationShareSnapshot };
 }

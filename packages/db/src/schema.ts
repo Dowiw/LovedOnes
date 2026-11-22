@@ -207,3 +207,52 @@ export const registrationRequests = pgTable('registration_requests', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const pushVapidConfig = pgTable('push_vapid_config', {
+  id: smallint('id').primaryKey().default(1),
+  publicKey: text('public_key').notNull(),
+  privateKey: text('private_key').notNull(),
+  subject: text('subject').default('mailto:admin@lovedones.local').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const pushSubscriptions = pgTable('push_subscriptions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  endpoint: text('endpoint').notNull().unique(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  userAgent: text('user_agent'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const locationShareLinks = pgTable('location_share_links', {
+  token: varchar('token', { length: 96 }).primaryKey(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  groupId: uuid('group_id')
+    .notNull()
+    .references(() => groups.id, { onDelete: 'cascade' }),
+  label: varchar('label', { length: 80 }),
+  allowGuestSharing: boolean('allow_guest_sharing').default(true).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const locationShareGuests = pgTable('location_share_guests', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  shareToken: varchar('share_token', { length: 96 })
+    .notNull()
+    .references(() => locationShareLinks.token, { onDelete: 'cascade' }),
+  guestSecret: varchar('guest_secret', { length: 96 }).notNull(),
+  displayName: varchar('display_name', { length: 40 }).notNull(),
+  latitude: doublePrecision('latitude').notNull(),
+  longitude: doublePrecision('longitude').notNull(),
+  accuracy: doublePrecision('accuracy'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});

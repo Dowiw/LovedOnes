@@ -17,7 +17,9 @@ RUN pnpm --filter @loved-ones/shared build && pnpm --filter @loved-ones/web-dash
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=builder /app/apps/web-dashboard/.next/standalone ./
-COPY --from=builder /app/apps/web-dashboard/.next/static ./apps/web-dashboard/.next/static
+COPY --from=builder --chown=node:node /app/apps/web-dashboard/.next/standalone ./
+COPY --from=builder --chown=node:node /app/apps/web-dashboard/.next/static ./apps/web-dashboard/.next/static
+COPY --from=builder --chown=node:node /app/apps/web-dashboard/public ./apps/web-dashboard/public
+USER node
 EXPOSE 3000
 CMD ["node", "apps/web-dashboard/server.js"]

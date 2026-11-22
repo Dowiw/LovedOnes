@@ -21,7 +21,7 @@ RUN pnpm --filter @loved-ones/shared build \
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apk add --no-cache ca-certificates curl tar \
+RUN apk add --no-cache ca-certificates curl tar su-exec \
  && case "$(uname -m)" in \
       x86_64) PMTILES_ARCH="x86_64" ;; \
       aarch64|arm64) PMTILES_ARCH="arm64" ;; \
@@ -30,7 +30,7 @@ RUN apk add --no-cache ca-certificates curl tar \
  && curl -sfL "https://github.com/protomaps/go-pmtiles/releases/download/v1.31.2/go-pmtiles_1.31.2_Linux_${PMTILES_ARCH}.tar.gz" \
     | tar -xz -C /usr/local/bin pmtiles \
  && chmod +x /usr/local/bin/pmtiles
-COPY --from=builder /app ./
+COPY --from=builder --chown=node:node /app ./
 COPY infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 4001

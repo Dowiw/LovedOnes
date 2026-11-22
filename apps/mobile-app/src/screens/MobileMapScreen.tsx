@@ -11,6 +11,7 @@ import {
   PanResponder,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -26,6 +27,7 @@ import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
 import {
   averageNearbyTrailPings,
+  buildExternalMapsUrls,
   buildGeodesicCircleRing,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
@@ -43,6 +45,7 @@ import {
   type GroupPlace,
   type GroupRole,
   type LocationBroadcast,
+  type LocationShareLinkItem,
   type MapDownloadJob,
   type MapRegion,
   type PlaceTransitionEvent,
@@ -101,9 +104,23 @@ import {
   type MapLabelLanguage,
   type OfflineCacheInfo,
   type OfflineDownloadProgress,
+  resolveMobileMapTheme,
 } from '../services/pmtilesStyle';
 import { useSafeAreaInsets } from '../services/safeArea';
-import { clearSessionConfig, MobileStoredConfig, saveStoredConfig } from '../services/secureConfig';
+import {
+  clearSessionConfig,
+  getMapThemePreference,
+  type MobileMapThemePreference,
+  MobileStoredConfig,
+  saveMapThemePreference,
+  saveStoredConfig,
+} from '../services/secureConfig';
+import {
+  createMobileShareLink,
+  listMobileShareLinks,
+  resolveMobileShareUrl,
+  revokeMobileShareLink,
+} from '../services/shareLinks';
 
 const MOBILE_COLOR_PRESETS = ['#f59e0b', '#0ea5e9', '#10b981', '#8b5cf6', '#f43f5e', '#18181b'];
 const PLACE_RADIUS_PRESETS = [100, 150, 300, 500, 1000];
@@ -262,10 +279,20 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [estimatedRegionBytes, setEstimatedRegionBytes] = useState<number | null>(null);
   const [estimatingSize, setEstimatingSize] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<OfflineDownloadProgress | null>(null);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareLinks, setShareLinks] = useState<LocationShareLinkItem[]>([]);
+  const [shareDurationMinutes, setShareDurationMinutes] = useState(60);
+  const [shareLabelInput, setShareLabelInput] = useState('');
+  const [shareAllowMutual, setShareAllowMutual] = useState(true);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
 
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
+  const systemColorScheme = useColorScheme();
+  const [mapThemePreference, setMapThemePreference] = useState<MobileMapThemePreference>('system');
+  const resolvedMapTheme = resolveMobileMapTheme(mapThemePreference, systemColorScheme);
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
@@ -287,6 +314,107 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const adminGroups = useMemo(
     () => groups.filter((g) => g.myRole === 'ADMIN'),
     [groups],
+  );
+
+  const handleOpenCoordsInDefaultMaps = useCallback(
+    async (latitude: number, longitude: number, label: string) => {
+      const urls = buildExternalMapsUrls({
+        latitude,
+        longitude,
+        label,
+        platformOs: Platform.OS,
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+        isNativeApp: true,
+      });
+      try {
+        const canOpenPrimary = await Linking.canOpenURL(urls.primaryUrl);
+        await Linking.openURL(canOpenPrimary ? urls.primaryUrl : urls.fallbackUrl);
+      } catch {
+        try {
+          await Linking.openURL(urls.fallbackUrl);
+        } catch (err) {
+          Alert.alert('Unable to Open Maps', formatUserError(err, 'Could not open external Maps app'));
+        }
+      }
+    },
+    [],
+  );
+
+  const handleOpenInDefaultMaps = useCallback(
+    (loc: LocationBroadcast) => {
+      const label = loc.isFuzzed ? `${loc.username} (~1km)` : loc.username;
+      return handleOpenCoordsInDefaultMaps(loc.latitude, loc.longitude, label);
+    },
+    [handleOpenCoordsInDefaultMaps],
+  );
+
+  const refreshShareLinks = useCallback(async () => {
+    if (!serverUrl || !accessToken) return;
+    try {
+      const list = await listMobileShareLinks(serverUrl, accessToken);
+      setShareLinks(list);
+    } catch {
+      // ignore background refresh error
+    }
+  }, [serverUrl, accessToken]);
+
+  const handleOpenShareLinksModal = useCallback(() => {
+    setProfileHubOpen(false);
+    setShareError(null);
+    setShareModalOpen(true);
+    void refreshShareLinks();
+  }, [refreshShareLinks]);
+
+  const handleCreateMobileShareLink = useCallback(async () => {
+    if (!serverUrl || !accessToken || !activeGroup) return;
+    setShareError(null);
+    setShareBusy(true);
+    try {
+      const created = await createMobileShareLink(serverUrl, accessToken, {
+        groupId: activeGroup.id,
+        durationMinutes: shareDurationMinutes,
+        label: shareLabelInput.trim() || undefined,
+        allowGuestSharing: shareAllowMutual,
+      });
+      setShareLinks((prev) => [created, ...prev]);
+      setShareLabelInput('');
+    } catch (err) {
+      setShareError(formatUserError(err, 'Failed to create share link'));
+    } finally {
+      setShareBusy(false);
+    }
+  }, [serverUrl, accessToken, activeGroup, shareDurationMinutes, shareLabelInput, shareAllowMutual]);
+
+  const handleShareNativeLink = useCallback(
+    async (item: LocationShareLinkItem) => {
+      const url = resolveMobileShareUrl(serverUrl, item);
+      try {
+        await Share.share({
+          message: item.label ? `${item.label}: ${url}` : url,
+          url,
+        });
+      } catch (err) {
+        setShareError(formatUserError(err, 'Unable to open share sheet'));
+      }
+    },
+    [serverUrl],
+  );
+
+  const handleRevokeMobileShareLink = useCallback(
+    async (token: string) => {
+      if (!serverUrl || !accessToken) return;
+      setShareError(null);
+      setShareBusy(true);
+      try {
+        await revokeMobileShareLink(serverUrl, accessToken, token);
+        setShareLinks((prev) => prev.filter((l) => l.token !== token));
+      } catch (err) {
+        setShareError(formatUserError(err, 'Failed to revoke share link'));
+      } finally {
+        setShareBusy(false);
+      }
+    },
+    [serverUrl, accessToken],
   );
 
   useEffect(() => {
@@ -363,8 +491,15 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   }, [mapRegions]);
 
   const mapStyle = useMemo(
-    () => buildMobileMapStyle(serverUrl, localPmtilesUri, labelLanguage, useCompositeServerTiles),
-    [serverUrl, localPmtilesUri, labelLanguage, useCompositeServerTiles],
+    () =>
+      buildMobileMapStyle(
+        serverUrl,
+        localPmtilesUri,
+        labelLanguage,
+        useCompositeServerTiles,
+        resolvedMapTheme,
+      ),
+    [serverUrl, localPmtilesUri, labelLanguage, useCompositeServerTiles, resolvedMapTheme],
   );
 
   const refreshQueueCount = useCallback(async () => {
@@ -392,6 +527,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         void getCachedRegionPmtilesUri().then(setLocalPmtilesUri).catch(() => {});
       });
     void refreshQueueCount().catch(() => {});
+    void getMapThemePreference().then(setMapThemePreference).catch(() => {});
   }, [refreshQueueCount]);
 
   useEffect(() => {
@@ -1778,7 +1914,12 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const showCompassBtn = Math.abs(mapBearing) > 2;
 
   return (
-    <View style={styles.root}>
+    <View
+      style={[
+        styles.root,
+        { backgroundColor: resolvedMapTheme === 'dark' ? '#0c141d' : '#cfe3ee' },
+      ]}
+    >
       <Map
         style={styles.map}
         mapStyle={mapStyle}
@@ -2397,6 +2538,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                     >
                       <Text style={styles.detailFocusBtnText}>Center</Text>
                     </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.openMapsBtn}
+                      onPress={() => void handleOpenInDefaultMaps(selectedMember)}
+                    >
+                      <Text style={styles.openMapsBtnText}>Maps</Text>
+                    </TouchableOpacity>
                   </View>
 
                   {trailMessage && <Text style={styles.settingsHint}>{trailMessage}</Text>}
@@ -2605,6 +2753,15 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                             {p.latitude.toFixed(4)}, {p.longitude.toFixed(4)} ·{' '}
                             {Math.round(p.radiusMeters)}m
                           </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.shareOpenBtn}
+                          onPress={() =>
+                            void handleOpenCoordsInDefaultMaps(p.latitude, p.longitude, p.name)
+                          }
+                        >
+                          <Text style={styles.shareOpenBtnText}>Maps</Text>
                         </TouchableOpacity>
 
                         {canDelete && (
@@ -2850,6 +3007,21 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
 
                 <TouchableOpacity
                   style={styles.menuRow}
+                  onPress={handleOpenShareLinksModal}
+                >
+                  <View style={styles.flexOne}>
+                    <Text style={styles.settingsSectionTitle}>Guest Share Links</Text>
+                    <Text style={styles.settingsHint}>
+                      Temporary meetup links (isolated from your group)
+                    </Text>
+                  </View>
+                  <Text style={styles.menuRowAction}>
+                    {shareLinks.length > 0 ? `${shareLinks.length} active →` : 'Create →'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.menuRow}
                   onPress={() => {
                     setProfileHubOpen(false);
                     void openOfflineCacheModal();
@@ -2880,6 +3052,49 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   </View>
                   <Text style={styles.menuRowAction}>{labelLanguage === 'en' ? 'EN' : 'Local'}</Text>
                 </TouchableOpacity>
+
+                <View style={styles.menuRow}>
+                  <View style={styles.flexOne}>
+                    <Text style={styles.settingsSectionTitle}>Map Theme</Text>
+                    <Text style={styles.settingsHint}>
+                      {mapThemePreference === 'system'
+                        ? `Auto (${resolvedMapTheme === 'dark' ? 'Night' : 'Light'})`
+                        : mapThemePreference === 'dark'
+                          ? 'Night mode'
+                          : 'Light mode'}
+                    </Text>
+                  </View>
+                  <View style={styles.themeSegmentGroup}>
+                    {(
+                      [
+                        ['system', 'Auto'],
+                        ['light', 'Light'],
+                        ['dark', 'Dark'],
+                      ] as const
+                    ).map(([pref, label]) => {
+                      const active = mapThemePreference === pref;
+                      return (
+                        <TouchableOpacity
+                          key={pref}
+                          style={[styles.themeSegmentBtn, active && styles.themeSegmentBtnActive]}
+                          onPress={() => {
+                            setMapThemePreference(pref);
+                            void saveMapThemePreference(pref).catch(() => {});
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.themeSegmentText,
+                              active && styles.themeSegmentTextActive,
+                            ]}
+                          >
+                            {label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
 
                 <TouchableOpacity
                   style={styles.menuRow}
@@ -3492,6 +3707,139 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         onClose={() => setColorPickerTarget(null)}
       />
 
+      {/* Guest Share Links Modal */}
+      <Modal
+        visible={shareModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShareModalOpen(false)}
+      >
+        <View pointerEvents="box-none" style={styles.flexOne}>
+          <View style={[styles.sheetBackdrop, { marginBottom: insets.bottom }]}>
+            <View style={[styles.sheetCard, { paddingBottom: 20 }]}>
+              <View style={styles.sheetHeaderRow}>
+                <Text style={styles.modalTitle}>Guest Share Links</Text>
+                <TouchableOpacity style={styles.closePill} onPress={() => setShareModalOpen(false)}>
+                  <Text style={styles.closeText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.settingsHint}>
+                People on the same link see only each other—never other group members.
+              </Text>
+
+              <TextInput
+                style={styles.shareInput}
+                value={shareLabelInput}
+                onChangeText={setShareLabelInput}
+                maxLength={80}
+                placeholder="Label (optional, e.g. Meetup)"
+                placeholderTextColor="#a1a1aa"
+              />
+
+              <View style={styles.themeSegmentGroup}>
+                {(
+                  [
+                    [15, '15m'],
+                    [60, '1h'],
+                    [240, '4h'],
+                    [1440, '24h'],
+                  ] as const
+                ).map(([mins, label]) => {
+                  const active = shareDurationMinutes === mins;
+                  return (
+                    <TouchableOpacity
+                      key={mins}
+                      style={[
+                        styles.themeSegmentBtn,
+                        styles.flexOne,
+                        { alignItems: 'center' },
+                        active && styles.themeSegmentBtnActive,
+                      ]}
+                      onPress={() => setShareDurationMinutes(mins)}
+                    >
+                      <Text
+                        style={[
+                          styles.themeSegmentText,
+                          active && styles.themeSegmentTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <TouchableOpacity
+                style={styles.menuRow}
+                onPress={() => setShareAllowMutual((v) => !v)}
+              >
+                <View style={styles.flexOne}>
+                  <Text style={styles.settingsSectionTitle}>Mutual guest sharing</Text>
+                  <Text style={styles.settingsHint}>
+                    {shareAllowMutual
+                      ? 'Guests can share their pins back on this link'
+                      : 'View-only (only your pin is shown)'}
+                  </Text>
+                </View>
+                <Text style={styles.menuRowAction}>{shareAllowMutual ? 'On' : 'Off'}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.openMapsBtn, { alignItems: 'center', paddingVertical: 11 }]}
+                disabled={shareBusy || !activeGroup}
+                onPress={() => void handleCreateMobileShareLink()}
+              >
+                <Text style={[styles.openMapsBtnText, { fontSize: 13 }]}>
+                  {shareBusy ? 'Creating...' : 'Create Share Link'}
+                </Text>
+              </TouchableOpacity>
+
+              {shareError && <Text style={styles.errorText}>{shareError}</Text>}
+
+              <ScrollView style={{ maxHeight: 200 }} contentContainerStyle={{ gap: 8 }}>
+                {shareLinks.map((item) => {
+                  const shareUrl = resolveMobileShareUrl(serverUrl, item);
+                  return (
+                    <View key={item.token} style={styles.shareLinkCard}>
+                      <View style={styles.flexOne}>
+                        <Text style={styles.settingsSectionTitle} numberOfLines={1}>
+                          {item.label ?? `${item.groupName} Share`}
+                        </Text>
+                        <Text style={styles.settingsHint} numberOfLines={1}>
+                          {item.allowGuestSharing
+                            ? `${item.activeGuestCount} guest${item.activeGuestCount === 1 ? '' : 's'} · ${new Date(item.expiresAt).toLocaleTimeString()}`
+                            : `View-only · ends ${new Date(item.expiresAt).toLocaleTimeString()}`}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.openMapsBtn}
+                        onPress={() => void handleShareNativeLink(item)}
+                      >
+                        <Text style={styles.openMapsBtnText}>Share</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.shareOpenBtn}
+                        onPress={() => void Linking.openURL(shareUrl)}
+                      >
+                        <Text style={styles.shareOpenBtnText}>Open</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.shareRevokeBtn}
+                        disabled={shareBusy}
+                        onPress={() => void handleRevokeMobileShareLink(item.token)}
+                      >
+                        <Text style={styles.shareRevokeBtnText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Offline Map Cache Modal */}
       <Modal
         visible={offlineModalOpen}
@@ -4058,6 +4406,64 @@ const styles = StyleSheet.create({
   memberChipDot: { width: 7, height: 7, borderRadius: 999 },
   memberChipText: { color: '#18181b', fontSize: 12, fontWeight: '600' },
   memberChipTextSelected: { color: '#ffffff' },
+  openMapsBtn: {
+    backgroundColor: '#18181b',
+    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  openMapsBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  shareInput: {
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    backgroundColor: '#fafafa',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 13,
+    color: '#18181b',
+  },
+  shareLinkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    backgroundColor: '#fafafa',
+    padding: 10,
+  },
+  shareOpenBtn: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  shareOpenBtnText: {
+    color: '#18181b',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  shareRevokeBtn: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fecdd3',
+    backgroundColor: '#fff1f2',
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  shareRevokeBtnText: {
+    color: '#be123c',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   drawerBodyScroll: { flex: 1 },
   drawerBodyContent: { paddingBottom: 10, gap: 10 },
   memberDetailCard: {
@@ -4447,6 +4853,29 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   menuRowAction: { color: '#18181b', fontSize: 12, fontWeight: '700' },
+  themeSegmentGroup: {
+    flexDirection: 'row',
+    backgroundColor: '#e4e4e7',
+    borderRadius: 8,
+    padding: 2,
+    gap: 2,
+  },
+  themeSegmentBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  themeSegmentBtnActive: {
+    backgroundColor: '#18181b',
+  },
+  themeSegmentText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#52525b',
+  },
+  themeSegmentTextActive: {
+    color: '#ffffff',
+  },
   progressTrack: {
     height: 8,
     borderRadius: 999,

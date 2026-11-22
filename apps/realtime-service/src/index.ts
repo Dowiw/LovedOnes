@@ -16,7 +16,9 @@ import {
 import {
   attachAuthAndTelemetry,
   AuthenticatedRequest,
+  createEventThrottle,
   createFastifyCorsDelegator,
+  createRateLimiter,
   createTokenService,
   DomainError,
   extractBearerToken,
@@ -42,6 +44,13 @@ import {
   PostgresRealtimeStore,
   SocketIoBroadcaster,
 } from './adapters/postgres-socketio-adapters.js';
+import { PostgresShareLinkStore } from './adapters/postgres-share-links-adapter.js';
+import {
+  PostgresPushSubscriptionStore,
+  WebPushTransport,
+} from './adapters/web-push-adapter.js';
+import { PushNotificationsModule } from './domain/push-notifications-module.js';
+import { ShareLinksModule } from './domain/share-links-module.js';
 import { matchesIfNoneMatch, RealtimeModule } from './domain/realtime-module.js';
 
 export interface RealtimeServiceOptions {
@@ -51,6 +60,13 @@ export interface RealtimeServiceOptions {
   logDir?: string;
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
+  trustCloudflareHeaders?: boolean;
+  rateLimit?: {
+    disabled?: boolean;
+    windowMs?: number;
+    publicShareReadMax?: number;
+    publicSharePingMax?: number;
+  };
 }
 
 export async function createRealtimeServer(options: RealtimeServiceOptions = {}): Promise<{
@@ -177,6 +193,32 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     adapter: createAdapter(pubClient, subClient),
   });
 
+  const pushNotifications = new PushNotificationsModule({
+    store: new PostgresPushSubscriptionStore(pool),
+    transport: new WebPushTransport(),
+  });
+
+  const shareLinks = new ShareLinksModule({
+    store: new PostgresShareLinkStore(pool),
+    publicServerUrl: process.env.PUBLIC_SERVER_URL ?? '',
+  });
+
+  const resolveRequestOrigin = (request: {
+    headers: Record<string, string | string[] | undefined>;
+  }): string | undefined => {
+    const originHeader = request.headers.origin;
+    if (typeof originHeader === 'string' && originHeader && originHeader !== 'null') {
+      return originHeader;
+    }
+    const host = request.headers['x-forwarded-host'] ?? request.headers.host;
+    if (typeof host === 'string' && host.trim()) {
+      const proto = request.headers['x-forwarded-proto'];
+      const scheme = typeof proto === 'string' && proto.trim() ? proto.split(',')[0].trim() : 'http';
+      return `${scheme}://${host.split(',')[0].trim()}`;
+    }
+    return undefined;
+  };
+
   const realtime = new RealtimeModule({
     store: new PostgresRealtimeStore(pool),
     broadcaster: new SocketIoBroadcaster(io),
@@ -197,6 +239,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
             },
             `${evt.username} ${evt.transition === 'enter' ? 'entered' : 'exited'} place "${evt.placeName}" in group "${groupName}"`,
           );
+          void pushNotifications.notifyPlaceTransition(evt, groupName).catch(() => {});
         })
         .catch(() => {});
     },
@@ -278,6 +321,233 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       redis: redisOk ? 'ok' : 'error',
     });
   });
+
+  app.get(
+    '/api/realtime/push/vapid-public-key',
+    { preHandler: [requireAuth] },
+    async () => {
+      const publicKey = await pushNotifications.getPublicKey();
+      return { publicKey };
+    },
+  );
+
+  app.post(
+    '/api/realtime/push/subscribe',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const userAgent =
+        typeof request.headers['user-agent'] === 'string' ? request.headers['user-agent'] : null;
+      const result = await pushNotifications.subscribe(user.id, request.body, userAgent);
+      const endpointRaw = (request.body as { endpoint?: unknown } | undefined)?.endpoint;
+      let endpointHost: string | undefined;
+      if (typeof endpointRaw === 'string') {
+        try {
+          endpointHost = new URL(endpointRaw).host;
+        } catch {
+          endpointHost = undefined;
+        }
+      }
+      loggerHandle.logger.info(
+        {
+          action: 'push.subscribed',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          endpointHost,
+        },
+        `${user.username} enabled Web Push notifications${endpointHost ? ` (${endpointHost})` : ''}`,
+      );
+      return result;
+    },
+  );
+
+  app.delete(
+    '/api/realtime/push/subscribe',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const result = await pushNotifications.unsubscribe(user.id, request.body);
+      loggerHandle.logger.info(
+        {
+          action: 'push.unsubscribed',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          unsubscribed: result.unsubscribed,
+        },
+        `${user.username} disabled Web Push notifications`,
+      );
+      return result;
+    },
+  );
+
+  app.post(
+    '/api/realtime/push/test',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const result = await pushNotifications.sendTestNotification(user.id, user.username);
+      loggerHandle.logger.info(
+        {
+          action: 'push.test_sent',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          sent: result.sent,
+          failed: result.failed,
+        },
+        `${user.username} triggered a test Web Push alert (sent=${result.sent}, failed=${result.failed})`,
+      );
+      return result;
+    },
+  );
+
+  app.get(
+    '/api/realtime/share-links',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const links = await shareLinks.listShareLinks(
+        request.authUser!,
+        resolveRequestOrigin(request),
+      );
+      return { links };
+    },
+  );
+
+  app.post(
+    '/api/realtime/share-links',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest, reply) => {
+      const user = request.authUser!;
+      const link = await shareLinks.createShareLink(
+        user,
+        request.body,
+        resolveRequestOrigin(request),
+      );
+      loggerHandle.logger.info(
+        {
+          action: 'share_link.created',
+          userId: user.id,
+          username: user.username,
+          groupId: link.groupId,
+          allowGuestSharing: link.allowGuestSharing,
+          expiresAt: link.expiresAt,
+        },
+        `${user.username} created temporary guest share link (${link.allowGuestSharing ? 'mutual' : 'view-only'})`,
+      );
+      return reply.code(201).send({ link });
+    },
+  );
+
+  app.delete(
+    '/api/realtime/share-links/:token',
+    { preHandler: [requireAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const { token } = request.params as { token: string };
+      const res = await shareLinks.revokeShareLink(user, token);
+      loggerHandle.logger.info(
+        { action: 'share_link.revoked', userId: user.id, username: user.username },
+        `${user.username} revoked temporary guest share link`,
+      );
+      return res;
+    },
+  );
+
+  const rateLimitDisabled =
+    options.rateLimit?.disabled ?? process.env.RATE_LIMIT_ENABLED === 'false';
+  const publicShareWindowMs =
+    options.rateLimit?.windowMs ??
+    (Number.parseInt(process.env.RATE_LIMIT_SHARE_WINDOW_MS ?? '', 10) || 60 * 1000);
+  const publicShareReadMax =
+    options.rateLimit?.publicShareReadMax ??
+    (Number.parseInt(process.env.RATE_LIMIT_SHARE_READ_MAX ?? '', 10) || 60);
+  const publicSharePingMax =
+    options.rateLimit?.publicSharePingMax ??
+    (Number.parseInt(process.env.RATE_LIMIT_SHARE_PING_MAX ?? '', 10) || 30);
+  const trustCloudflareHeaders =
+    options.trustCloudflareHeaders ??
+    process.env.TRUST_CLOUDFLARE_HEADERS?.trim().toLowerCase() === 'true';
+
+  const publicShareReadRateLimit = createRateLimiter({
+    prefix: 'share-read',
+    max: publicShareReadMax,
+    windowMs: publicShareWindowMs,
+    redis,
+    disabled: rateLimitDisabled,
+    trustCloudflareHeaders,
+  });
+  const publicSharePingRateLimit = createRateLimiter({
+    prefix: 'share-ping',
+    max: publicSharePingMax,
+    windowMs: publicShareWindowMs,
+    redis,
+    disabled: rateLimitDisabled,
+    trustCloudflareHeaders,
+  });
+
+  app.get(
+    '/api/realtime/public/share/:token',
+    { preHandler: [publicShareReadRateLimit] },
+    async (request, reply) => {
+      const { token } = request.params as { token: string };
+      reply.header('Cache-Control', 'no-store');
+      return shareLinks.getPublicShareSnapshot(token);
+    },
+  );
+
+  app.post(
+    '/api/realtime/public/share/:token/ping',
+    { preHandler: [publicSharePingRateLimit] },
+    async (request, reply) => {
+      const { token } = request.params as { token: string };
+      reply.header('Cache-Control', 'no-store');
+      const result = await shareLinks.upsertGuestPing(token, request.body);
+      const guestName =
+        typeof (request.body as { displayName?: unknown } | undefined)?.displayName === 'string'
+          ? (request.body as { displayName: string }).displayName.trim()
+          : 'Guest';
+      loggerHandle.logger.info(
+        {
+          action: 'share_link.guest_ping',
+          guestId: result.guestId,
+          guestName,
+          creatorUserId: result.snapshot.creator.userId,
+          creatorUsername: result.snapshot.creator.username,
+          activeGuests: result.snapshot.guests.length,
+        },
+        `Guest "${guestName}" updated live location on ${result.snapshot.creator.username}'s share link (${result.snapshot.guests.length} active guest(s))`,
+      );
+      return result;
+    },
+  );
+
+  app.delete(
+    '/api/realtime/public/share/:token/ping',
+    { preHandler: [publicSharePingRateLimit] },
+    async (request, reply) => {
+      const { token } = request.params as { token: string };
+      reply.header('Cache-Control', 'no-store');
+      const result = await shareLinks.stopGuestPing(token, request.body);
+      const guestId =
+        typeof (request.body as { guestId?: unknown } | undefined)?.guestId === 'string'
+          ? (request.body as { guestId: string }).guestId
+          : undefined;
+      loggerHandle.logger.info(
+        {
+          action: 'share_link.guest_stopped',
+          guestId,
+          stopped: result.stopped,
+          creatorUserId: result.snapshot.creator.userId,
+          creatorUsername: result.snapshot.creator.username,
+          activeGuests: result.snapshot.guests.length,
+        },
+        `Guest stopped sharing location on ${result.snapshot.creator.username}'s share link (${result.snapshot.guests.length} active guest(s) remaining)`,
+      );
+      return result;
+    },
+  );
 
   app.post(
     '/api/realtime/locations',
@@ -402,6 +672,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       });
       const groupName = await resolveGroupName(groupId);
       const preview = truncatePreview(message.content);
+      void pushNotifications.notifyChatMessage(message, groupName).catch(() => {});
       loggerHandle.logger.info(
         {
           action: 'chat.message_sent',
@@ -441,6 +712,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         request.body,
       );
       const groupName = await resolveGroupName(groupId);
+      void pushNotifications.notifyCheckInRequest(created, groupName).catch(() => {});
       loggerHandle.logger.info(
         {
           action: 'checkin.requested',
@@ -476,6 +748,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         request.body,
       );
       const groupName = await resolveGroupName(groupId);
+      void pushNotifications.notifyCheckInResponse(res.request, groupName).catch(() => {});
       loggerHandle.logger.info(
         {
           action: 'checkin.responded',
@@ -609,7 +882,21 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     async (request: AuthenticatedRequest) => {
       const user = request.authUser!;
       const { placeId } = request.params as { placeId: string };
+      const before = await resolveAuditContext(pool, { userId: user.id, placeId });
       await realtime.deletePlace(user, placeId);
+      const actorName = before.actorUsername ?? user.username;
+      const placeName = before.placeName ?? placeId;
+      loggerHandle.logger.info(
+        {
+          action: 'place.deleted',
+          userId: user.id,
+          username: actorName,
+          email: user.email,
+          placeId,
+          placeName,
+        },
+        `${actorName} deleted place "${placeName}"`,
+      );
       return { ok: true };
     },
   );
@@ -640,9 +927,52 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     }
   });
 
+  const socketJoinThrottle = createEventThrottle({
+    max: 30,
+    windowMs: 60_000,
+    disabled: rateLimitDisabled,
+  });
+  const socketLocationThrottle = createEventThrottle({
+    max: 60,
+    windowMs: 60_000,
+    disabled: rateLimitDisabled,
+  });
+  const socketChatThrottle = createEventThrottle({
+    max: 30,
+    windowMs: 60_000,
+    disabled: rateLimitDisabled,
+  });
+  const socketCheckInThrottle = createEventThrottle({
+    max: 20,
+    windowMs: 60_000,
+    disabled: rateLimitDisabled,
+  });
+
   io.on('connection', (socket: Socket) => {
     const user = socket.data.user as JwtUserPayload;
     const groupIds = (socket.data.groupIds as string[] | undefined) ?? [];
+
+    const checkSocketRate = (
+      eventName: string,
+      throttle: ReturnType<typeof createEventThrottle>,
+      ack?: (res: { ok: boolean; error?: string }) => void,
+    ): boolean => {
+      const result = throttle.consume(socket.id);
+      if (result.allowed) return true;
+      loggerHandle.logger.warn(
+        {
+          action: 'socket.rate_limited',
+          event: eventName,
+          userId: user.id,
+          username: user.username,
+          socketId: socket.id,
+          retryAfterMs: result.retryAfterMs,
+        },
+        `${user.username} hit Socket.io rate limit on ${eventName}`,
+      );
+      ack?.({ ok: false, error: 'Too many requests. Please slow down.' });
+      return false;
+    };
 
     void socket.join(`user:${user.id}`);
     for (const gid of groupIds) {
@@ -668,7 +998,8 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
       `${user.username} (${user.email}) connected live socket`,
     );
 
-    socket.on('group:join', async (groupId: string, ack?: (res: { ok: boolean }) => void) => {
+    socket.on('group:join', async (groupId: string, ack?: (res: { ok: boolean; error?: string }) => void) => {
+      if (!checkSocketRate('group:join', socketJoinThrottle, ack)) return;
       try {
         if (typeof groupId === 'string' && (await realtime.canJoinGroupRoom(user.id, groupId))) {
           await socket.join(`group:${groupId}`);
@@ -699,6 +1030,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         payload: unknown,
         ack?: (res: { ok: boolean; inserted?: number; error?: string }) => void,
       ) => {
+        if (!checkSocketRate('location:batch', socketLocationThrottle, ack)) return;
         const startMs = performance.now();
         try {
           const inserted = await realtime.ingestLocationBatch(user, payload);
@@ -729,6 +1061,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         payload: unknown,
         ack?: (res: { ok: boolean; message?: unknown; error?: string }) => void,
       ) => {
+        if (!checkSocketRate('chat:send', socketChatThrottle, ack)) return;
         const startMs = performance.now();
         try {
           const message = await realtime.sendChatMessage(user, payload);
@@ -736,6 +1069,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
           await recordUserTelemetry(redis, user.id, elapsedMs, 1);
           const groupName = await resolveGroupName(message.groupId);
           const preview = truncatePreview(message.content);
+          void pushNotifications.notifyChatMessage(message, groupName).catch(() => {});
           loggerHandle.logger.info(
             {
               action: 'chat.message_sent',
@@ -763,10 +1097,12 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         payload: { groupId?: string } & Record<string, unknown>,
         ack?: (res: { ok: boolean; request?: unknown; error?: string }) => void,
       ) => {
+        if (!checkSocketRate('checkin:request', socketCheckInThrottle, ack)) return;
         try {
           const groupId = typeof payload?.groupId === 'string' ? payload.groupId : '';
           const created = await realtime.createCheckInRequest(user, groupId, payload);
           const groupName = await resolveGroupName(groupId);
+          void pushNotifications.notifyCheckInRequest(created, groupName).catch(() => {});
           loggerHandle.logger.info(
             {
               action: 'checkin.requested',
@@ -798,11 +1134,13 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         payload: { groupId?: string; requestId?: string } & Record<string, unknown>,
         ack?: (res: { ok: boolean; request?: unknown; privacyOverrideUntil?: string | null; error?: string }) => void,
       ) => {
+        if (!checkSocketRate('checkin:respond', socketCheckInThrottle, ack)) return;
         try {
           const groupId = typeof payload?.groupId === 'string' ? payload.groupId : '';
           const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
           const res = await realtime.respondToCheckInRequest(user, groupId, requestId, payload);
           const groupName = await resolveGroupName(groupId);
+          void pushNotifications.notifyCheckInResponse(res.request, groupName).catch(() => {});
           loggerHandle.logger.info(
             {
               action: 'checkin.responded',
@@ -829,6 +1167,10 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     );
 
     socket.on('disconnect', () => {
+      socketJoinThrottle.clearKey(socket.id);
+      socketLocationThrottle.clearKey(socket.id);
+      socketChatThrottle.clearKey(socket.id);
+      socketCheckInThrottle.clearKey(socket.id);
       void trackUserSocket(redis, user.id, socket.id, 'disconnect').catch(() => {});
       loggerHandle.logger.info(
         {

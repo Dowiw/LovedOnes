@@ -12,6 +12,7 @@ import {
   CloudDownload,
   Compass,
   Copy,
+  Download,
   EyeOff,
   Globe,
   KeyRound,
@@ -22,6 +23,9 @@ import {
   MapPin,
   Menu,
   MessageSquare,
+  Monitor,
+  Moon,
+  Navigation,
   PanelRight,
   Plus,
   QrCode,
@@ -29,11 +33,15 @@ import {
   Route,
   Send,
   Settings,
+  Share2,
+  Smartphone,
+  Sun,
   Trash2,
   Users,
   X,
 } from 'lucide-react';
 import {
+  buildExternalMapsUrls,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
   withMinDelay,
@@ -42,12 +50,14 @@ import {
   type GroupPlace,
   type LocationBroadcast,
   type LocationRequestItem,
+  type LocationShareLinkItem,
   type MapDownloadJob,
   type MapRegion,
   type PlaceTransitionEvent,
   type PrivacyMode,
 } from '@loved-ones/shared';
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
+import { BrandMark } from '@/components/BrandMark';
 import { MapCanvas, type MapLabelLanguage } from '@/components/MapCanvas';
 import { QrJoinModal } from '@/components/QrJoinModal';
 import {
@@ -56,6 +66,7 @@ import {
   apiCreateGroup,
   apiCreatePlace,
   apiCreateLocationRequest,
+  apiCreateShareLink,
   apiCreateTrackerToken,
   apiDeletePlace,
   apiFetchAccessiblePlaces,
@@ -70,14 +81,17 @@ import {
   apiGetMe,
   apiGetTrackerTokenStatus,
   apiJoinInvite,
+  apiListShareLinks,
   apiLogin,
   apiRegister,
   apiRequestMapDownload,
   apiRequestPasswordReset,
   apiResetPasswordWithCode,
   apiRespondLocationRequest,
+  apiRevokeShareLink,
   apiRevokeTrackerToken,
   apiSendLocationBatch,
+  apiTestWebPush,
   apiUpdatePrivacy,
   formatBytes,
   getServiceBaseUrls,
@@ -90,6 +104,21 @@ import {
   TrackerTokenResponse,
   triggerAccountRemovedNotification,
 } from '@/lib/api';
+import {
+  type BeforeInstallPromptEvent,
+  getExistingPushSubscription,
+  isIosSafariNeedingInstall,
+  isWebPushSupported,
+  registerServiceWorker,
+  subscribeToWebPush,
+  unsubscribeFromWebPush,
+} from '@/lib/pwaPush';
+import {
+  MAP_THEME_STORAGE_KEY,
+  type MapThemePreference,
+  parseMapThemePreference,
+  resolveMapTheme,
+} from '@/lib/mapTheme';
 
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
 type MapViewMode = 'live' | 'trails' | 'places';
@@ -191,6 +220,14 @@ export default function HomePage() {
   const [trackerFeedback, setTrackerFeedback] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
+  const [shareLinksOpen, setShareLinksOpen] = useState(false);
+  const [shareDurationMinutes, setShareDurationMinutes] = useState<number>(60);
+  const [shareLabelInput, setShareLabelInput] = useState('');
+  const [shareAllowMutual, setShareAllowMutual] = useState(true);
+  const [shareLinks, setShareLinks] = useState<LocationShareLinkItem[]>([]);
+  const [shareLinkBusy, setShareLinkBusy] = useState(false);
+  const [shareLinkError, setShareLinkError] = useState<string | null>(null);
+
   const [privacySavingMode, setPrivacySavingMode] = useState<PrivacyMode | null>(null);
   const [privacyFeedback, setPrivacyFeedback] = useState<PrivacyMode | null>(null);
   const [sendingTestPing, setSendingTestPing] = useState(false);
@@ -227,7 +264,18 @@ export default function HomePage() {
   const [browserNotifyPermission, setBrowserNotifyPermission] = useState<
     NotificationPermission | 'unsupported'
   >('unsupported');
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushFeedback, setPushFeedback] = useState<string | null>(null);
+  const [pushError, setPushError] = useState<string | null>(null);
+  const [installPromptEvent, setInstallPromptEvent] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [isStandalonePwa, setIsStandalonePwa] = useState(false);
+  const [needsIosInstallForPush, setNeedsIosInstallForPush] = useState(false);
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
+  const [mapThemePreference, setMapThemePreference] = useState<MapThemePreference>('system');
+  const [systemPrefersDark, setSystemPrefersDark] = useState(false);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
   const [mapRegionsLoaded, setMapRegionsLoaded] = useState(false);
   const [regionsRevision, setRegionsRevision] = useState(0);
@@ -270,6 +318,8 @@ export default function HomePage() {
       if (savedLang === 'en' || savedLang === 'local') {
         setLabelLanguage(savedLang);
       }
+      const savedTheme = window.localStorage.getItem(MAP_THEME_STORAGE_KEY);
+      setMapThemePreference(parseMapThemePreference(savedTheme));
       const savedAlerts = window.localStorage.getItem('lovedones_chat_alerts_v1');
       if (savedAlerts === 'off') {
         setChatAlertsEnabled(false);
@@ -281,6 +331,64 @@ export default function HomePage() {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setBrowserNotifyPermission(Notification.permission);
     }
+
+    const standalone =
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(display-mode: standalone)').matches ||
+        Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
+    setIsStandalonePwa(standalone);
+    setNeedsIosInstallForPush(isIosSafariNeedingInstall(navigator.userAgent, standalone));
+    setPushSupported(isWebPushSupported());
+
+    void registerServiceWorker().then(async () => {
+      const existing = await getExistingPushSubscription();
+      setPushSubscribed(Boolean(existing));
+    });
+
+    const onBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallPromptEvent(e as BeforeInstallPromptEvent);
+    };
+    const onAppInstalled = () => {
+      setInstallPromptEvent(null);
+      setIsStandalonePwa(true);
+      setNeedsIosInstallForPush(false);
+    };
+    const onServiceWorkerMessage = (event: MessageEvent) => {
+      const data = event.data as
+        | { type?: string; groupId?: string; tab?: InspectorTab }
+        | undefined;
+      if (data?.type !== 'LO_OPEN_NOTIFICATION') return;
+      if (data.groupId) {
+        setActiveGroupId(data.groupId);
+      }
+      if (
+        data.tab === 'people' ||
+        data.tab === 'chat' ||
+        data.tab === 'places' ||
+        data.tab === 'requests'
+      ) {
+        setRightOpen(true);
+        setInspectorTab(data.tab);
+        if (data.tab === 'chat') {
+          setUnreadChatCount(0);
+          setChatToast(null);
+        }
+      }
+    };
+
+    const darkMedia = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (darkMedia) {
+      setSystemPrefersDark(darkMedia.matches);
+    }
+    const onColorSchemeChange = (e: MediaQueryListEvent) => {
+      setSystemPrefersDark(e.matches);
+    };
+    darkMedia?.addEventListener?.('change', onColorSchemeChange);
+
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+    window.addEventListener('appinstalled', onAppInstalled);
+    navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage);
 
     const onSessionSync = (event: Event) => {
       const custom = event as CustomEvent<StoredSession | null>;
@@ -302,9 +410,31 @@ export default function HomePage() {
       handleSignOut();
     };
     const params = new URLSearchParams(window.location.search);
+    const initialGroupId = params.get('groupId');
+    const initialTab = params.get('tab');
+    let searchChanged = false;
     if (params.get('removed') === '1') {
       setRemovedToast(ACCOUNT_REMOVED_DEFAULT_MESSAGE);
       params.delete('removed');
+      searchChanged = true;
+    }
+    if (initialGroupId) {
+      setActiveGroupId(initialGroupId);
+      params.delete('groupId');
+      searchChanged = true;
+    }
+    if (
+      initialTab === 'people' ||
+      initialTab === 'chat' ||
+      initialTab === 'places' ||
+      initialTab === 'requests'
+    ) {
+      setRightOpen(true);
+      setInspectorTab(initialTab);
+      params.delete('tab');
+      searchChanged = true;
+    }
+    if (searchChanged) {
       const nextSearch = params.toString();
       window.history.replaceState(
         {},
@@ -317,6 +447,10 @@ export default function HomePage() {
     return () => {
       window.removeEventListener(SESSION_UPDATED_EVENT, onSessionSync);
       window.removeEventListener(ACCOUNT_REMOVED_EVENT, onAccountRemoved);
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', onAppInstalled);
+      darkMedia?.removeEventListener?.('change', onColorSchemeChange);
+      navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage);
       if (chatToastTimerRef.current !== null) {
         window.clearTimeout(chatToastTimerRef.current);
       }
@@ -331,6 +465,17 @@ export default function HomePage() {
       // ignore storage failures
     }
   }
+
+  function handleChangeMapTheme(pref: MapThemePreference) {
+    setMapThemePreference(pref);
+    try {
+      window.localStorage.setItem(MAP_THEME_STORAGE_KEY, pref);
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  const resolvedMapTheme = resolveMapTheme(mapThemePreference, systemPrefersDark);
 
   function handleToggleChatAlerts() {
     setChatAlertsEnabled((prev) => {
@@ -347,10 +492,75 @@ export default function HomePage() {
   async function handleEnableBrowserNotifications() {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
     try {
+      if (pushSupported && session?.accessToken) {
+        await subscribeToWebPush(session.accessToken);
+        setPushSubscribed(true);
+        setBrowserNotifyPermission(Notification.permission);
+        return;
+      }
       const result = await Notification.requestPermission();
       setBrowserNotifyPermission(result);
     } catch {
-      // ignore unsupported environments
+      if ('Notification' in window) {
+        setBrowserNotifyPermission(Notification.permission);
+      }
+    }
+  }
+
+  async function handleToggleWebPush() {
+    if (!session) return;
+    setPushError(null);
+    setPushFeedback(null);
+    setPushBusy(true);
+    try {
+      if (pushSubscribed) {
+        await unsubscribeFromWebPush(session.accessToken);
+        setPushSubscribed(false);
+        setPushFeedback('Push alerts disabled');
+      } else {
+        await subscribeToWebPush(session.accessToken);
+        setPushSubscribed(true);
+        if (typeof window !== 'undefined' && 'Notification' in window) {
+          setBrowserNotifyPermission(Notification.permission);
+        }
+        setPushFeedback('Background push alerts enabled');
+      }
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'Failed to update push alerts');
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function handleTestWebPush() {
+    if (!session) return;
+    setPushError(null);
+    setPushFeedback(null);
+    setPushBusy(true);
+    try {
+      const res = await apiTestWebPush(session.accessToken);
+      if (res.sent > 0) {
+        setPushFeedback(`Test notification sent (${res.sent})`);
+      } else {
+        setPushError('No active push subscription delivered — try re-enabling alerts.');
+      }
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'Failed to send test push');
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function handleInstallPwa() {
+    if (!installPromptEvent) return;
+    try {
+      await installPromptEvent.prompt();
+      const choice = await installPromptEvent.userChoice;
+      if (choice.outcome === 'accepted') {
+        setInstallPromptEvent(null);
+      }
+    } catch {
+      // ignore cancelled install prompt
     }
   }
 
@@ -405,7 +615,46 @@ export default function HomePage() {
   useEffect(() => {
     if (!session) return;
     void refreshMapRegions(false);
+    void apiListShareLinks(session.accessToken)
+      .then(setShareLinks)
+      .catch(() => {});
   }, [session, refreshMapRegions]);
+
+  async function handleCreateShareLink() {
+    if (!session || !activeGroup) return;
+    setShareLinkError(null);
+    setShareLinkBusy(true);
+    try {
+      const created = await withMinDelay(
+        apiCreateShareLink(session.accessToken, {
+          groupId: activeGroup.id,
+          durationMinutes: shareDurationMinutes,
+          label: shareLabelInput.trim() || undefined,
+          allowGuestSharing: shareAllowMutual,
+        }),
+      );
+      setShareLinks((prev) => [created, ...prev]);
+      setShareLabelInput('');
+    } catch (err) {
+      setShareLinkError(err instanceof Error ? err.message : 'Failed to create share link');
+    } finally {
+      setShareLinkBusy(false);
+    }
+  }
+
+  async function handleRevokeShareLink(token: string) {
+    if (!session) return;
+    setShareLinkError(null);
+    setShareLinkBusy(true);
+    try {
+      await apiRevokeShareLink(session.accessToken, token);
+      setShareLinks((prev) => prev.filter((item) => item.token !== token));
+    } catch (err) {
+      setShareLinkError(err instanceof Error ? err.message : 'Failed to revoke share link');
+    } finally {
+      setShareLinkBusy(false);
+    }
+  }
 
   const activeMapJob = useMemo(
     () =>
@@ -1177,6 +1426,9 @@ export default function HomePage() {
   }
 
   function handleSignOut() {
+    const token = loadSession()?.accessToken;
+    void unsubscribeFromWebPush(token);
+    setPushSubscribed(false);
     setGeoSharing(false);
     saveSession(null);
     setSession(null);
@@ -1354,7 +1606,7 @@ export default function HomePage() {
 
   if (!session) {
     return (
-      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f4f4f5] px-4">
+      <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#f4f4f5] pb-[calc(1.5rem+var(--lo-safe-bottom,0px))] pl-[calc(1rem+var(--lo-safe-left,0px))] pr-[calc(1rem+var(--lo-safe-right,0px))] pt-[calc(1.5rem+var(--lo-safe-top,0px))]">
         <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl" />
         <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl" />
 
@@ -1362,7 +1614,7 @@ export default function HomePage() {
           <div
             role="status"
             aria-live="assertive"
-            className="lo-feedback-in fixed inset-x-4 top-5 z-50 mx-auto flex max-w-md items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/95 px-4 py-3 text-xs text-rose-800 shadow-[0_14px_32px_rgba(190,18,60,0.16)] backdrop-blur-md"
+            className="lo-feedback-in fixed inset-x-4 top-[calc(1.25rem+var(--lo-safe-top,0px))] z-50 mx-auto flex max-w-md items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/95 px-4 py-3 text-xs text-rose-800 shadow-[0_14px_32px_rgba(190,18,60,0.16)] backdrop-blur-md"
           >
             <Bell className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
             <div>
@@ -1375,7 +1627,7 @@ export default function HomePage() {
         <div className="lo-float-in relative w-full max-w-md rounded-xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
           <div className="mb-6 flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white">
-              <MapPin className="h-5 w-5" />
+              <BrandMark className="h-6 w-6" />
             </span>
             <div>
               <h1 className="text-lg font-bold tracking-tight text-zinc-900">LovedOnes</h1>
@@ -1697,7 +1949,12 @@ export default function HomePage() {
   }
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#cfe3ee]">
+    <div
+      data-map-theme={resolvedMapTheme}
+      className={`lo-app-shell relative w-full overflow-hidden transition-colors duration-300 ${
+        resolvedMapTheme === 'dark' ? 'bg-[#0c141d]' : 'bg-[#cfe3ee]'
+      }`}
+    >
       {/* Full-bleed Map Canvas */}
       <MapCanvas
         locations={mapViewMode === 'places' ? [] : locations}
@@ -1717,6 +1974,7 @@ export default function HomePage() {
         draftPlace={draftPlace}
         pickingPlace={isPickingPlace}
         labelLanguage={labelLanguage}
+        mapTheme={resolvedMapTheme}
         onViewportChange={setMapViewport}
         onMapSelectCoords={(lat, lon) => {
           if (!isPickingPlace) return;
@@ -1728,7 +1986,7 @@ export default function HomePage() {
       {/* Server Update Reload Banner (when web tab stayed open across a server release) */}
       {webVersionInfo?.updateAvailable &&
         dismissedWebUpdateVersion !== webVersionInfo.serverVersion && (
-          <div className="pointer-events-none fixed left-1/2 top-4 z-30 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2">
+          <div className="pointer-events-none fixed left-1/2 top-[calc(1rem+var(--lo-safe-top,0px))] z-30 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2">
             <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-3 rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.12)] backdrop-blur-xl">
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold text-zinc-950">
@@ -1764,7 +2022,7 @@ export default function HomePage() {
         (uncoveredTarget &&
           dismissedUncoveredKey !== uncoveredTarget.coordKey &&
           (allowMemberMapDownloads || session.user.role === 'HOST_ADMIN'))) && (
-        <div className="pointer-events-none fixed left-1/2 top-16 z-20 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 md:top-4">
+        <div className="pointer-events-none fixed left-1/2 top-[calc(4rem+var(--lo-safe-top,0px))] z-20 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 md:top-[calc(1rem+var(--lo-safe-top,0px))]">
           <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.1)] backdrop-blur-xl">
             {activeMapJob ? (
               <div className="space-y-1.5">
@@ -1856,7 +2114,7 @@ export default function HomePage() {
 
       {/* Incoming Chat Toast Notification */}
       {chatToast && (
-        <div className="pointer-events-none fixed left-1/2 top-3 z-30 w-[calc(100vw-1.5rem)] max-w-sm -translate-x-1/2 sm:top-4">
+        <div className="pointer-events-none fixed left-1/2 top-[calc(0.75rem+var(--lo-safe-top,0px))] z-30 w-[calc(100vw-1.5rem)] max-w-sm -translate-x-1/2 sm:top-[calc(1rem+var(--lo-safe-top,0px))]">
           <div className="lo-float-in pointer-events-auto flex items-start gap-2.5 rounded-xl border border-zinc-200/90 bg-white/95 p-3 shadow-[0_14px_38px_rgba(15,23,42,0.16)] backdrop-blur-xl">
             <button
               type="button"
@@ -1900,7 +2158,7 @@ export default function HomePage() {
       {/* Top-Left Calm Capsule & Progressive Disclosure Popovers */}
       <div
         ref={leftDockRef}
-        className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col gap-2.5 sm:left-4 sm:top-4 sm:w-[316px]"
+        className="pointer-events-none absolute left-[calc(0.75rem+var(--lo-safe-left,0px))] top-[calc(0.75rem+var(--lo-safe-top,0px))] z-20 flex max-w-[calc(100vw-1.5rem-var(--lo-safe-left,0px)-var(--lo-safe-right,0px))] flex-col gap-2.5 sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:top-[calc(1rem+var(--lo-safe-top,0px))] sm:w-[316px]"
       >
         <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-1.5 rounded-xl border border-zinc-200/80 bg-white/92 p-1.5 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
           <button
@@ -2146,7 +2404,7 @@ export default function HomePage() {
         )}
 
         {menuOpen && (
-          <div className="lo-float-in pointer-events-auto max-h-[calc(100vh-5.5rem)] space-y-3 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+          <div className="lo-float-in pointer-events-auto max-h-[calc(var(--lo-app-height,100dvh)-5.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))] space-y-3 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl">
             {/* Live GPS Beacon */}
             <div>
               <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
@@ -2198,6 +2456,41 @@ export default function HomePage() {
               {geoStatus && (
                 <p className="mt-2 truncate font-mono text-[11px] text-zinc-500">{geoStatus}</p>
               )}
+            </div>
+
+            {/* Map Theme (Auto / Light / Dark) */}
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                {resolvedMapTheme === 'dark' ? (
+                  <Moon className="h-3.5 w-3.5 text-zinc-500" />
+                ) : (
+                  <Sun className="h-3.5 w-3.5 text-zinc-500" />
+                )}
+                Map Theme
+              </div>
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5">
+                {(
+                  [
+                    ['system', 'Auto', Monitor],
+                    ['light', 'Light', Sun],
+                    ['dark', 'Dark', Moon],
+                  ] as const
+                ).map(([pref, label, Icon]) => (
+                  <button
+                    key={pref}
+                    type="button"
+                    onClick={() => handleChangeMapTheme(pref)}
+                    className={`lo-press flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold transition ${
+                      mapThemePreference === pref
+                        ? 'bg-zinc-950 text-white shadow-sm'
+                        : 'text-zinc-600 hover:text-zinc-950'
+                    }`}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Map Label Language */}
@@ -2300,6 +2593,144 @@ export default function HomePage() {
                         {activeMapJob ? 'Download in progress…' : 'Download map for current view'}
                       </button>
                     )}
+                </div>
+              )}
+            </div>
+
+            {/* Guest Share Links (Temporary Meetup Links) */}
+            <div className="border-t border-zinc-100 pt-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setShareLinksOpen((v) => !v);
+                  if (!shareLinksOpen && session) {
+                    void apiListShareLinks(session.accessToken).then(setShareLinks).catch(() => {});
+                  }
+                }}
+                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100"
+              >
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                  <Share2 className="h-3.5 w-3.5 text-zinc-500" />
+                  Guest Share Links
+                </span>
+                <span className="flex items-center gap-1.5">
+                  {shareLinks.length > 0 && (
+                    <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white">
+                      {shareLinks.length}
+                    </span>
+                  )}
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform ${
+                      shareLinksOpen ? 'rotate-180 text-zinc-800' : ''
+                    }`}
+                  />
+                </span>
+              </button>
+
+              {shareLinksOpen && (
+                <div className="mt-2 space-y-2.5 px-1">
+                  <p className="text-[11px] leading-snug text-zinc-500">
+                    Share an isolated link with people outside your group. Only participants on the
+                    same link see each other.
+                  </p>
+                  <input
+                    type="text"
+                    maxLength={80}
+                    value={shareLabelInput}
+                    onChange={(e) => setShareLabelInput(e.target.value)}
+                    placeholder="Label (optional, e.g. Meetup)"
+                    className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                  />
+                  <label className="flex items-center gap-2 text-[11px] text-zinc-700">
+                    <input
+                      type="checkbox"
+                      checked={shareAllowMutual}
+                      onChange={(e) => setShareAllowMutual(e.target.checked)}
+                      className="rounded border-zinc-300"
+                    />
+                    Allow guests on this link to share back
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={shareDurationMinutes}
+                      onChange={(e) => setShareDurationMinutes(Number(e.target.value))}
+                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    >
+                      <option value={15}>15 min</option>
+                      <option value={60}>1 hour</option>
+                      <option value={240}>4 hours</option>
+                      <option value={1440}>24 hours</option>
+                    </select>
+                    <button
+                      type="button"
+                      disabled={shareLinkBusy || !activeGroup || activeGroup.myRole === 'SPECTATOR'}
+                      onClick={() => void handleCreateShareLink()}
+                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      {shareLinkBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                      Create Link
+                    </button>
+                  </div>
+                  {shareLinkError && (
+                    <p className="text-[11px] text-rose-600">{shareLinkError}</p>
+                  )}
+                  {shareLinks.length > 0 && (
+                    <div className="space-y-1.5">
+                      {shareLinks.map((item) => {
+                        const resolvedUrl =
+                          typeof window !== 'undefined'
+                            ? `${window.location.origin}/share/${item.token}`
+                            : item.shareUrl;
+                        return (
+                          <div
+                            key={item.token}
+                            className="space-y-1.5 rounded-lg border border-zinc-200/80 bg-zinc-50 p-2 text-[10px]"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate font-semibold text-zinc-900">
+                                {item.label ?? `${item.groupName} Share`}
+                              </span>
+                              <span className="shrink-0 text-zinc-500">
+                                {item.allowGuestSharing
+                                  ? `${item.activeGuestCount} guest${item.activeGuestCount === 1 ? '' : 's'}`
+                                  : 'View-only'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <input
+                                readOnly
+                                value={resolvedUrl}
+                                className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[10px] text-zinc-700"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleCopyText(`share:${item.token}`, resolvedUrl)}
+                                className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 hover:bg-zinc-100"
+                              >
+                                {copiedField === `share:${item.token}` ? 'Copied' : 'Copy'}
+                              </button>
+                              <Link
+                                href={`/share/${item.token}`}
+                                target="_blank"
+                                className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 hover:bg-zinc-100"
+                              >
+                                Open
+                              </Link>
+                              <button
+                                type="button"
+                                disabled={shareLinkBusy}
+                                onClick={() => void handleRevokeShareLink(item.token)}
+                                title="Revoke share link"
+                                className="shrink-0 rounded-md border border-rose-200 bg-rose-50 p-1 text-rose-600 hover:bg-rose-100"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2417,6 +2848,88 @@ export default function HomePage() {
               )}
             </div>
 
+            {/* Install App & Background Push Alerts (PWA) */}
+            <div className="space-y-2 border-t border-zinc-100 pt-2.5">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+                  <Smartphone className="h-3.5 w-3.5 text-zinc-500" />
+                  App &amp; Push Alerts
+                </span>
+                {isStandalonePwa && (
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700">
+                    Installed
+                  </span>
+                )}
+              </div>
+
+              {installPromptEvent && !isStandalonePwa && (
+                <button
+                  type="button"
+                  onClick={() => void handleInstallPwa()}
+                  className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-100"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Install LovedOnes App
+                </button>
+              )}
+
+              {needsIosInstallForPush && (
+                <p className="rounded-lg border border-zinc-200/80 bg-zinc-50 px-2.5 py-2 text-[11px] leading-snug text-zinc-600">
+                  On iOS Safari, tap <span className="font-semibold text-zinc-900">Share</span> →{' '}
+                  <span className="font-semibold text-zinc-900">Add to Home Screen</span> to unlock
+                  background push alerts.
+                </p>
+              )}
+
+              {pushSupported && !needsIosInstallForPush && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={pushBusy}
+                    onClick={() => void handleToggleWebPush()}
+                    className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold transition disabled:opacity-60 ${
+                      pushSubscribed
+                        ? 'border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50'
+                        : 'bg-zinc-950 text-white hover:bg-zinc-800'
+                    }`}
+                  >
+                    {pushBusy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : pushSubscribed ? (
+                      <BellOff className="h-3 w-3" />
+                    ) : (
+                      <Bell className="h-3 w-3" />
+                    )}
+                    {pushSubscribed ? 'Disable Push' : 'Enable Push Alerts'}
+                  </button>
+                  {pushSubscribed && (
+                    <button
+                      type="button"
+                      disabled={pushBusy}
+                      onClick={() => void handleTestWebPush()}
+                      className="lo-press rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+                    >
+                      Test
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {!pushSupported && !needsIosInstallForPush && (
+                <p className="text-[11px] text-zinc-400">
+                  Push alerts require HTTPS and Service Worker support.
+                </p>
+              )}
+
+              {pushError && <p className="lo-feedback-in text-[11px] text-rose-600">{pushError}</p>}
+              {pushFeedback && (
+                <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                  <Check className="h-3 w-3" />
+                  {pushFeedback}
+                </p>
+              )}
+            </div>
+
             {/* Account, Host Admin & Sign Out */}
             <div className="space-y-1 border-t border-zinc-100 pt-2.5">
               <button
@@ -2491,7 +3004,7 @@ export default function HomePage() {
       </div>
 
       {/* Top-Right Single Inspector Toggle & Floating Tabbed Inspector */}
-      <div className="pointer-events-none absolute bottom-16 left-3 right-3 z-20 flex flex-col items-end gap-2.5 md:bottom-auto md:left-auto md:right-4 md:top-4 md:w-[350px]">
+      <div className="pointer-events-none absolute bottom-[calc(4.25rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] right-[calc(0.75rem+var(--lo-safe-right,0px))] z-20 flex flex-col items-end gap-2.5 md:bottom-auto md:left-auto md:right-[calc(1rem+var(--lo-safe-right,0px))] md:top-[calc(1rem+var(--lo-safe-top,0px))] md:w-[350px]">
         <div className="lo-float-in pointer-events-auto hidden items-center md:flex">
           <button
             type="button"
@@ -2521,7 +3034,7 @@ export default function HomePage() {
         </div>
 
         {rightOpen && (
-          <div className="lo-float-in pointer-events-auto flex max-h-[44vh] w-full flex-col overflow-hidden rounded-xl border border-zinc-200/80 bg-white/92 shadow-[0_16px_44px_rgba(9,9,11,0.1)] backdrop-blur-xl md:max-h-[calc(100vh-140px)]">
+          <div className="lo-float-in pointer-events-auto flex max-h-[min(44dvh,calc(var(--lo-app-height,100dvh)-9.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px)))] w-full flex-col overflow-hidden rounded-xl border border-zinc-200/80 bg-white/92 shadow-[0_16px_44px_rgba(9,9,11,0.1)] backdrop-blur-xl md:max-h-[calc(var(--lo-app-height,100dvh)-8.75rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))]">
             {/* Segmented Pill Tabs */}
             <div className="border-b border-zinc-100 p-2">
               <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold">
@@ -2557,46 +3070,66 @@ export default function HomePage() {
             {/* People Tab */}
             {inspectorTab === 'people' && (
               <div key="tab-people" className="lo-tab-enter flex-1 space-y-1.5 overflow-y-auto p-3">
-                {locations.map((loc) => (
-                  <div
-                    key={loc.userId}
-                    className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2.5 transition hover:border-zinc-200 hover:bg-white"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setSelectedUserId(loc.userId)}
-                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                {locations.map((loc) => {
+                  const externalMaps = buildExternalMapsUrls({
+                    latitude: loc.latitude,
+                    longitude: loc.longitude,
+                    label: loc.isFuzzed ? `${loc.username} (~1km)` : loc.username,
+                    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+                  });
+                  return (
+                    <div
+                      key={loc.userId}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2.5 transition hover:border-zinc-200 hover:bg-white"
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
-                        {isSafeAvatarUrl(loc.avatarUrl) ? (
-                          <img
-                            src={loc.avatarUrl}
-                            alt={loc.username}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          loc.username.slice(0, 1).toUpperCase()
-                        )}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="truncate text-xs font-semibold text-zinc-950">
-                          {loc.username}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedUserId(loc.userId)}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                      >
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
+                          {isSafeAvatarUrl(loc.avatarUrl) ? (
+                            <img
+                              src={loc.avatarUrl}
+                              alt={loc.username}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            loc.username.slice(0, 1).toUpperCase()
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-semibold text-zinc-950">
+                            {loc.username}
+                          </div>
+                          <div className="truncate font-mono text-[10px] text-zinc-400">
+                            {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
+                          </div>
                         </div>
-                        <div className="truncate font-mono text-[10px] text-zinc-400">
-                          {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
-                        </div>
+                      </button>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${loc.isFuzzed
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-zinc-950 text-white'
+                            }`}
+                        >
+                          {loc.privacyMode}
+                        </span>
+                        <a
+                          href={externalMaps.primaryUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Open ${loc.username} in ${externalMaps.appLabel}`}
+                          aria-label={`Open ${loc.username} in default maps`}
+                          className="lo-press flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950"
+                        >
+                          <Navigation className="h-3.5 w-3.5" />
+                        </a>
                       </div>
-                    </button>
-                    <span
-                      className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${loc.isFuzzed
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-zinc-950 text-white'
-                        }`}
-                    >
-                      {loc.privacyMode}
-                    </span>
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
                 {locations.length === 0 && (
                   <div className="py-8 text-center text-xs text-zinc-400">
                     No active pins in this group yet.
@@ -2990,7 +3523,7 @@ export default function HomePage() {
       </div>
 
       {/* Bottom-Left Floating Profile Pill & Map Credits */}
-      <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden items-end gap-2 sm:bottom-4 sm:left-4 sm:flex">
+      <div className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] z-20 hidden items-end gap-2 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))] sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:flex">
         <div className="lo-float-in pointer-events-auto flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white/92 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
           <button
             type="button"
@@ -3076,8 +3609,8 @@ export default function HomePage() {
       </div>
 
       {/* Bottom-Center Floating Map View Mode Switcher */}
-      <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 sm:bottom-4">
-        <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/92 p-1 text-xs font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl">
+      <div className="pointer-events-auto absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-1/2 z-20 -translate-x-1/2 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))]">
+        <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/92 p-1 text-[11px] font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl sm:text-xs">
           {(
             [
               ['live', 'Live', MapPin],
@@ -3089,7 +3622,7 @@ export default function HomePage() {
               key={mode}
               type="button"
               onClick={() => setMapViewMode(mode)}
-              className={`lo-press flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 transition ${mapViewMode === mode
+              className={`lo-press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition sm:px-3.5 ${mapViewMode === mode
                 ? 'bg-zinc-950 text-white shadow-sm'
                 : 'text-zinc-600 hover:text-zinc-950'
                 }`}

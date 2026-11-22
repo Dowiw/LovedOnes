@@ -3,6 +3,16 @@
     "name": "LovedOnes",
     "slug": "loved-ones",
     "version": "0.1.1",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#09090b"
+    },
+    "notification": {
+      "icon": "./assets/monochrome-icon.png",
+      "color": "#09090b"
+    },
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -19,6 +29,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "org.lovedones.app",
       "buildNumber": "2",
+      "icon": "./assets/icon.png",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Share your live location with authorized family groups.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Continue sharing background location updates with your group while the app is minimized.",
@@ -32,6 +43,11 @@
     "android": {
       "package": "org.lovedones.app",
       "versionCode": 2,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/monochrome-icon.png",
+        "backgroundColor": "#09090b"
+      },
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",

@@ -5,6 +5,7 @@ import maplibregl from 'maplibre-gl';
 import { PMTiles, Protocol } from 'pmtiles';
 import {
   averageNearbyTrailPings,
+  buildExternalMapsUrls,
   buildGeodesicCircleRing,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
@@ -18,6 +19,7 @@ import {
   type MapRegion,
 } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
+import { getMapPaintOverrides, type ResolvedMapTheme } from '@/lib/mapTheme';
 
 let pmtilesProtocolRegistered = false;
 const archiveInstanceCache = new Map<string, PMTiles>();
@@ -362,6 +364,44 @@ function applyMapLabelLanguage(map: maplibregl.Map, lang: MapLabelLanguage): voi
   }
 }
 
+function applyMapTheme(map: maplibregl.Map, theme: ResolvedMapTheme): void {
+  for (const entry of getMapPaintOverrides(theme)) {
+    if (map.getLayer(entry.layerId)) {
+      map.setPaintProperty(entry.layerId, entry.property, entry.value);
+    }
+  }
+}
+
+function buildExternalMapsPopupRowHtml(
+  latitude: number,
+  longitude: number,
+  label: string,
+): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const urls = buildExternalMapsUrls({ latitude, longitude, label, userAgent: ua });
+  return `
+    <div class="mt-2 flex items-center gap-1.5 pt-1.5 border-t border-zinc-100">
+      <a
+        href="${escapeHtml(urls.primaryUrl)}"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="lo-popup-maps-primary inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-zinc-950 px-2.5 py-1.5 text-[11px] font-semibold text-white no-underline hover:bg-zinc-800"
+      >
+        Open in Maps
+      </a>
+      <a
+        href="${escapeHtml(urls.fallbackUrl)}"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open in browser map"
+        class="lo-popup-maps-secondary inline-flex items-center justify-center rounded-md border border-zinc-200 bg-white px-2 py-1.5 text-[10px] font-medium text-zinc-700 no-underline hover:bg-zinc-50"
+      >
+        Web
+      </a>
+    </div>
+  `;
+}
+
 function escapeHtml(raw: string): string {
   return raw
     .replace(/&/g, '&amp;')
@@ -409,6 +449,7 @@ interface MapCanvasProps {
   draftPlace?: DraftPlaceCoords | null;
   pickingPlace?: boolean;
   labelLanguage?: MapLabelLanguage;
+  mapTheme?: ResolvedMapTheme;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
   onViewportChange?: (viewport: { latitude: number; longitude: number; zoom: number }) => void;
   className?: string;
@@ -432,9 +473,10 @@ export function MapCanvas({
   draftPlace = null,
   pickingPlace = false,
   labelLanguage = 'en',
+  mapTheme = 'light',
   onMapSelectCoords,
   onViewportChange,
-  className = 'relative h-full w-full overflow-hidden bg-[#cfe3ee]',
+  className,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -449,6 +491,8 @@ export function MapCanvas({
   const hasAutoFramedRef = useRef(false);
   const labelLanguageRef = useRef<MapLabelLanguage>(labelLanguage);
   labelLanguageRef.current = labelLanguage;
+  const mapThemeRef = useRef<ResolvedMapTheme>(mapTheme);
+  mapThemeRef.current = mapTheme;
   const placesRef = useRef<GroupPlace[]>(places);
   placesRef.current = places;
   const currentUserIdRef = useRef<string | null>(currentUserId);
@@ -496,9 +540,14 @@ export function MapCanvas({
       recordedAt: loc.recordedAt,
       extraLines,
     });
+    const mapsRowHtml = buildExternalMapsPopupRowHtml(
+      loc.latitude,
+      loc.longitude,
+      loc.isFuzzed ? `${loc.username} (~1km)` : loc.username,
+    );
 
     return `
-      <div class="text-xs space-y-1 min-w-[180px]">
+      <div class="text-xs space-y-1 min-w-[190px]">
         <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">
             ${popupAvatarHtml}
@@ -508,6 +557,7 @@ export function MapCanvas({
         </div>
         ${contextHtml}
         <div class="text-[11px] text-zinc-500">Last seen ${escapeHtml(formatRelativeTime(loc.recordedAt))}</div>
+        ${mapsRowHtml}
         ${detailsHtml}
       </div>
     `;
@@ -537,11 +587,13 @@ export function MapCanvas({
       recordedAt: fix.recordedAt,
       extraLines: [accLabel],
     });
+    const mapsRowHtml = buildExternalMapsPopupRowHtml(fix.latitude, fix.longitude, 'My Location');
     return `
-      <div class="text-xs space-y-1 min-w-[175px]">
+      <div class="text-xs space-y-1 min-w-[185px]">
         <div class="font-semibold text-zinc-950">You (Live GPS)</div>
         ${contextHtml}
         <div class="text-[11px] text-zinc-500">Updated ${escapeHtml(formatRelativeTime(fix.recordedAt))}</div>
+        ${mapsRowHtml}
         ${detailsHtml}
       </div>
     `;
@@ -633,6 +685,7 @@ export function MapCanvas({
     map.on('load', () => {
       styleReadyRef.current = true;
       applyMapLabelLanguage(map, labelLanguageRef.current);
+      applyMapTheme(map, mapThemeRef.current);
       emitViewport();
     });
     map.on('moveend', emitViewport);
@@ -645,7 +698,9 @@ export function MapCanvas({
             {
               id: 'fallback-bg',
               type: 'background',
-              paint: { 'background-color': '#e9eff3' },
+              paint: {
+                'background-color': mapThemeRef.current === 'dark' ? '#111318' : '#e9eff3',
+              },
             },
           ],
         });
@@ -661,7 +716,18 @@ export function MapCanvas({
 
     mapRef.current = map;
 
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && containerRef.current
+        ? new ResizeObserver(() => {
+            map.resize();
+          })
+        : null;
+    if (resizeObserver && containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
     return () => {
+      resizeObserver?.disconnect();
       styleReadyRef.current = false;
       for (const frameId of markerAnimFramesRef.current.values()) {
         cancelAnimationFrame(frameId);
@@ -1006,10 +1072,16 @@ export function MapCanvas({
       const existing = placeMarkersRef.current.get(place.id);
       const safeName = escapeHtml(place.name);
       const visibilityTag = place.isPrivate ? 'Private' : 'Shared Group';
+      const placeMapsHtml = buildExternalMapsPopupRowHtml(
+        place.latitude,
+        place.longitude,
+        place.name,
+      );
       const popupHtml = `
-        <div class="text-xs space-y-0.5">
+        <div class="text-xs space-y-0.5 min-w-[180px]">
           <div class="font-semibold text-zinc-900">${safeName}</div>
           <div class="text-zinc-500">${visibilityTag} · ${Math.round(place.radiusMeters)} m</div>
+          ${placeMapsHtml}
         </div>
       `;
       if (existing) {
@@ -1209,7 +1281,7 @@ export function MapCanvas({
         source: TRAIL_SOURCE_ID,
         filter: ['==', ['geometry-type'], 'LineString'],
         paint: {
-          'line-color': '#18181b',
+          'line-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
           'line-width': 2.5,
           'line-dasharray': [2, 1.5],
           'line-opacity': 0.75,
@@ -1222,8 +1294,8 @@ export function MapCanvas({
         filter: ['==', ['geometry-type'], 'Point'],
         paint: {
           'circle-radius': ['case', ['>', ['coalesce', ['get', 'pingCount'], 1], 1], 5, 4],
-          'circle-color': '#ffffff',
-          'circle-stroke-color': '#18181b',
+          'circle-color': mapThemeRef.current === 'dark' ? '#09090b' : '#ffffff',
+          'circle-stroke-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
           'circle-stroke-width': 1.5,
         },
       });
@@ -1243,6 +1315,14 @@ export function MapCanvas({
       applyMapLabelLanguage(map, labelLanguage);
     }
   }, [labelLanguage]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (styleReadyRef.current || map.isStyleLoaded()) {
+      applyMapTheme(map, mapTheme);
+    }
+  }, [mapTheme]);
 
   useEffect(() => {
     for (const entry of markersRef.current.values()) {
@@ -1278,5 +1358,11 @@ export function MapCanvas({
     }
   }, [regions, regionsRevision]);
 
-  return <div ref={containerRef} className={className} />;
+  const resolvedClassName =
+    className ??
+    `relative h-full w-full overflow-hidden transition-colors duration-300 ${
+      mapTheme === 'dark' ? 'bg-[#0c141d]' : 'bg-[#cfe3ee]'
+    }`;
+
+  return <div ref={containerRef} className={resolvedClassName} />;
 }

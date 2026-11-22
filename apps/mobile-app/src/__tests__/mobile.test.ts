@@ -11,20 +11,29 @@ import {
   buildPmtilesSourceUrl,
   estimateOfflineRegionSize,
   formatCacheBytes,
+  resolveMobileMapTheme,
 } from '../services/pmtilesStyle';
 import {
   clearPendingRegistration,
   clearSessionConfig,
   createMemoryKeyValueStore,
   extractInviteCandidateFromUrl,
+  getMapThemePreference,
   getPendingRegistration,
   getPingedServers,
   getStoredConfig,
   isPendingRecordActive,
   parseAndBindQrInvite,
+  saveMapThemePreference,
   savePendingRegistration,
   saveStoredConfig,
 } from '../services/secureConfig';
+import {
+  createMobileShareLink,
+  listMobileShareLinks,
+  resolveMobileShareUrl,
+  revokeMobileShareLink,
+} from '../services/shareLinks';
 import {
   formatServerHostLabel,
   getDefaultServerUrl,
@@ -485,6 +494,91 @@ describe('@loved-ones/mobile-app', () => {
     const roundtrip = hexToHsv('#0ea5e9');
     expect(hsvToHex(roundtrip)).toMatch(/^#[0-9a-f]{6}$/);
     expect(Math.round(roundtrip.h)).toBe(199);
+  });
+
+  it('resolves Auto/Light/Dark mobile map themes, persists preference, and configures Android adaptive icons', async () => {
+    const store = createMemoryKeyValueStore();
+    expect(await getMapThemePreference(store)).toBe('system');
+    await saveMapThemePreference('dark', store);
+    expect(await getMapThemePreference(store)).toBe('dark');
+
+    expect(resolveMobileMapTheme('system', 'dark')).toBe('dark');
+    expect(resolveMobileMapTheme('system', 'light')).toBe('light');
+    expect(resolveMobileMapTheme('light', 'dark')).toBe('light');
+    expect(resolveMobileMapTheme('dark', 'light')).toBe('dark');
+
+    const darkStyle = buildMobileMapStyle('https://track.example.com', null, 'en', false, 'dark');
+    const bgLayer = darkStyle.layers?.find((l) => l.id === 'background') as
+      | { paint?: Record<string, unknown> }
+      | undefined;
+    const earthLayer = darkStyle.layers?.find((l) => l.id === 'earth') as
+      | { paint?: Record<string, unknown> }
+      | undefined;
+    expect(bgLayer?.paint?.['background-color']).toBe('#0c141d');
+    expect(earthLayer?.paint?.['fill-color']).toBe('#111318');
+
+    expect(appConfig.expo.icon).toBe('./assets/icon.png');
+    expect(appConfig.expo.ios.icon).toBe('./assets/icon.png');
+    expect(appConfig.expo.splash.image).toBe('./assets/icon.png');
+    expect(appConfig.expo.notification.icon).toBe('./assets/monochrome-icon.png');
+    expect(appConfig.expo.android.adaptiveIcon.foregroundImage).toBe('./assets/adaptive-icon.png');
+    expect(appConfig.expo.android.adaptiveIcon.monochromeImage).toBe('./assets/monochrome-icon.png');
+  });
+
+  it('creates, lists, resolves, and revokes mobile guest share links', async () => {
+    const sampleItem = {
+      token: 'shr_abcdef0123456789abcdef',
+      groupId: '22222222-2222-4222-8222-222222222222',
+      groupName: 'Family',
+      label: 'Festival Meetup',
+      allowGuestSharing: true,
+      activeGuestCount: 2,
+      expiresAt: '2026-11-22T00:00:00.000Z',
+      createdAt: '2026-11-21T23:00:00.000Z',
+      shareUrl: 'https://track.example.com/share/shr_abcdef0123456789abcdef',
+    };
+
+    const mockFetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith('/api/realtime/share-links') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ link: sampleItem }), { status: 201 });
+      }
+      if (target.endsWith('/api/realtime/share-links')) {
+        return new Response(JSON.stringify({ links: [sampleItem] }), { status: 200 });
+      }
+      if (target.includes('/api/realtime/share-links/shr_') && init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ revoked: true }), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const created = await createMobileShareLink(
+      'https://track.example.com/',
+      'access-jwt',
+      {
+        groupId: sampleItem.groupId,
+        durationMinutes: 60,
+        label: 'Festival Meetup',
+        allowGuestSharing: true,
+      },
+      mockFetch,
+    );
+    expect(created.token).toBe(sampleItem.token);
+    expect(resolveMobileShareUrl('https://track.example.com/', created)).toBe(
+      'https://track.example.com/share/shr_abcdef0123456789abcdef',
+    );
+
+    const list = await listMobileShareLinks('https://track.example.com', 'access-jwt', mockFetch);
+    expect(list).toHaveLength(1);
+    expect(list[0]?.activeGuestCount).toBe(2);
+
+    const revoked = await revokeMobileShareLink(
+      'https://track.example.com',
+      'access-jwt',
+      sampleItem.token,
+      mockFetch,
+    );
+    expect(revoked).toBe(true);
   });
 
   it('normalizes map bearing and computes member Last Near and Last Seen summaries', () => {
