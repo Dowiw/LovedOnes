@@ -9,8 +9,10 @@ import {
   LocationBroadcast,
   LocationPoint,
   LocationRequestItem,
+  MemberPresenceUpdate,
   PlaceTransitionEvent,
   PrivacyMode,
+  UserPresenceRecord,
 } from '@loved-ones/shared';
 import {
   attachAuthAndTelemetry,
@@ -56,6 +58,7 @@ function createInMemoryRealtimeHarness() {
   const storedPlaces: GroupPlace[] = [];
   const placeInsideState = new Map<string, boolean>();
   const storedPlaceTransitions: PlaceTransitionEvent[] = [];
+  const presenceByUser = new Map<string, UserPresenceRecord>();
 
   const memberships: Array<{
     userId: string;
@@ -79,6 +82,7 @@ function createInMemoryRealtimeHarness() {
 
   const locationBroadcasts: LocationBroadcast[] = [];
   const locationRemovals: Array<{ groupId: string; userId: string }> = [];
+  const presenceBroadcasts: MemberPresenceUpdate[] = [];
   const chatBroadcasts: ChatMessage[] = [];
   const checkinRequestBroadcasts: LocationRequestItem[] = [];
   const checkinResponseBroadcasts: LocationRequestItem[] = [];
@@ -349,6 +353,20 @@ function createInMemoryRealtimeHarness() {
       }
       return events;
     },
+    async getUserPresence(userId) {
+      return presenceByUser.get(userId) ?? null;
+    },
+    async setUserPresence(userId, record) {
+      presenceByUser.set(userId, record);
+    },
+    async getUsersPresence(userIds) {
+      const map = new Map<string, UserPresenceRecord>();
+      for (const id of userIds) {
+        const rec = presenceByUser.get(id);
+        if (rec) map.set(id, rec);
+      }
+      return map;
+    },
   };
 
   const broadcaster: RealtimeBroadcaster = {
@@ -357,6 +375,9 @@ function createInMemoryRealtimeHarness() {
     },
     broadcastLocationRemoved(groupId, userId) {
       locationRemovals.push({ groupId, userId });
+    },
+    broadcastPresenceUpdate(_groupId, update) {
+      presenceBroadcasts.push(update);
     },
     broadcastChatMessage(_groupId, message) {
       chatBroadcasts.push(message);
@@ -382,6 +403,7 @@ function createInMemoryRealtimeHarness() {
     store,
     locationBroadcasts,
     locationRemovals,
+    presenceBroadcasts,
     chatBroadcasts,
     checkinRequestBroadcasts,
     checkinResponseBroadcasts,
@@ -975,5 +997,68 @@ describe('RealtimeModule domain interface', () => {
     expect(harness.locationBroadcasts).toHaveLength(1);
     expect(harness.locationBroadcasts[0]?.privacyMode).toBe('FUZZED');
     expect(harness.locationBroadcasts[0]?.isFuzzed).toBe(true);
+  });
+
+  it('coalesces stationary pings (< 20m) into Redis presence and broadcasts privacy-filtered heartbeats', async () => {
+    const harness = createInMemoryRealtimeHarness();
+    const t0 = Date.parse('2026-11-22T15:06:00.000Z');
+    harness.setNowMs(t0);
+
+    // 1. Initial fix is persisted normally and marks presence active
+    const firstInserted = await harness.mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.52417,
+          longitude: 13.51754,
+          batteryLevel: 20,
+          recordedAt: '2026-11-22T15:06:00.000Z',
+        },
+      ],
+    });
+    expect(firstInserted).toBe(1);
+    expect(harness.storedPoints).toHaveLength(1);
+    expect(harness.locationBroadcasts).toHaveLength(2); // EXACT + FUZZED (GHOST/SPECTATOR suppressed)
+    expect(harness.locationBroadcasts[0]?.trackingState).toBe('active');
+    expect(harness.locationBroadcasts[0]?.lastHeartbeatAt).toBe('2026-11-22T15:06:00.000Z');
+
+    // 2. Stationary ping 5 minutes later (< 20m moved) skips DB insert, refreshes presence as idle,
+    //    updates batteryLevel, and broadcasts presence:update ONLY to EXACT and FUZZED
+    harness.setNowMs(t0 + 5 * 60_000);
+    const stationaryInserted = await harness.mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.52419,
+          longitude: 13.51756,
+          batteryLevel: 16,
+          recordedAt: '2026-11-22T15:11:00.000Z',
+        },
+      ],
+    });
+    expect(stationaryInserted).toBe(0);
+    expect(harness.storedPoints).toHaveLength(1); // No DB bloat!
+    expect(harness.locationBroadcasts).toHaveLength(2); // No redundant location:update
+    expect(harness.presenceBroadcasts.map((p) => p.groupId)).toEqual([GROUP_EXACT, GROUP_FUZZED]);
+    expect(harness.presenceBroadcasts[0]?.trackingState).toBe('idle');
+    expect(harness.presenceBroadcasts[0]?.batteryLevel).toBe(16);
+
+    // 3. Snapshot preserves recordedAt (15:06) while exposing fresh lastHeartbeatAt (15:11) & battery (16)
+    const snap = await harness.mod.getGroupLocations(alice, GROUP_EXACT);
+    expect(snap).toHaveLength(1);
+    expect(snap[0]?.recordedAt).toBe('2026-11-22T15:06:00.000Z');
+    expect(snap[0]?.lastHeartbeatAt).toBe('2026-11-22T15:11:00.000Z');
+    expect(snap[0]?.trackingState).toBe('idle');
+    expect(snap[0]?.batteryLevel).toBe(16);
+
+    // 4. Explicit watchdog / pause heartbeat updates trackingState without touching location_history
+    harness.presenceBroadcasts.length = 0;
+    harness.setNowMs(t0 + 10 * 60_000);
+    const hb = await harness.mod.recordHeartbeat(alice, {
+      trackingState: 'paused',
+      batteryLevel: 15,
+    });
+    expect(hb.trackingState).toBe('paused');
+    expect(harness.presenceBroadcasts.map((p) => p.groupId)).toEqual([GROUP_EXACT, GROUP_FUZZED]);
+    expect(harness.presenceBroadcasts[0]?.trackingState).toBe('paused');
+    expect(harness.presenceBroadcasts[0]?.batteryLevel).toBe(15);
   });
 });

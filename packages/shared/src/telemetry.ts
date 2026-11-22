@@ -1,13 +1,80 @@
 import { Redis } from 'ioredis';
+import type { TrackingState, UserPresenceRecord } from './schemas.js';
 
 export const TELEMETRY_USER_PREFIX = 'telemetry:user:';
 export const SESSION_USER_PREFIX = 'session:user:';
 export const SOCKETS_USER_PREFIX = 'sockets:user:';
 export const TRACKER_JTI_USER_PREFIX = 'tracker:jti:user:';
 export const REMOVED_USER_PREFIX = 'removed:user:';
+export const PRESENCE_USER_PREFIX = 'presence:user:';
 export const USER_PROFILE_UPDATED_CHANNEL = 'user:profile:updated';
 export const USER_ACCOUNT_REMOVED_CHANNEL = 'user:account:removed';
 export const USER_PRIVACY_UPDATED_CHANNEL = 'user:privacy:updated';
+
+const PRESENCE_TTL_SECONDS = 86_400;
+const VALID_TRACKING_STATES = new Set<TrackingState>([
+  'active',
+  'idle',
+  'paused',
+  'permission_denied',
+  'gps_off',
+  'interrupted',
+]);
+
+function parseUserPresenceJson(raw: string | null): UserPresenceRecord | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<UserPresenceRecord>;
+    if (
+      typeof parsed.lastHeartbeatAt !== 'string' ||
+      !parsed.trackingState ||
+      !VALID_TRACKING_STATES.has(parsed.trackingState)
+    ) {
+      return null;
+    }
+    const batteryLevel =
+      typeof parsed.batteryLevel === 'number' &&
+      Number.isFinite(parsed.batteryLevel) &&
+      parsed.batteryLevel >= 0 &&
+      parsed.batteryLevel <= 100
+        ? Math.round(parsed.batteryLevel)
+        : null;
+    return {
+      lastHeartbeatAt: parsed.lastHeartbeatAt,
+      trackingState: parsed.trackingState,
+      batteryLevel,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function setUserPresenceInRedis(
+  redis: Redis,
+  userId: string,
+  record: UserPresenceRecord,
+  ttlSeconds = PRESENCE_TTL_SECONDS,
+): Promise<void> {
+  await redis.set(`${PRESENCE_USER_PREFIX}${userId}`, JSON.stringify(record), 'EX', ttlSeconds);
+}
+
+export async function getUsersPresenceFromRedis(
+  redis: Redis,
+  userIds: readonly string[],
+): Promise<Map<string, UserPresenceRecord>> {
+  const result = new Map<string, UserPresenceRecord>();
+  if (userIds.length === 0) return result;
+  const uniqueIds = Array.from(new Set(userIds));
+  const keys = uniqueIds.map((id) => `${PRESENCE_USER_PREFIX}${id}`);
+  const values = await redis.mget(...keys);
+  uniqueIds.forEach((id, idx) => {
+    const parsed = parseUserPresenceJson(values[idx] ?? null);
+    if (parsed) {
+      result.set(id, parsed);
+    }
+  });
+  return result;
+}
 
 export function getCurrentMinuteBucket(nowMs = Date.now()): number {
   return Math.floor(nowMs / 60_000);

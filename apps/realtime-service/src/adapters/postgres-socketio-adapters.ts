@@ -1,3 +1,4 @@
+import { Redis } from 'ioredis';
 import pg from 'pg';
 import { Server as SocketIOServer } from 'socket.io';
 import {
@@ -28,12 +29,18 @@ import {
   LocationBroadcast,
   LocationPoint,
   LocationRequestItem,
+  MemberPresenceUpdate,
   PlaceTransitionEvent,
+  UserPresenceRecord,
 } from '@loved-ones/shared';
+import { getUsersPresenceFromRedis, setUserPresenceInRedis } from '@loved-ones/shared/telemetry';
 import { RealtimeBroadcaster, RealtimeStore } from '../domain/realtime-module.js';
 
 export class PostgresRealtimeStore implements RealtimeStore {
-  constructor(private readonly pool: pg.Pool) {}
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly redis?: Redis,
+  ) {}
 
   async isGroupMember(userId: string, groupId: string): Promise<boolean> {
     const res = await this.pool.query<{ exists: boolean }>(
@@ -157,6 +164,22 @@ export class PostgresRealtimeStore implements RealtimeStore {
     return evaluateAndRecordPlaceTransitions(this.pool, input);
   }
 
+  async getUserPresence(userId: string): Promise<UserPresenceRecord | null> {
+    if (!this.redis) return null;
+    const map = await getUsersPresenceFromRedis(this.redis, [userId]);
+    return map.get(userId) ?? null;
+  }
+
+  async setUserPresence(userId: string, record: UserPresenceRecord): Promise<void> {
+    if (!this.redis) return;
+    await setUserPresenceInRedis(this.redis, userId, record);
+  }
+
+  async getUsersPresence(userIds: readonly string[]): Promise<Map<string, UserPresenceRecord>> {
+    if (!this.redis) return new Map();
+    return getUsersPresenceFromRedis(this.redis, userIds);
+  }
+
   async getGroupMessages(groupId: string, limit = 100): Promise<ChatMessage[]> {
     const res = await this.pool.query<{
       id: string;
@@ -231,6 +254,10 @@ export class SocketIoBroadcaster implements RealtimeBroadcaster {
 
   broadcastLocationRemoved(groupId: string, userId: string): void {
     this.io.to(`group:${groupId}`).emit('location:removed', { groupId, userId });
+  }
+
+  broadcastPresenceUpdate(groupId: string, update: MemberPresenceUpdate): void {
+    this.io.to(`group:${groupId}`).emit('presence:update', update);
   }
 
   broadcastChatMessage(groupId: string, message: ChatMessage): void {

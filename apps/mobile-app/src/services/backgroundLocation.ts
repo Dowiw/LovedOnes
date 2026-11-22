@@ -1,7 +1,21 @@
+import * as BackgroundTask from 'expo-background-task';
 import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import type { LocationPoint } from '@loved-ones/shared';
+import {
+  IDLE_CHECKIN_INTERVAL_MS,
+  type LocationPoint,
+  MOVING_CHECKIN_INTERVAL_MS,
+  type TrackingState,
+} from '@loved-ones/shared';
+import {
+  type AdaptiveLocationMode,
+  BACKGROUND_WATCHDOG_TASK,
+  evaluateAdaptiveTrackingTransition,
+  runWatchdogCheck,
+  WATCHDOG_MINIMUM_INTERVAL_MINUTES,
+  type WatchdogAdapter,
+} from './adaptiveTracking';
 import {
   BACKGROUND_GEOFENCE_RECOVERY_TASK,
   BACKGROUND_LOCATION_TASK,
@@ -16,46 +30,116 @@ import {
   LocationPermissionResult,
   requestLocationPermissionsOnLaunch,
 } from './locationPermissions';
-import { enqueueLocationPoints, flushOfflineLocations } from './offlineQueue';
 import {
+  enqueueLocationPoints,
+  flushOfflineLocations,
+  getPendingLocationCount,
+  postBackgroundAuthedJson,
+} from './offlineQueue';
+import {
+  getAdaptiveTrackingState,
   getBackgroundTrackingEnabled,
   getRecoveryGeofenceAnchor,
   getStoredConfig,
+  saveAdaptiveTrackingState,
   saveRecoveryGeofenceAnchor,
   setBackgroundTrackingEnabled,
 } from './secureConfig';
 
 export { BACKGROUND_GEOFENCE_RECOVERY_TASK, BACKGROUND_LOCATION_TASK } from './geofenceRecovery';
+export { BACKGROUND_WATCHDOG_TASK } from './adaptiveTracking';
 
 interface LocationTaskPayload {
   locations?: Location.LocationObject[];
 }
 
-const CONTINUOUS_LOCATION_OPTIONS: Location.LocationTaskOptions = {
-  accuracy: Location.Accuracy.Balanced,
-  timeInterval: 15_000,
-  distanceInterval: 20,
-  deferredUpdatesInterval: 30_000,
-  pausesUpdatesAutomatically: false,
-  showsBackgroundLocationIndicator: true,
-  activityType: Location.ActivityType.Fitness,
-  foregroundService: {
-    notificationTitle: 'LovedOnes Location Beacon Active',
-    notificationBody: 'Sharing location updates with your group.',
-    notificationColor: '#10b981',
-  },
-};
+function buildLocationTaskOptions(mode: AdaptiveLocationMode): Location.LocationTaskOptions {
+  const isIdle = mode === 'idle';
+  return {
+    accuracy: Location.Accuracy.Balanced,
+    timeInterval: isIdle ? IDLE_CHECKIN_INTERVAL_MS : MOVING_CHECKIN_INTERVAL_MS,
+    distanceInterval: 0,
+    deferredUpdatesInterval: isIdle ? IDLE_CHECKIN_INTERVAL_MS : 30_000,
+    pausesUpdatesAutomatically: false,
+    showsBackgroundLocationIndicator: true,
+    activityType: Location.ActivityType.Fitness,
+    foregroundService: {
+      notificationTitle: 'LovedOnes Location Beacon Active',
+      notificationBody: 'Sharing location updates with your group.',
+      notificationColor: '#10b981',
+    },
+  };
+}
 
 let foregroundSubscription: Location.LocationSubscription | null = null;
 
-async function startContinuousLocationUpdatesIfNeeded(): Promise<void> {
+async function readBatteryPercent(): Promise<number | null> {
+  try {
+    const level = await Battery.getBatteryLevelAsync();
+    if (level >= 0) {
+      return Math.round(level * 100);
+    }
+  } catch {
+    // Battery API unavailable on some simulators/devices
+  }
+  return null;
+}
+
+export async function sendPresenceHeartbeat(
+  trackingState: TrackingState,
+  batteryLevel?: number | null,
+): Promise<void> {
+  const cfg = await getStoredConfig().catch(() => null);
+  if (!cfg?.serverUrl || !cfg.accessToken) return;
+  const resolvedBattery =
+    batteryLevel !== undefined ? batteryLevel : await readBatteryPercent();
+  await postBackgroundAuthedJson(
+    cfg.serverUrl,
+    '/api/realtime/heartbeat',
+    cfg.accessToken,
+    {
+      trackingState,
+      batteryLevel: resolvedBattery,
+      recordedAt: new Date().toISOString(),
+    },
+  ).catch(() => {});
+}
+
+async function startContinuousLocationUpdatesIfNeeded(
+  mode?: AdaptiveLocationMode,
+): Promise<void> {
   const started = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
   if (!started) {
+    const savedState = mode ? null : await getAdaptiveTrackingState().catch(() => null);
+    const targetMode: AdaptiveLocationMode = mode ?? savedState?.mode ?? 'moving';
     await Location.startLocationUpdatesAsync(
       BACKGROUND_LOCATION_TASK,
-      CONTINUOUS_LOCATION_OPTIONS,
+      buildLocationTaskOptions(targetMode),
     );
   }
+}
+
+export async function syncAdaptiveTrackingForPosition(
+  latitude: number,
+  longitude: number,
+): Promise<AdaptiveLocationMode> {
+  const current = await getAdaptiveTrackingState().catch(() => null);
+  const evaluation = evaluateAdaptiveTrackingTransition(current, latitude, longitude);
+  await saveAdaptiveTrackingState(evaluation.nextState).catch(() => {});
+
+  if (evaluation.modeChanged) {
+    const started = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(
+      () => false,
+    );
+    if (started) {
+      await Location.startLocationUpdatesAsync(
+        BACKGROUND_LOCATION_TASK,
+        buildLocationTaskOptions(evaluation.nextMode),
+      ).catch(() => {});
+    }
+  }
+
+  return evaluation.nextMode;
 }
 
 const defaultGeofenceAdapter: GeofenceRecoveryAdapter = {
@@ -97,15 +181,7 @@ async function ingestLocationsAndOpportunisticFlush(
 ): Promise<void> {
   if (!locations.length) return;
 
-  let batteryLevel: number | null = null;
-  try {
-    const level = await Battery.getBatteryLevelAsync();
-    if (level >= 0) {
-      batteryLevel = Math.round(level * 100);
-    }
-  } catch {
-    batteryLevel = null;
-  }
+  const batteryLevel = await readBatteryPercent();
 
   const points: LocationPoint[] = locations.map((loc) => ({
     latitude: loc.coords.latitude,
@@ -133,6 +209,10 @@ async function ingestLocationsAndOpportunisticFlush(
 
   const latest = locations[locations.length - 1];
   if (latest) {
+    await syncAdaptiveTrackingForPosition(
+      latest.coords.latitude,
+      latest.coords.longitude,
+    ).catch(() => {});
     await syncRecoveryGeofenceAnchor(
       latest.coords.latitude,
       latest.coords.longitude,
@@ -140,6 +220,27 @@ async function ingestLocationsAndOpportunisticFlush(
     ).catch(() => {});
   }
 }
+
+const defaultWatchdogAdapter: WatchdogAdapter = {
+  isTrackingEnabled: () => getBackgroundTrackingEnabled(),
+  hasActiveSession: async () => {
+    const cfg = await getStoredConfig();
+    return Boolean(cfg.serverUrl && cfg.accessToken);
+  },
+  getBackgroundPermissionLevel: async () => (await getLocationPermissionStatus(Location)).level,
+  hasLocationServicesEnabled: () => Location.hasServicesEnabledAsync().catch(() => true),
+  isContinuousLocationActive: () => Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
+  startContinuousLocationUpdates: () => startContinuousLocationUpdatesIfNeeded('moving'),
+  getPendingLocationCount: () => getPendingLocationCount(),
+  flushOfflineLocations: async () => {
+    const cfg = await getStoredConfig();
+    if (cfg.serverUrl && cfg.accessToken) {
+      await flushOfflineLocations(cfg.serverUrl, cfg.accessToken);
+    }
+  },
+  getBatteryLevel: () => readBatteryPercent(),
+  sendHeartbeat: (trackingState, batteryLevel) => sendPresenceHeartbeat(trackingState, batteryLevel),
+};
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
   TaskManager.defineTask<LocationTaskPayload>(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
@@ -157,6 +258,17 @@ if (!TaskManager.isTaskDefined(BACKGROUND_GEOFENCE_RECOVERY_TASK)) {
       await handleGeofenceRecoveryEvent(data, error, defaultGeofenceAdapter);
     },
   );
+}
+
+if (!TaskManager.isTaskDefined(BACKGROUND_WATCHDOG_TASK)) {
+  TaskManager.defineTask(BACKGROUND_WATCHDOG_TASK, async () => {
+    try {
+      await runWatchdogCheck(defaultWatchdogAdapter);
+      return BackgroundTask.BackgroundTaskResult.Success;
+    } catch {
+      return BackgroundTask.BackgroundTaskResult.Failed;
+    }
+  });
 }
 
 /**
@@ -188,6 +300,9 @@ export async function startBackgroundTracking(): Promise<{
 
     await setBackgroundTrackingEnabled(true);
     await startContinuousLocationUpdatesIfNeeded();
+    await BackgroundTask.registerTaskAsync(BACKGROUND_WATCHDOG_TASK, {
+      minimumInterval: WATCHDOG_MINIMUM_INTERVAL_MINUTES,
+    }).catch(() => {});
 
     const lastKnown = await Location.getLastKnownPositionAsync().catch(() => null);
     if (lastKnown) {
@@ -213,13 +328,14 @@ export async function startBackgroundTracking(): Promise<{
   // Fallback to foreground watcher when 'Always Allow' is denied on iOS or Android
   await setBackgroundTrackingEnabled(false);
   await stopRecoveryGeofence(defaultGeofenceAdapter).catch(() => {});
+  await BackgroundTask.unregisterTaskAsync(BACKGROUND_WATCHDOG_TASK).catch(() => {});
 
   if (!foregroundSubscription) {
     foregroundSubscription = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.Balanced,
-        timeInterval: 15_000,
-        distanceInterval: 20,
+        timeInterval: MOVING_CHECKIN_INTERVAL_MS,
+        distanceInterval: 0,
       },
       (loc) => {
         void ingestLocationsAndOpportunisticFlush([loc]);
@@ -230,7 +346,9 @@ export async function startBackgroundTracking(): Promise<{
 }
 
 export async function stopBackgroundTracking(): Promise<void> {
+  await sendPresenceHeartbeat('paused').catch(() => {});
   await setBackgroundTrackingEnabled(false).catch(() => {});
+  await saveAdaptiveTrackingState(null).catch(() => {});
   if (foregroundSubscription) {
     foregroundSubscription.remove();
     foregroundSubscription = null;
@@ -239,6 +357,7 @@ export async function stopBackgroundTracking(): Promise<void> {
   if (started) {
     await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
   }
+  await BackgroundTask.unregisterTaskAsync(BACKGROUND_WATCHDOG_TASK).catch(() => {});
   await stopRecoveryGeofence(defaultGeofenceAdapter).catch(() => {});
 }
 

@@ -18,6 +18,7 @@ import {
   findCoveringRegions,
   formatCountdownRemaining,
   haversineMeters,
+  HeartbeatInputSchema,
   hexToRgba,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
@@ -32,6 +33,7 @@ import {
   parseBoundingBox,
   parseInviteInput,
   QrInvitePayloadSchema,
+  resolveMemberPresenceStatus,
   RespondLocationRequestSchema,
   slugifyCityName,
   TrailQuerySchema,
@@ -839,5 +841,103 @@ describe('@loved-ones/shared', () => {
     const disabledThrottle = createEventThrottle({ max: 1, windowMs: 1000, disabled: true });
     expect(disabledThrottle.consume('sock-1').allowed).toBe(true);
     expect(disabledThrottle.consume('sock-1').allowed).toBe(true);
+  });
+
+  it('resolves idle-at-place, stationary, offline, paused, and FUZZED member presence states', () => {
+    const parsedHb = HeartbeatInputSchema.parse({ trackingState: 'idle', batteryLevel: 16 });
+    expect(parsedHb.trackingState).toBe('idle');
+    expect(parsedHb.batteryLevel).toBe(16);
+
+    const nowMs = Date.parse('2026-11-22T15:43:00.000Z');
+    const recorded37mAgo = '2026-11-22T15:06:00.000Z';
+    const heartbeat2mAgo = '2026-11-22T15:41:00.000Z';
+    const heartbeat20mAgo = '2026-11-22T15:23:00.000Z';
+
+    // 1. Recent movement (< 3 min)
+    const moving = resolveMemberPresenceStatus({
+      recordedAt: '2026-11-22T15:42:30.000Z',
+      lastHeartbeatAt: '2026-11-22T15:42:30.000Z',
+      trackingState: 'active',
+      insidePlaceName: 'Dowi Home',
+      nowMs,
+    });
+    expect(moving.kind).toBe('moving');
+    expect(moving.isOnline).toBe(true);
+
+    // 2. Stationary inside Place + fresh heartbeat -> Idle at Place
+    const idleAtHome = resolveMemberPresenceStatus({
+      recordedAt: recorded37mAgo,
+      lastHeartbeatAt: heartbeat2mAgo,
+      trackingState: 'idle',
+      insidePlaceName: 'Dowi Home',
+      nowMs,
+    });
+    expect(idleAtHome.kind).toBe('idle_at_place');
+    expect(idleAtHome.isOnline).toBe(true);
+    expect(idleAtHome.detailText).toContain('Idle at Dowi Home');
+    expect(idleAtHome.detailText).toContain('online 2m ago');
+
+    // 3. Stationary outside Place + fresh heartbeat -> Stationary
+    const stationaryOutside = resolveMemberPresenceStatus({
+      recordedAt: recorded37mAgo,
+      lastHeartbeatAt: heartbeat2mAgo,
+      trackingState: 'idle',
+      insidePlaceName: null,
+      nowMs,
+    });
+    expect(stationaryOutside.kind).toBe('stationary');
+    expect(stationaryOutside.isOnline).toBe(true);
+    expect(stationaryOutside.detailText).toContain('Stationary');
+
+    // 4. FUZZED privacy never reveals exact Place name even if passed
+    const fuzzedIdle = resolveMemberPresenceStatus({
+      recordedAt: recorded37mAgo,
+      lastHeartbeatAt: heartbeat2mAgo,
+      trackingState: 'idle',
+      isFuzzed: true,
+      insidePlaceName: 'Secret Home',
+      nowMs,
+    });
+    expect(fuzzedIdle.kind).toBe('stationary');
+    expect(fuzzedIdle.detailText).toContain('Stationary (~1 km)');
+    expect(fuzzedIdle.detailText).not.toContain('Secret Home');
+
+    // 5. Expired heartbeat (> 15 min) -> No signal
+    const offline = resolveMemberPresenceStatus({
+      recordedAt: recorded37mAgo,
+      lastHeartbeatAt: heartbeat20mAgo,
+      trackingState: 'idle',
+      insidePlaceName: 'Dowi Home',
+      nowMs,
+    });
+    expect(offline.kind).toBe('offline');
+    expect(offline.isOnline).toBe(false);
+    expect(offline.detailText).toContain('No signal');
+
+    // 6. Explicit paused / permission_denied / gps_off states
+    expect(
+      resolveMemberPresenceStatus({
+        recordedAt: recorded37mAgo,
+        lastHeartbeatAt: heartbeat2mAgo,
+        trackingState: 'paused',
+        nowMs,
+      }).kind,
+    ).toBe('paused');
+    expect(
+      resolveMemberPresenceStatus({
+        recordedAt: recorded37mAgo,
+        lastHeartbeatAt: heartbeat2mAgo,
+        trackingState: 'permission_denied',
+        nowMs,
+      }).kind,
+    ).toBe('permission_denied');
+    expect(
+      resolveMemberPresenceStatus({
+        recordedAt: recorded37mAgo,
+        lastHeartbeatAt: heartbeat2mAgo,
+        trackingState: 'gps_off',
+        nowMs,
+      }).kind,
+    ).toBe('gps_off');
   });
 });
