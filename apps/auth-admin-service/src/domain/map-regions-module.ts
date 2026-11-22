@@ -100,6 +100,8 @@ export interface MapRegionsModuleOptions {
   protomapsBuildsUrl?: string;
   allowMemberDownloads?: boolean;
   maxExtractMb?: number;
+  maxMapStorageMb?: number;
+  getMaxMapStorageMb?: () => Promise<number>;
   minFreeDiskMb?: number;
   cityResolver?: CityResolver;
   tileExtractor?: TileExtractor;
@@ -367,6 +369,8 @@ export class MapRegionsModule {
   readonly manifestPath: string;
   readonly allowMemberDownloads: boolean;
   private readonly maxExtractBytes: number;
+  private readonly maxMapStorageMb: number;
+  private readonly getMaxMapStorageMb?: () => Promise<number>;
   private readonly minFreeDiskBytes: number;
   private readonly cityResolver: CityResolver;
   private readonly tileExtractor: TileExtractor;
@@ -388,6 +392,9 @@ export class MapRegionsModule {
     const minFreeMb =
       options.minFreeDiskMb ?? (Number.parseInt(process.env.MIN_FREE_DISK_MB ?? '500', 10) || 500);
     this.maxExtractBytes = maxMb * 1024 * 1024;
+    this.maxMapStorageMb =
+      options.maxMapStorageMb ?? (Number.parseFloat(process.env.MAX_MAP_STORAGE_MB ?? '0') || 0);
+    this.getMaxMapStorageMb = options.getMaxMapStorageMb;
     this.minFreeDiskBytes = minFreeMb * 1024 * 1024;
     this.cityResolver = options.cityResolver ?? new NominatimCityResolver();
     this.tileExtractor =
@@ -608,7 +615,55 @@ export class MapRegionsModule {
     return null;
   }
 
+  async getMapStorageSummary(): Promise<{
+    totalBytes: number;
+    primaryBytes: number;
+    regionsBytes: number;
+    maxMapStorageBytes: number;
+    regionCount: number;
+  }> {
+    const regions = await this.listRegions();
+    let primaryBytes = 0;
+    let regionsBytes = 0;
+    for (const r of regions) {
+      if (r.isPrimary) {
+        primaryBytes += r.sizeBytes;
+      }
+    }
+    // Sum actual .pmtiles file sizes in regions/ directly so disk quotas reflect real disk usage
+    try {
+      const entries = await fs.promises.readdir(this.regionsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.pmtiles')) continue;
+        const st = await fs.promises.stat(path.join(this.regionsDir, entry.name)).catch(() => null);
+        if (st?.isFile()) regionsBytes += st.size;
+      }
+    } catch {
+      for (const r of regions) {
+        if (!r.isPrimary) regionsBytes += r.sizeBytes;
+      }
+    }
+    const maxMb = this.getMaxMapStorageMb
+      ? await this.getMaxMapStorageMb().catch(() => this.maxMapStorageMb)
+      : this.maxMapStorageMb;
+    const maxMapStorageBytes = Math.max(0, Math.round((maxMb || 0) * 1024 * 1024));
+    return {
+      totalBytes: primaryBytes + regionsBytes,
+      primaryBytes,
+      regionsBytes,
+      maxMapStorageBytes,
+      regionCount: regions.filter((r) => !r.isStub).length,
+    };
+  }
+
   private async ensureFreeDiskSpace(): Promise<void> {
+    const summary = await this.getMapStorageSummary();
+    if (summary.maxMapStorageBytes > 0 && summary.regionsBytes >= summary.maxMapStorageBytes) {
+      throw new DomainError(
+        507,
+        'Server map extract storage allocation is full; ask the Host Admin to remove old regions or raise the map storage limit',
+      );
+    }
     await fs.promises.mkdir(this.regionsDir, { recursive: true });
     if (typeof fs.promises.statfs !== 'function') return;
     try {

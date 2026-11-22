@@ -14,6 +14,7 @@ import {
   hexToRgba,
   isSafeAvatarUrl,
   isSafeHexColor,
+  resolveMemberPresenceStatus,
   type GroupPlace,
   type LocationBroadcast,
   type MapRegion,
@@ -538,6 +539,24 @@ export function MapCanvas({
     const contextHtml = ctx
       ? `<div class="text-[11px] text-zinc-700 dark:text-zinc-300">${escapeHtml(ctx.prefix)} <span class="font-medium text-zinc-950 dark:text-zinc-100">${escapeHtml(ctx.label)}</span></div>`
       : '';
+    const insidePlace =
+      !loc.isFuzzed && placesRef.current.length > 0
+        ? placesRef.current.reduce<{ name: string; dist: number } | null>((best, p) => {
+            const d = distanceMeters(loc.latitude, loc.longitude, p.latitude, p.longitude);
+            if (d <= p.radiusMeters && (!best || d < best.dist)) {
+              return { name: p.name, dist: d };
+            }
+            return best;
+          }, null)
+        : null;
+    const presence = resolveMemberPresenceStatus({
+      recordedAt: loc.recordedAt,
+      lastHeartbeatAt: loc.lastHeartbeatAt,
+      trackingState: loc.trackingState,
+      isFuzzed: loc.isFuzzed,
+      insidePlaceName: insidePlace?.name ?? null,
+    });
+    const statusDotClass = presence.isOnline ? 'bg-emerald-500' : 'bg-zinc-400 dark:bg-zinc-500';
     const extraLines =
       loc.batteryLevel !== null && loc.batteryLevel !== undefined
         ? [`Battery ${loc.batteryLevel}%`]
@@ -564,7 +583,10 @@ export function MapCanvas({
           <span class="shrink-0 rounded-full ${loc.isFuzzed ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300' : 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'} px-2 py-0.5 text-[10px] font-semibold">${escapeHtml(privacyBadge)}</span>
         </div>
         ${contextHtml}
-        <div class="text-[11px] text-zinc-500 dark:text-zinc-400">Last seen ${escapeHtml(formatRelativeTime(loc.recordedAt))}</div>
+        <div class="flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+          <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full ${statusDotClass}"></span>
+          <span>${escapeHtml(presence.detailText)}</span>
+        </div>
         ${mapsRowHtml}
         ${detailsHtml}
       </div>

@@ -1,4 +1,14 @@
-import { haversineMeters, type GroupPlace, type PlaceTransitionEvent } from '@loved-ones/shared';
+import {
+  formatLastSeenRelative,
+  haversineMeters,
+  resolveMemberPresenceStatus,
+  type GroupPlace,
+  type MemberPresenceStatus,
+  type PlaceTransitionEvent,
+  type TrackingState,
+} from '@loved-ones/shared';
+
+export { formatLastSeenRelative, resolveMemberPresenceStatus, type MemberPresenceStatus };
 
 export interface NearestPlaceMatch {
   place: GroupPlace;
@@ -18,25 +28,42 @@ export function normalizeBearingDegrees(bearing: number): number {
 }
 
 /**
- * Formats an ISO timestamp into a concise human-friendly "Last seen at" string.
+ * Resolves the name of the Place a member is currently inside, returning null
+ * for FUZZED coordinates so exact Place names are never inferred from jittered pins.
  */
-export function formatLastSeenRelative(isoTimestamp: string, nowMs = Date.now()): string {
-  const ts = Date.parse(isoTimestamp);
-  if (!Number.isFinite(ts)) return 'Unknown';
-  const diffSec = Math.max(0, Math.floor((nowMs - ts) / 1000));
-  const timeClock = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+export function resolveInsidePlaceName(
+  coord: { latitude: number; longitude: number },
+  places: readonly GroupPlace[],
+  isFuzzed?: boolean,
+): string | null {
+  if (isFuzzed) return null;
+  const nearest = findNearestPlace(coord, places);
+  return nearest?.inside ? nearest.place.name : null;
+}
 
-  if (diffSec < 45) return `Just now · ${timeClock}`;
-  if (diffSec < 3600) {
-    const mins = Math.max(1, Math.floor(diffSec / 60));
-    return `${mins}m ago · ${timeClock}`;
-  }
-  if (diffSec < 86400) {
-    const hrs = Math.floor(diffSec / 3600);
-    return `${hrs}h ago · ${timeClock}`;
-  }
-  const dayLabel = new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
-  return `${dayLabel} · ${timeClock}`;
+export function describeMemberStatus(input: {
+  latitude: number;
+  longitude: number;
+  recordedAt: string;
+  lastHeartbeatAt?: string | null;
+  trackingState?: TrackingState | null;
+  isFuzzed?: boolean;
+  places: readonly GroupPlace[];
+  nowMs?: number;
+}): MemberPresenceStatus {
+  const insidePlaceName = resolveInsidePlaceName(
+    { latitude: input.latitude, longitude: input.longitude },
+    input.places,
+    input.isFuzzed,
+  );
+  return resolveMemberPresenceStatus({
+    recordedAt: input.recordedAt,
+    lastHeartbeatAt: input.lastHeartbeatAt,
+    trackingState: input.trackingState,
+    isFuzzed: input.isFuzzed,
+    insidePlaceName,
+    nowMs: input.nowMs,
+  });
 }
 
 /**

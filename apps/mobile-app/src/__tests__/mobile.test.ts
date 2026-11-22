@@ -5,7 +5,14 @@ import {
   enqueueLocationPoints,
   flushOfflineLocations,
   getPendingLocationCount,
+  postBackgroundAuthedJson,
 } from '../services/offlineQueue';
+import {
+  BACKGROUND_WATCHDOG_TASK,
+  evaluateAdaptiveTrackingTransition,
+  runWatchdogCheck,
+  type WatchdogAdapter,
+} from '../services/adaptiveTracking';
 import {
   buildMobileMapStyle,
   buildPmtilesSourceUrl,
@@ -71,6 +78,7 @@ import {
 } from '../services/locationPermissions';
 import {
   describeLastNearPlace,
+  describeMemberStatus,
   findNearestPlace,
   formatLastSeenRelative,
   normalizeBearingDegrees,
@@ -820,5 +828,144 @@ describe('@loved-ones/mobile-app', () => {
     await clearSessionConfig(store);
     expect(await getBackgroundTrackingEnabled(store)).toBe(false);
     expect(await getRecoveryGeofenceAnchor(store)).toBeNull();
+  });
+
+  it('transitions adaptively between moving and stationary idle modes and runs watchdog recovery', async () => {
+    // App config registers expo-background-task plugin
+    expect(appConfig.expo.plugins).toContain('expo-background-task');
+    expect(BACKGROUND_WATCHDOG_TASK).toBe('LOVED_ONES_BACKGROUND_WATCHDOG_TASK');
+
+    // 1. Adaptive mode transitions: moving -> >=60s within 20m -> idle -> >=20m moved -> moving
+    const t0 = 1_700_000_000_000;
+    const step1 = evaluateAdaptiveTrackingTransition(null, 52.52, 13.405, t0);
+    expect(step1.nextMode).toBe('moving');
+
+    const step2 = evaluateAdaptiveTrackingTransition(step1.nextState, 52.52003, 13.40503, t0 + 30_000);
+    expect(step2.nextMode).toBe('moving');
+    expect(step2.modeChanged).toBe(false);
+
+    const step3 = evaluateAdaptiveTrackingTransition(step2.nextState, 52.52004, 13.40502, t0 + 65_000);
+    expect(step3.nextMode).toBe('idle');
+    expect(step3.modeChanged).toBe(true);
+
+    const step4 = evaluateAdaptiveTrackingTransition(step3.nextState, 52.5205, 13.405, t0 + 365_000);
+    expect(step4.nextMode).toBe('moving');
+    expect(step4.modeChanged).toBe(true);
+
+    // 2. Watchdog checks permission_denied, gps_off, interrupted restart, queue flush, and idle heartbeat
+    let perm: 'always' | 'foreground' | 'denied' = 'foreground';
+    let servicesOn = true;
+    let continuousActive = true;
+    let restartThrows = false;
+    let pendingCount = 0;
+    const heartbeats: Array<{ state: string; battery: number | null }> = [];
+
+    const adapter: WatchdogAdapter = {
+      isTrackingEnabled: async () => true,
+      hasActiveSession: async () => true,
+      getBackgroundPermissionLevel: async () => perm,
+      hasLocationServicesEnabled: async () => servicesOn,
+      isContinuousLocationActive: async () => continuousActive,
+      startContinuousLocationUpdates: async () => {
+        if (restartThrows) throw new Error('FGS blocked');
+        continuousActive = true;
+      },
+      getPendingLocationCount: async () => pendingCount,
+      flushOfflineLocations: async () => {
+        pendingCount = 0;
+      },
+      getBatteryLevel: async () => 16,
+      sendHeartbeat: async (state, battery) => {
+        heartbeats.push({ state, battery });
+      },
+    };
+
+    expect((await runWatchdogCheck(adapter)).action).toBe('permission_denied');
+    perm = 'always';
+    servicesOn = false;
+    expect((await runWatchdogCheck(adapter)).action).toBe('gps_off');
+
+    servicesOn = true;
+    continuousActive = false;
+    restartThrows = true;
+    expect((await runWatchdogCheck(adapter)).action).toBe('interrupted');
+
+    restartThrows = false;
+    expect((await runWatchdogCheck(adapter)).action).toBe('restarted_and_synced');
+
+    pendingCount = 3;
+    expect((await runWatchdogCheck(adapter)).action).toBe('flushed_queue');
+
+    expect((await runWatchdogCheck(adapter)).action).toBe('heartbeat_sent');
+    expect(heartbeats).toEqual([
+      { state: 'permission_denied', battery: 16 },
+      { state: 'gps_off', battery: 16 },
+      { state: 'interrupted', battery: 16 },
+      { state: 'idle', battery: 16 },
+      { state: 'idle', battery: 16 },
+    ]);
+
+    // 3. Background auth POST refreshes expired accessToken via /api/auth/refresh and retries
+    let callCount = 0;
+    const savedTokens: Array<{ accessToken: string; refreshToken: string }> = [];
+    const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      callCount += 1;
+      const u = String(url);
+      if (u.endsWith('/api/auth/refresh')) {
+        return new Response(
+          JSON.stringify({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh' }),
+          { status: 200 },
+        );
+      }
+      if (callCount === 1) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+      }
+      expect((init?.headers as Record<string, string>)?.Authorization).toBe('Bearer fresh-access');
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const refreshedRes = await postBackgroundAuthedJson(
+      'https://track.example.com',
+      '/api/realtime/heartbeat',
+      'expired-access',
+      { trackingState: 'idle', batteryLevel: 16 },
+      mockFetch,
+      {
+        refreshToken: 'valid-refresh',
+        onTokensRefreshed: async (t) => {
+          savedTokens.push(t);
+        },
+      },
+    );
+    expect(refreshedRes.status).toBe(200);
+    expect(savedTokens).toEqual([{ accessToken: 'fresh-access', refreshToken: 'fresh-refresh' }]);
+
+    // 4. describeMemberStatus surfaces Idle at Place for EXACT and hides Place names for FUZZED
+    const nowMs = Date.parse('2026-11-22T15:43:00.000Z');
+    const status = describeMemberStatus({
+      latitude: 52.5205,
+      longitude: 13.4052,
+      recordedAt: '2026-11-22T15:06:00.000Z',
+      lastHeartbeatAt: '2026-11-22T15:41:00.000Z',
+      trackingState: 'idle',
+      isFuzzed: false,
+      places: [
+        {
+          id: 'p1',
+          groupId: null,
+          groupName: null,
+          isPrivate: true,
+          name: 'Dowi Home',
+          latitude: 52.52,
+          longitude: 13.405,
+          radiusMeters: 200,
+          createdBy: 'u1',
+          createdAt: '2026-11-20T00:00:00.000Z',
+        },
+      ],
+      nowMs,
+    });
+    expect(status.kind).toBe('idle_at_place');
+    expect(status.detailText).toContain('Idle at Dowi Home');
   });
 });

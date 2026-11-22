@@ -14,6 +14,7 @@ import {
   GroupPlace,
   GroupRole,
   haversineMeters,
+  HeartbeatInputSchema,
   JwtUserPayload,
   LocationBatchSchema,
   LocationBroadcast,
@@ -21,6 +22,7 @@ import {
   LocationRequestItem,
   LocationSnapshotQuerySchema,
   MatchedUserTrail,
+  MemberPresenceUpdate,
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
   parseBoundingBox,
@@ -28,7 +30,10 @@ import {
   PrivacyMode,
   RespondLocationRequestSchema,
   SendMessageSchema,
+  STATIONARY_COALESCE_RADIUS_METERS,
+  TrackingState,
   TrailQuerySchema,
+  UserPresenceRecord,
 } from '@loved-ones/shared';
 import { RoadTrailMatcher } from './road-trail-matcher.js';
 export { haversineMeters };
@@ -109,11 +114,15 @@ export interface RealtimeStore {
     longitude: number;
     recordedAt: string;
   }): Promise<PlaceTransitionEvent[]>;
+  getUserPresence?(userId: string): Promise<UserPresenceRecord | null>;
+  setUserPresence?(userId: string, record: UserPresenceRecord): Promise<void>;
+  getUsersPresence?(userIds: readonly string[]): Promise<Map<string, UserPresenceRecord>>;
 }
 
 export interface RealtimeBroadcaster {
   broadcastLocation(groupId: string, update: LocationBroadcast): void;
   broadcastLocationRemoved?(groupId: string, userId: string): void;
+  broadcastPresenceUpdate?(groupId: string, update: MemberPresenceUpdate): void;
   broadcastChatMessage(groupId: string, message: ChatMessage): void;
   broadcastLocationRequest(
     requesterId: string,
@@ -232,6 +241,7 @@ export function matchesIfNoneMatch(
 function toPrivacySafeBroadcast(
   groupId: string,
   row: GroupMemberLocationRow,
+  presence?: UserPresenceRecord | null,
 ): LocationBroadcast | null {
   if (row.role === 'SPECTATOR') return null;
   const recordedAtMs = new Date(row.recordedAt).getTime();
@@ -255,8 +265,10 @@ function toPrivacySafeBroadcast(
     longitude: fuzzed.longitude,
     altitude: row.altitude,
     speed: row.speed,
-    batteryLevel: row.batteryLevel,
+    batteryLevel: presence?.batteryLevel ?? row.batteryLevel,
     recordedAt: row.recordedAt,
+    lastHeartbeatAt: presence?.lastHeartbeatAt ?? null,
+    trackingState: presence?.trackingState ?? null,
     privacyMode: row.privacy,
     isFuzzed: fuzzed.isFuzzed,
   };
@@ -281,6 +293,7 @@ export interface RealtimeModuleOptions extends CoordinateFilterOptions {
   now?: () => number;
   onPlaceTransition?: (event: PlaceTransitionEvent) => void;
   roadMatcher?: RoadTrailMatcher;
+  onLocationIngested?: (userId: string, inserted: number) => Promise<void>;
 }
 
 /**
@@ -295,6 +308,7 @@ export class RealtimeModule {
   private readonly now: () => number;
   private readonly onPlaceTransition?: (event: PlaceTransitionEvent) => void;
   private readonly roadMatcher?: RoadTrailMatcher;
+  private readonly onLocationIngested?: (userId: string, inserted: number) => Promise<void>;
 
   constructor(options: RealtimeModuleOptions) {
     this.store = options.store;
@@ -307,6 +321,7 @@ export class RealtimeModule {
     this.now = options.now ?? (() => Date.now());
     this.onPlaceTransition = options.onPlaceTransition;
     this.roadMatcher = options.roadMatcher;
+    this.onLocationIngested = options.onLocationIngested;
   }
 
   private async requireMembership(
@@ -324,6 +339,50 @@ export class RealtimeModule {
     return info;
   }
 
+  private async persistAndBroadcastPresence(
+    userId: string,
+    record: UserPresenceRecord,
+  ): Promise<void> {
+    await this.store.setUserPresence?.(userId, record);
+    const memberships = await this.store.listMembershipsForUser(userId, new Date(this.now()));
+    for (const m of memberships) {
+      if (m.role === 'SPECTATOR' || m.privacy === 'GHOST') continue;
+      this.broadcaster.broadcastPresenceUpdate?.(m.groupId, {
+        userId,
+        groupId: m.groupId,
+        lastHeartbeatAt: record.lastHeartbeatAt,
+        trackingState: record.trackingState,
+        batteryLevel: record.batteryLevel,
+      });
+    }
+  }
+
+  async recordHeartbeat(
+    user: JwtUserPayload,
+    rawInput: unknown = {},
+  ): Promise<{ ok: true; lastHeartbeatAt: string; trackingState: TrackingState }> {
+    const parsed = HeartbeatInputSchema.safeParse(rawInput ?? {});
+    if (!parsed.success) {
+      throw new DomainError(400, 'Invalid heartbeat payload', parsed.error.flatten());
+    }
+    const nowIso = new Date(this.now()).toISOString();
+    const existing = (await this.store.getUserPresence?.(user.id).catch(() => null)) ?? null;
+    const record: UserPresenceRecord = {
+      lastHeartbeatAt: nowIso,
+      trackingState: parsed.data.trackingState,
+      batteryLevel:
+        parsed.data.batteryLevel !== undefined
+          ? parsed.data.batteryLevel
+          : (existing?.batteryLevel ?? null),
+    };
+    await this.persistAndBroadcastPresence(user.id, record);
+    return {
+      ok: true,
+      lastHeartbeatAt: record.lastHeartbeatAt,
+      trackingState: record.trackingState,
+    };
+  }
+
   async ingestLocationBatch(user: JwtUserPayload, rawInput: unknown): Promise<number> {
     const parsed = LocationBatchSchema.safeParse(rawInput);
     if (!parsed.success) {
@@ -333,9 +392,54 @@ export class RealtimeModule {
     if (points.length === 0) {
       return 0;
     }
+
+    const latest = points[points.length - 1]!;
+    const nowIso = new Date(this.now()).toISOString();
+    const latestExisting = await this.store.getLatestUserLocation(user.id).catch(() => null);
+
+    if (latestExisting) {
+      const existingMs = Date.parse(latestExisting.recordedAt);
+      const incomingMs = Date.parse(latest.recordedAt);
+      const allWithinStationaryRadius = points.every(
+        (pt) =>
+          haversineMeters(
+            latestExisting.latitude,
+            latestExisting.longitude,
+            pt.latitude,
+            pt.longitude,
+          ) < STATIONARY_COALESCE_RADIUS_METERS,
+      );
+
+      if (allWithinStationaryRadius) {
+        if (Number.isFinite(incomingMs) && Number.isFinite(existingMs) && incomingMs <= existingMs) {
+          return 0;
+        }
+        const existingPresence =
+          (await this.store.getUserPresence?.(user.id).catch(() => null)) ?? null;
+        await this.persistAndBroadcastPresence(user.id, {
+          lastHeartbeatAt: nowIso,
+          trackingState: 'idle',
+          batteryLevel: latest.batteryLevel ?? existingPresence?.batteryLevel ?? null,
+        });
+        return 0;
+      }
+    }
+
     const inserted = await this.store.insertLocationBatch(user.id, points);
-    const latest = points[points.length - 1];
     if (!latest || inserted === 0) return inserted;
+
+    const existingPresence =
+      (await this.store.getUserPresence?.(user.id).catch(() => null)) ?? null;
+    const activePresence: UserPresenceRecord = {
+      lastHeartbeatAt: nowIso,
+      trackingState: 'active',
+      batteryLevel: latest.batteryLevel ?? existingPresence?.batteryLevel ?? null,
+    };
+    await this.store.setUserPresence?.(user.id, activePresence);
+
+    if (this.onLocationIngested) {
+      await this.onLocationIngested(user.id, inserted).catch(() => {});
+    }
 
     const recordedAtMs = new Date(latest.recordedAt).getTime();
     const [memberships, profile] = await Promise.all([
@@ -387,8 +491,10 @@ export class RealtimeModule {
         longitude: fuzzed.longitude,
         altitude: latest.altitude ?? null,
         speed: latest.speed ?? null,
-        batteryLevel: latest.batteryLevel ?? null,
+        batteryLevel: activePresence.batteryLevel,
         recordedAt: latest.recordedAt,
+        lastHeartbeatAt: activePresence.lastHeartbeatAt,
+        trackingState: activePresence.trackingState,
         privacyMode: m.privacy,
         isFuzzed: fuzzed.isFuzzed,
       };
@@ -456,8 +562,11 @@ export class RealtimeModule {
     }
 
     const rows = await this.store.getLatestGroupLocations(groupId, new Date(this.now()));
+    const presenceMap =
+      (await this.store.getUsersPresence?.(rows.map((r) => r.userId)).catch(() => null)) ??
+      new Map<string, UserPresenceRecord>();
     const visibleAll = rows
-      .map((row) => toPrivacySafeBroadcast(groupId, row))
+      .map((row) => toPrivacySafeBroadcast(groupId, row, presenceMap.get(row.userId) ?? null))
       .filter((loc): loc is LocationBroadcast => loc !== null)
       .sort((a, b) => a.userId.localeCompare(b.userId));
 
@@ -830,10 +939,11 @@ export class RealtimeModule {
 
   async handleMemberPrivacyUpdated(userId: string, groupId: string): Promise<void> {
     const nowDate = new Date(this.now());
-    const [membership, latest, profile] = await Promise.all([
+    const [membership, latest, profile, presence] = await Promise.all([
       this.store.getGroupMembershipPrivacyInfo(userId, groupId, nowDate),
       this.store.getLatestUserLocation(userId),
       this.store.getUserProfile?.(userId).catch(() => null) ?? Promise.resolve(null),
+      this.store.getUserPresence?.(userId).catch(() => null) ?? Promise.resolve(null),
     ]);
     if (!membership || membership.role === 'SPECTATOR' || membership.effectivePrivacy === 'GHOST' || !latest) {
       this.broadcaster.broadcastLocationRemoved?.(groupId, userId);
@@ -861,8 +971,10 @@ export class RealtimeModule {
       longitude: fuzzed.longitude,
       altitude: latest.altitude ?? null,
       speed: latest.speed ?? null,
-      batteryLevel: latest.batteryLevel ?? null,
+      batteryLevel: presence?.batteryLevel ?? latest.batteryLevel ?? null,
       recordedAt: latest.recordedAt,
+      lastHeartbeatAt: presence?.lastHeartbeatAt ?? null,
+      trackingState: presence?.trackingState ?? null,
       privacyMode: membership.effectivePrivacy,
       isFuzzed: fuzzed.isFuzzed,
     });

@@ -18,6 +18,7 @@ import {
   findCoveringRegions,
   formatCountdownRemaining,
   haversineMeters,
+  HeartbeatInputSchema,
   hexToRgba,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
@@ -32,6 +33,7 @@ import {
   parseBoundingBox,
   parseInviteInput,
   QrInvitePayloadSchema,
+  resolveMemberPresenceStatus,
   RespondLocationRequestSchema,
   slugifyCityName,
   TrailQuerySchema,
@@ -48,6 +50,15 @@ import {
   isOriginAllowed,
   resolveClientIp,
 } from '../auth.js';
+import {
+  collectServiceNodeTelemetry,
+  dismissAdminNotice,
+  dismissAllAdminNotices,
+  listAdminNotices,
+  loadResourceLimitsSettings,
+  recordAdminNotice,
+  saveResourceLimitsSettings,
+} from '../telemetry.js';
 
 describe('@loved-ones/shared', () => {
   it('validates QR invite payloads', () => {
@@ -932,5 +943,180 @@ describe('@loved-ones/shared', () => {
     });
     expect(rawMode.hasRoadMatches).toBe(false);
     expect(rawMode.features.filter((f) => f.properties.kind === 'direct')).toHaveLength(1);
+  });
+
+  it('resolves idle-at-place, stationary, offline, paused, and FUZZED member presence states', () => {
+    const parsedHb = HeartbeatInputSchema.parse({ trackingState: 'idle', batteryLevel: 16 });
+    expect(parsedHb.trackingState).toBe('idle');
+    expect(parsedHb.batteryLevel).toBe(16);
+
+    const nowMs = Date.parse('2026-11-22T15:43:00.000Z');
+    const recorded37mAgo = '2026-11-22T15:06:00.000Z';
+    const heartbeat2mAgo = '2026-11-22T15:41:00.000Z';
+    const heartbeat20mAgo = '2026-11-22T15:23:00.000Z';
+
+    // 1. Recent movement (< 3 min)
+    const moving = resolveMemberPresenceStatus({
+      recordedAt: '2026-11-22T15:42:30.000Z',
+      lastHeartbeatAt: '2026-11-22T15:42:30.000Z',
+      trackingState: 'active',
+      insidePlaceName: 'Dowi Home',
+      nowMs,
+    });
+    expect(moving.kind).toBe('moving');
+    expect(moving.isOnline).toBe(true);
+
+    // 2. Stationary inside Place + fresh heartbeat -> Idle at Place
+    const idleAtHome = resolveMemberPresenceStatus({
+      recordedAt: recorded37mAgo,
+      lastHeartbeatAt: heartbeat2mAgo,
+      trackingState: 'idle',
+      insidePlaceName: 'Dowi Home',
+      nowMs,
+    });
+    expect(idleAtHome.kind).toBe('idle_at_place');
+    expect(idleAtHome.isOnline).toBe(true);
+    expect(idleAtHome.detailText).toContain('Idle at Dowi Home');
+    expect(idleAtHome.detailText).toContain('online 2m ago');
+
+    // 3. Stationary outside Place + fresh heartbeat -> Stationary
+    const stationaryOutside = resolveMemberPresenceStatus({
+      recordedAt: recorded37mAgo,
+      lastHeartbeatAt: heartbeat2mAgo,
+      trackingState: 'idle',
+      insidePlaceName: null,
+      nowMs,
+    });
+    expect(stationaryOutside.kind).toBe('stationary');
+    expect(stationaryOutside.isOnline).toBe(true);
+    expect(stationaryOutside.detailText).toContain('Stationary');
+
+    // 4. FUZZED privacy never reveals exact Place name even if passed
+    const fuzzedIdle = resolveMemberPresenceStatus({
+      recordedAt: recorded37mAgo,
+      lastHeartbeatAt: heartbeat2mAgo,
+      trackingState: 'idle',
+      isFuzzed: true,
+      insidePlaceName: 'Secret Home',
+      nowMs,
+    });
+    expect(fuzzedIdle.kind).toBe('stationary');
+    expect(fuzzedIdle.detailText).toContain('Stationary (~1 km)');
+    expect(fuzzedIdle.detailText).not.toContain('Secret Home');
+
+    // 5. Expired heartbeat (> 15 min) -> No signal
+    const offline = resolveMemberPresenceStatus({
+      recordedAt: recorded37mAgo,
+      lastHeartbeatAt: heartbeat20mAgo,
+      trackingState: 'idle',
+      insidePlaceName: 'Dowi Home',
+      nowMs,
+    });
+    expect(offline.kind).toBe('offline');
+    expect(offline.isOnline).toBe(false);
+    expect(offline.detailText).toContain('No signal');
+
+    // 6. Explicit paused / permission_denied / gps_off states
+    expect(
+      resolveMemberPresenceStatus({
+        recordedAt: recorded37mAgo,
+        lastHeartbeatAt: heartbeat2mAgo,
+        trackingState: 'paused',
+        nowMs,
+      }).kind,
+    ).toBe('paused');
+    expect(
+      resolveMemberPresenceStatus({
+        recordedAt: recorded37mAgo,
+        lastHeartbeatAt: heartbeat2mAgo,
+        trackingState: 'permission_denied',
+        nowMs,
+      }).kind,
+    ).toBe('permission_denied');
+    expect(
+      resolveMemberPresenceStatus({
+        recordedAt: recorded37mAgo,
+        lastHeartbeatAt: heartbeat2mAgo,
+        trackingState: 'gps_off',
+        nowMs,
+      }).kind,
+    ).toBe('gps_off');
+  });
+
+  it('persists, coalesces, and dismisses admin quota notices and resource limits', async () => {
+    const kv = new Map<string, string>();
+    const fakeRedis = {
+      async get(key: string) {
+        return kv.get(key) ?? null;
+      },
+      async set(key: string, val: string) {
+        kv.set(key, val);
+        return 'OK';
+      },
+      async del(key: string) {
+        return kv.delete(key) ? 1 : 0;
+      },
+    } as never;
+
+    const defaults = await loadResourceLimitsSettings(fakeRedis);
+    expect(defaults.autoTrimOnQuota).toBe(true);
+    expect(defaults.maxDatabaseMb).toBe(0);
+
+    const saved = await saveResourceLimitsSettings(fakeRedis, {
+      maxDatabaseMb: 512,
+      perUserMaxPoints: 5000,
+      maxMapStorageMb: 1024,
+    });
+    expect(saved.maxDatabaseMb).toBe(512);
+    expect(saved.perUserMaxPoints).toBe(5000);
+    expect(saved.maxMapStorageMb).toBe(1024);
+
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const first = await recordAdminNotice(fakeRedis, {
+      kind: 'quota_trim',
+      userId,
+      username: 'Alice',
+      deletedPoints: 40,
+      rangeStart: '2026-11-01T10:00:00.000Z',
+      rangeEnd: '2026-11-02T12:00:00.000Z',
+      scope: 'user_points',
+    });
+    // Coalesces consecutive trims for the same user & scope
+    const coalesced = await recordAdminNotice(fakeRedis, {
+      kind: 'quota_trim',
+      userId,
+      username: 'Alice',
+      deletedPoints: 15,
+      rangeStart: '2026-11-02T12:01:00.000Z',
+      rangeEnd: '2026-11-03T08:30:00.000Z',
+      scope: 'user_points',
+    });
+    expect(coalesced.id).toBe(first.id);
+    expect(coalesced.deletedPoints).toBe(55);
+    expect(coalesced.rangeStart).toBe('2026-11-01T10:00:00.000Z');
+    expect(coalesced.rangeEnd).toBe('2026-11-03T08:30:00.000Z');
+    expect(coalesced.message).toContain('55 location point(s) for Alice');
+
+    const listed = await listAdminNotices(fakeRedis);
+    expect(listed).toHaveLength(1);
+
+    expect(await dismissAdminNotice(fakeRedis, first.id)).toBe(true);
+    expect(await listAdminNotices(fakeRedis)).toHaveLength(0);
+
+    await recordAdminNotice(fakeRedis, {
+      kind: 'system',
+      title: 'Test notice',
+      message: 'Cleared test',
+    });
+    expect(await dismissAllAdminNotices(fakeRedis)).toBe(1);
+    expect(await listAdminNotices(fakeRedis)).toHaveLength(0);
+
+    const nodeSnap = await collectServiceNodeTelemetry({
+      service: 'test-service',
+      mounts: [{ mountLabel: 'logs', path: os.tmpdir() }],
+    });
+    expect(nodeSnap.snapshot.service).toBe('test-service');
+    expect(nodeSnap.snapshot.rssBytes).toBeGreaterThan(0);
+    expect(nodeSnap.snapshot.disks.length).toBeGreaterThanOrEqual(1);
   });
 });

@@ -6,7 +6,12 @@ import Fastify, { FastifyInstance } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import { createPool, resolveAuditContext, runMigrations } from '@loved-ones/db';
+import {
+  createPool,
+  enforceLocationQuotas,
+  resolveAuditContext,
+  runMigrations,
+} from '@loved-ones/db';
 import {
   AccountRemovedEventSchema,
   JwtUserPayload,
@@ -32,8 +37,11 @@ import {
   ServiceLoggerHandle,
 } from '@loved-ones/shared/logger';
 import {
+  loadResourceLimitsSettings,
+  recordAdminNotice,
   recordUserTelemetry,
   REMOVED_USER_PREFIX,
+  startServiceHeartbeat,
   TRACKER_JTI_USER_PREFIX,
   trackUserSocket,
   USER_ACCOUNT_REMOVED_CHANNEL,
@@ -224,11 +232,61 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   const roadMatcher = new RoadTrailMatcher({
     tilesDir: options.tilesDir ?? process.env.TILES_DIR,
   });
+  let lastGlobalTrimAt = 0;
 
   const realtime = new RealtimeModule({
-    store: new PostgresRealtimeStore(pool),
+    store: new PostgresRealtimeStore(pool, redis),
     broadcaster: new SocketIoBroadcaster(io),
     roadMatcher,
+    onLocationIngested: async (userId) => {
+      const limits = await loadResourceLimitsSettings(redis);
+      if (!limits.autoTrimOnQuota) return;
+      const perUserMaxPoints = limits.perUserMaxPoints;
+      const perUserMaxLocationBytes = Math.round(limits.perUserMaxLocationMb * 1024 * 1024);
+      const maxDatabaseBytes = Math.round(limits.maxDatabaseMb * 1024 * 1024);
+      if (perUserMaxPoints <= 0 && perUserMaxLocationBytes <= 0 && maxDatabaseBytes <= 0) {
+        return;
+      }
+
+      const nowMs = Date.now();
+      const allowGlobalTrim = nowMs - lastGlobalTrimAt >= 60_000;
+      const { trims, globalTrimmed } = await enforceLocationQuotas(pool, {
+        userId,
+        perUserMaxPoints,
+        perUserMaxLocationBytes,
+        maxDatabaseBytes,
+        allowGlobalTrim,
+      });
+      if (globalTrimmed) {
+        lastGlobalTrimAt = nowMs;
+      }
+
+      for (const trim of trims) {
+        const notice = await recordAdminNotice(redis, {
+          kind: 'quota_trim',
+          userId: trim.userId,
+          username: trim.username,
+          deletedPoints: trim.deletedPoints,
+          rangeStart: trim.rangeStart,
+          rangeEnd: trim.rangeEnd,
+          scope: trim.scope,
+        }).catch(() => null);
+        loggerHandle.logger.warn(
+          {
+            action: 'location.quota_trimmed',
+            userId: trim.userId,
+            username: trim.username,
+            deletedPoints: trim.deletedPoints,
+            rangeStart: trim.rangeStart,
+            rangeEnd: trim.rangeEnd,
+            scope: trim.scope,
+            noticeId: notice?.id ?? null,
+          },
+          notice?.message ??
+            `Auto-trimmed ${trim.deletedPoints} location point(s) for ${trim.username ?? trim.userId} (${trim.rangeStart}..${trim.rangeEnd})`,
+        );
+      }
+    },
     onPlaceTransition: (evt) => {
       void resolveGroupName(evt.groupId)
         .then((groupName) => {
@@ -617,6 +675,26 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         `${user.username} (${user.email}) shared ${inserted} location point(s) via Overland`,
       );
       return { result, inserted };
+    },
+  );
+
+  app.post(
+    '/api/realtime/heartbeat',
+    { preHandler: [requireIngestionAuth] },
+    async (request: AuthenticatedRequest) => {
+      const user = request.authUser!;
+      const result = await realtime.recordHeartbeat(user, request.body);
+      loggerHandle.logger.info(
+        {
+          action: 'location.heartbeat',
+          userId: user.id,
+          username: user.username,
+          email: user.email,
+          trackingState: result.trackingState,
+        },
+        `${user.username} (${user.email}) reported tracking status "${result.trackingState}"`,
+      );
+      return result;
     },
   );
 
@@ -1191,9 +1269,16 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     });
   });
 
+  const heartbeat = startServiceHeartbeat({
+    service: 'realtime-service',
+    redis,
+    mounts: [{ mountLabel: 'logs', path: logDir }],
+  });
+
   app.addHook('onClose', async () => {
     io.disconnectSockets(true);
     await roadMatcher.close().catch(() => {});
+    await heartbeat.stop();
     await loggerHandle.close();
     await logSubClient.unsubscribe().catch(() => {});
     logSubClient.disconnect();

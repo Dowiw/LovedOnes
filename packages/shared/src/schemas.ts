@@ -330,6 +330,38 @@ export const LocationBatchSchema = z.object({
 });
 export type LocationBatch = z.infer<typeof LocationBatchSchema>;
 
+export const TrackingStateSchema = z.enum([
+  'active',
+  'idle',
+  'paused',
+  'permission_denied',
+  'gps_off',
+  'interrupted',
+]);
+export type TrackingState = z.infer<typeof TrackingStateSchema>;
+
+export const HeartbeatInputSchema = z.object({
+  trackingState: TrackingStateSchema.default('idle'),
+  batteryLevel: z.number().int().min(0).max(100).nullable().optional(),
+  recordedAt: z.string().datetime().optional(),
+});
+export type HeartbeatInput = z.infer<typeof HeartbeatInputSchema>;
+
+export const MemberPresenceUpdateSchema = z.object({
+  userId: z.string().uuid(),
+  groupId: z.string().uuid(),
+  lastHeartbeatAt: z.string(),
+  trackingState: TrackingStateSchema,
+  batteryLevel: z.number().int().min(0).max(100).nullable().optional(),
+});
+export type MemberPresenceUpdate = z.infer<typeof MemberPresenceUpdateSchema>;
+
+export interface UserPresenceRecord {
+  lastHeartbeatAt: string;
+  trackingState: TrackingState;
+  batteryLevel: number | null;
+}
+
 export const LocationBroadcastSchema = z.object({
   userId: z.string().uuid(),
   username: z.string(),
@@ -343,6 +375,8 @@ export const LocationBroadcastSchema = z.object({
   speed: z.number().nullable().optional(),
   batteryLevel: z.number().nullable().optional(),
   recordedAt: z.string(),
+  lastHeartbeatAt: z.string().nullable().optional(),
+  trackingState: TrackingStateSchema.nullable().optional(),
   privacyMode: PrivacyModeSchema,
   isFuzzed: z.boolean(),
 });
@@ -512,6 +546,12 @@ export const UserTelemetrySchema = z.object({
   role: SystemRoleSchema,
   locationBytes: z.number(),
   locationPoints: z.number(),
+  estimatedIndexBytes: z.number().default(0),
+  messageBytes: z.number().default(0),
+  messageCount: z.number().default(0),
+  avatarBytes: z.number().default(0),
+  placeEventCount: z.number().default(0),
+  totalDbBytes: z.number().default(0),
   cpuMsTotal: z.number(),
   cpuMsPerMin: z.number(),
   eventsCount: z.number(),
@@ -520,6 +560,148 @@ export const UserTelemetrySchema = z.object({
   redisMemoryBytes: z.number(),
 });
 export type UserTelemetry = z.infer<typeof UserTelemetrySchema>;
+
+export const DiskMountTelemetrySchema = z.object({
+  mountLabel: z.enum(['logs', 'tiles', 'data']),
+  path: z.string(),
+  fsId: z.string(),
+  totalBytes: z.number(),
+  freeBytes: z.number(),
+  availableBytes: z.number(),
+  usedBytes: z.number(),
+  pathSizeBytes: z.number(),
+});
+export type DiskMountTelemetry = z.infer<typeof DiskMountTelemetrySchema>;
+
+export const ServiceNodeTelemetrySchema = z.object({
+  nodeKey: z.string(),
+  service: z.string(),
+  instanceId: z.string(),
+  hostname: z.string(),
+  pid: z.number(),
+  version: z.string().nullable(),
+  uptimeSeconds: z.number(),
+  cpuPercent: z.number(),
+  cpuCores: z.number(),
+  loadAvg1m: z.number(),
+  rssBytes: z.number(),
+  heapUsedBytes: z.number(),
+  heapTotalBytes: z.number(),
+  systemMemTotalBytes: z.number(),
+  systemMemUsedBytes: z.number(),
+  cgroupMemLimitBytes: z.number().nullable(),
+  cgroupMemUsedBytes: z.number().nullable(),
+  disks: z.array(DiskMountTelemetrySchema),
+  updatedAt: z.string(),
+});
+export type ServiceNodeTelemetry = z.infer<typeof ServiceNodeTelemetrySchema>;
+
+export const DatabaseTableBreakdownSchema = z.object({
+  tableName: z.string(),
+  label: z.string(),
+  category: z.enum(['system', 'manageable']),
+  deletable: z.boolean(),
+  rowBytes: z.number(),
+  indexBytes: z.number(),
+  toastBytes: z.number(),
+  totalBytes: z.number(),
+  liveRows: z.number(),
+  deadRows: z.number(),
+});
+export type DatabaseTableBreakdown = z.infer<typeof DatabaseTableBreakdownSchema>;
+
+export const DatabaseBreakdownSchema = z.object({
+  systemBytes: z.number(),
+  manageableBytes: z.number(),
+  deadTupleBytesEstimate: z.number(),
+  tables: z.array(DatabaseTableBreakdownSchema),
+});
+export type DatabaseBreakdown = z.infer<typeof DatabaseBreakdownSchema>;
+
+export const MapStorageSummarySchema = z.object({
+  totalBytes: z.number(),
+  primaryBytes: z.number(),
+  regionsBytes: z.number(),
+  maxMapStorageBytes: z.number(),
+  regionCount: z.number(),
+});
+export type MapStorageSummary = z.infer<typeof MapStorageSummarySchema>;
+
+export const RedisTelemetrySchema = z.object({
+  available: z.boolean(),
+  usedMemoryBytes: z.number(),
+  usedMemoryRssBytes: z.number(),
+  maxMemoryBytes: z.number().nullable(),
+  memFragmentationRatio: z.number().nullable(),
+  connectedClients: z.number().nullable(),
+  opsPerSec: z.number().nullable(),
+  evictedKeys: z.number().nullable(),
+  error: z.string().nullable().optional(),
+});
+export type RedisTelemetry = z.infer<typeof RedisTelemetrySchema>;
+
+export const ResourceLimitsSettingsSchema = z.object({
+  maxDatabaseMb: z.number().min(0).max(1_000_000),
+  perUserMaxLocationMb: z.number().min(0).max(100_000),
+  perUserMaxPoints: z.number().int().min(0).max(50_000_000),
+  locationRetentionDays: z.number().int().min(0).max(3650),
+  messageRetentionDays: z.number().int().min(0).max(3650),
+  placeEventRetentionDays: z.number().int().min(0).max(3650),
+  resolvedRequestRetentionDays: z.number().int().min(0).max(365),
+  maxMapStorageMb: z.number().min(0).max(1_000_000),
+  autoTrimOnQuota: z.boolean().default(true),
+  updatedAt: z.string().nullable().optional(),
+});
+export type ResourceLimitsSettings = z.infer<typeof ResourceLimitsSettingsSchema>;
+
+export const UpdateResourceLimitsSchema = z.object({
+  maxDatabaseMb: z.number().min(0).max(1_000_000).optional(),
+  perUserMaxLocationMb: z.number().min(0).max(100_000).optional(),
+  perUserMaxPoints: z.number().int().min(0).max(50_000_000).optional(),
+  locationRetentionDays: z.number().int().min(0).max(3650).optional(),
+  messageRetentionDays: z.number().int().min(0).max(3650).optional(),
+  placeEventRetentionDays: z.number().int().min(0).max(3650).optional(),
+  resolvedRequestRetentionDays: z.number().int().min(0).max(365).optional(),
+  maxMapStorageMb: z.number().min(0).max(1_000_000).optional(),
+  autoTrimOnQuota: z.boolean().optional(),
+});
+export type UpdateResourceLimitsInput = z.infer<typeof UpdateResourceLimitsSchema>;
+
+export const AdminNoticeScopeSchema = z.enum([
+  'user_points',
+  'user_storage',
+  'global_database',
+  'retention',
+]);
+export type AdminNoticeScope = z.infer<typeof AdminNoticeScopeSchema>;
+
+export const AdminNoticeSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(['quota_trim', 'storage_warning', 'system']),
+  severity: z.enum(['info', 'warning', 'error']),
+  title: z.string(),
+  message: z.string(),
+  userId: z.string().uuid().nullable(),
+  username: z.string().nullable(),
+  deletedPoints: z.number().int().nonnegative().nullable(),
+  rangeStart: z.string().nullable(),
+  rangeEnd: z.string().nullable(),
+  scope: AdminNoticeScopeSchema.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type AdminNotice = z.infer<typeof AdminNoticeSchema>;
+
+export const ResourcePruneResultSchema = z.object({
+  settings: ResourceLimitsSettingsSchema,
+  deletedLocations: z.number().int().nonnegative(),
+  deletedMessages: z.number().int().nonnegative(),
+  deletedPlaceEvents: z.number().int().nonnegative(),
+  deletedLocationRequests: z.number().int().nonnegative(),
+  deletedRegistrationRequests: z.number().int().nonnegative(),
+  vacuumed: z.boolean(),
+});
+export type ResourcePruneResult = z.infer<typeof ResourcePruneResultSchema>;
 
 export const SystemTelemetrySchema = z.object({
   timestamp: z.string(),
@@ -532,6 +714,12 @@ export const SystemTelemetrySchema = z.object({
   totalLocationPoints: z.number(),
   totalActiveSockets: z.number(),
   users: z.array(UserTelemetrySchema),
+  databaseBreakdown: DatabaseBreakdownSchema.optional(),
+  mapStorage: MapStorageSummarySchema.optional(),
+  redis: RedisTelemetrySchema.optional(),
+  nodes: z.array(ServiceNodeTelemetrySchema).optional(),
+  resourceLimits: ResourceLimitsSettingsSchema.optional(),
+  notices: z.array(AdminNoticeSchema).optional(),
 });
 export type SystemTelemetry = z.infer<typeof SystemTelemetrySchema>;
 
