@@ -48,7 +48,6 @@ import {
   USER_PRIVACY_UPDATED_CHANNEL,
   USER_PROFILE_UPDATED_CHANNEL,
 } from '@loved-ones/shared/telemetry';
-import type { ResourceLimitsSettings } from '@loved-ones/shared';
 import {
   PostgresRealtimeStore,
   SocketIoBroadcaster,
@@ -228,24 +227,13 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     return undefined;
   };
 
-  let cachedLimits: { value: ResourceLimitsSettings; fetchedAt: number } | null = null;
   let lastGlobalTrimAt = 0;
-
-  const getCachedResourceLimits = async (): Promise<ResourceLimitsSettings> => {
-    const nowMs = Date.now();
-    if (cachedLimits && nowMs - cachedLimits.fetchedAt < 5000) {
-      return cachedLimits.value;
-    }
-    const value = await loadResourceLimitsSettings(redis);
-    cachedLimits = { value, fetchedAt: nowMs };
-    return value;
-  };
 
   const realtime = new RealtimeModule({
     store: new PostgresRealtimeStore(pool),
     broadcaster: new SocketIoBroadcaster(io),
     onLocationIngested: async (userId) => {
-      const limits = await getCachedResourceLimits();
+      const limits = await loadResourceLimitsSettings(redis);
       if (!limits.autoTrimOnQuota) return;
       const perUserMaxPoints = limits.perUserMaxPoints;
       const perUserMaxLocationBytes = Math.round(limits.perUserMaxLocationMb * 1024 * 1024);
