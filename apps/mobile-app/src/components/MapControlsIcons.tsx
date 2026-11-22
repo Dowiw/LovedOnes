@@ -18,12 +18,20 @@ export function CompassNeedleIcon({ bearingDeg }: { bearingDeg: number }) {
 /**
  * Clean geometric location pin icon used on the floating recalibrate/GPS button.
  */
-export function LocationPinIcon({ active = false }: { active?: boolean }) {
-  const fill = active ? '#059669' : '#18181b';
+export function LocationPinIcon({
+  active = false,
+  tintColor = '#18181b',
+  holeColor = '#ffffff',
+}: {
+  active?: boolean;
+  tintColor?: string;
+  holeColor?: string;
+}) {
+  const fill = active ? '#059669' : tintColor;
   return (
     <View style={styles.pinWrap}>
       <View style={[styles.pinHead, { backgroundColor: fill }]}>
-        <View style={styles.pinInnerHole} />
+        <View style={[styles.pinInnerHole, { backgroundColor: holeColor }]} />
       </View>
       <View style={[styles.pinPoint, { borderTopColor: fill }]} />
     </View>
@@ -33,8 +41,16 @@ export function LocationPinIcon({ active = false }: { active?: boolean }) {
 /**
  * Minimal geometric bookmark/place icon for the Places bottom tab.
  */
-export function PlacesTabIcon({ active = false }: { active?: boolean }) {
-  const color = active ? '#18181b' : '#64748b';
+export function PlacesTabIcon({
+  active = false,
+  activeColor = '#18181b',
+  inactiveColor = '#64748b',
+}: {
+  active?: boolean;
+  activeColor?: string;
+  inactiveColor?: string;
+}) {
+  const color = active ? activeColor : inactiveColor;
   return (
     <View style={styles.tabIconWrap}>
       <View style={[styles.placeOuter, { borderColor: color }]}>
@@ -47,8 +63,16 @@ export function PlacesTabIcon({ active = false }: { active?: boolean }) {
 /**
  * Minimal geometric speech bubble icon for the Chat bottom tab.
  */
-export function ChatTabIcon({ active = false }: { active?: boolean }) {
-  const color = active ? '#18181b' : '#64748b';
+export function ChatTabIcon({
+  active = false,
+  activeColor = '#18181b',
+  inactiveColor = '#64748b',
+}: {
+  active?: boolean;
+  activeColor?: string;
+  inactiveColor?: string;
+}) {
+  const color = active ? activeColor : inactiveColor;
   return (
     <View style={styles.tabIconWrap}>
       <View style={[styles.chatBox, { borderColor: color }]} />

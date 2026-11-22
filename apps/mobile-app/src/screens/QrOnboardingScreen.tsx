@@ -48,12 +48,14 @@ import {
   ONBOARDING_COLOR_PRESETS,
   validateAuthForm,
 } from '../services/onboardingTheme';
+import { resolveMobileMapTheme } from '../services/pmtilesStyle';
 import { useSafeAreaInsets } from '../services/safeArea';
 import {
   clearPendingRegistration,
   getPendingRegistration,
   getPingedServers,
   isPendingRecordActive,
+  type MobileMapThemePreference,
   MobileStoredConfig,
   normalizeServerUrlKey,
   parseAndBindQrInvite,
@@ -85,6 +87,7 @@ export interface QrOnboardingScreenProps {
   initialServerUrl?: string | null;
   pendingInviteUrl?: string | null;
   persistentToast?: string | null;
+  themePreference?: MobileMapThemePreference;
   onConsumePendingInvite?: () => void;
 }
 
@@ -122,11 +125,13 @@ export function QrOnboardingScreen({
   initialServerUrl = null,
   pendingInviteUrl = null,
   persistentToast = null,
+  themePreference = 'system',
   onConsumePendingInvite,
 }: QrOnboardingScreenProps) {
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
-  const palette = getOnboardingPalette(colorScheme);
+  const resolvedTheme = resolveMobileMapTheme(themePreference, colorScheme);
+  const palette = getOnboardingPalette(resolvedTheme);
   const fonts = getGeometricFonts(Platform.OS);
 
   const [permission, requestPermission] = useCameraPermissions();

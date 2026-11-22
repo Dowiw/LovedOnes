@@ -85,7 +85,7 @@ function JoinInviteInner() {
   }
 
   return (
-    <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)]">
+    <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)] dark:bg-zinc-950">
       <NavBar
         user={session?.user ?? null}
         onSignOut={() => {
@@ -94,33 +94,33 @@ function JoinInviteInner() {
         }}
       />
       <main className="mx-auto max-w-md px-4 py-14">
-        <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-7 shadow-[0_12px_40px_rgba(9,9,11,0.08)] backdrop-blur-xl">
+        <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-7 shadow-[0_12px_40px_rgba(9,9,11,0.08)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 dark:shadow-[0_12px_40px_rgba(0,0,0,0.45)]">
           {loading ? (
-            <div className="text-sm text-zinc-500">Verifying invite token...</div>
+            <div className="text-sm text-zinc-500 dark:text-zinc-400">Verifying invite token...</div>
           ) : error && !preview ? (
-            <div className="flex items-center gap-2 text-sm text-rose-600">
+            <div className="flex items-center gap-2 text-sm text-rose-600 dark:text-rose-400">
               <ShieldAlert className="h-5 w-5" />
               <span>{error}</span>
             </div>
           ) : preview ? (
             <div className="space-y-4">
               <div className="flex items-center gap-2.5">
-                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-950 text-white">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950">
                   <UserPlus className="h-4 w-4" />
                 </span>
-                <h1 className="text-lg font-bold tracking-tight text-zinc-950">Group Invite</h1>
+                <h1 className="text-lg font-bold tracking-tight text-zinc-950 dark:text-zinc-50">Group Invite</h1>
               </div>
 
-              <div className="space-y-1.5 rounded-lg border border-zinc-200/80 bg-zinc-50/80 p-4 text-xs">
-                <div className="text-sm font-semibold text-zinc-950">{preview.groupName}</div>
-                <div className="text-zinc-500">
-                  Role: <span className="font-medium text-zinc-950">{preview.assignedRole}</span>
+              <div className="space-y-1.5 rounded-lg border border-zinc-200/80 bg-zinc-50/80 p-4 text-xs dark:border-zinc-800 dark:bg-zinc-950/60">
+                <div className="text-sm font-semibold text-zinc-950 dark:text-zinc-100">{preview.groupName}</div>
+                <div className="text-zinc-500 dark:text-zinc-400">
+                  Role: <span className="font-medium text-zinc-950 dark:text-zinc-100">{preview.assignedRole}</span>
                 </div>
-                <div className="text-zinc-500">
+                <div className="text-zinc-500 dark:text-zinc-400">
                   Status:{' '}
                   <span
                     className={
-                      preview.valid ? 'font-medium text-zinc-950' : 'font-medium text-rose-600'
+                      preview.valid ? 'font-medium text-zinc-950 dark:text-zinc-100' : 'font-medium text-rose-600 dark:text-rose-400'
                     }
                   >
                     {preview.valid ? 'Active' : 'Expired / Exhausted'}
@@ -129,7 +129,7 @@ function JoinInviteInner() {
               </div>
 
               {error && (
-                <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-800/60 dark:bg-rose-950/50 dark:text-rose-300">
                   {error}
                 </div>
               )}
@@ -139,31 +139,31 @@ function JoinInviteInner() {
                   type="button"
                   disabled={!preview.valid || submitting}
                   onClick={() => void handleJoinExisting()}
-                  className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
+                  className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                 >
                   {submitting ? (
                     <>
-                      <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
-                      <Loader2 className="h-4 w-4 animate-spin text-white" />
+                      <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15 dark:bg-zinc-950/15" />
+                      <Loader2 className="h-4 w-4 animate-spin" />
                     </>
                   ) : (
-                    <CheckCircle2 className="h-4 w-4 text-white" />
+                    <CheckCircle2 className="h-4 w-4" />
                   )}
                   {submitting ? 'Joining...' : `Join as ${session.user.username}`}
                 </button>
               ) : (
                 <form onSubmit={handleRegisterAndJoin} className="space-y-3">
-                  <label className="block text-xs font-medium text-zinc-600">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
                     Email
                     <input
                       type="email"
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
                     />
                   </label>
-                  <label className="block text-xs font-medium text-zinc-600">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
                     Username
                     <input
                       type="text"
@@ -171,10 +171,10 @@ function JoinInviteInner() {
                       minLength={2}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
                     />
                   </label>
-                  <label className="block text-xs font-medium text-zinc-600">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
                     Password
                     <input
                       type="password"
@@ -182,18 +182,18 @@ function JoinInviteInner() {
                       minLength={8}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
                     />
                   </label>
                   <button
                     type="submit"
                     disabled={!preview.valid || submitting}
-                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
+                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                   >
                     {submitting && (
                       <>
-                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
-                        <Loader2 className="h-4 w-4 animate-spin text-white" />
+                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15 dark:bg-zinc-950/15" />
+                        <Loader2 className="h-4 w-4 animate-spin" />
                       </>
                     )}
                     <span>{submitting ? 'Joining...' : 'Register & Join Group'}</span>
@@ -212,7 +212,7 @@ export default function JoinPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-dvh bg-[#f4f4f5] p-8 pb-[var(--lo-safe-bottom,0px)] text-sm text-zinc-500">Loading...</div>
+        <div className="min-h-dvh bg-[#f4f4f5] p-8 pb-[var(--lo-safe-bottom,0px)] text-sm text-zinc-500 dark:bg-zinc-950 dark:text-zinc-400">Loading...</div>
       }
     >
       <JoinInviteInner />

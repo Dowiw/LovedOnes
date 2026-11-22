@@ -91,6 +91,7 @@ import {
   formatServerHostLabel,
   getGeometricFonts,
   getOnboardingPalette,
+  type OnboardingPalette,
 } from '../services/onboardingTheme';
 import {
   buildMobileMapStyle,
@@ -104,6 +105,7 @@ import {
   type MapLabelLanguage,
   type OfflineCacheInfo,
   type OfflineDownloadProgress,
+  type ResolvedMobileMapTheme,
   resolveMobileMapTheme,
 } from '../services/pmtilesStyle';
 import { useSafeAreaInsets } from '../services/safeArea';
@@ -137,13 +139,28 @@ type DrawerMode = 'people' | 'places';
 
 interface MobileMapScreenProps {
   config: MobileStoredConfig;
+  initialThemePreference?: MobileMapThemePreference;
+  onThemePreferenceChange?: (pref: MobileMapThemePreference) => void;
   onSignedOut: (removedMessage?: string) => void;
 }
 
-export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
+export function MobileMapScreen({
+  config,
+  initialThemePreference = 'system',
+  onThemePreferenceChange,
+  onSignedOut,
+}: MobileMapScreenProps) {
   const insets = useSafeAreaInsets();
-  const colorScheme = useColorScheme();
-  const palette = getOnboardingPalette(colorScheme);
+  const systemColorScheme = useColorScheme();
+  const [mapThemePreference, setMapThemePreference] = useState<MobileMapThemePreference>(
+    initialThemePreference,
+  );
+  useEffect(() => {
+    setMapThemePreference(initialThemePreference);
+  }, [initialThemePreference]);
+  const resolvedMapTheme = resolveMobileMapTheme(mapThemePreference, systemColorScheme);
+  const ui = useMemo(() => getOnboardingPalette(resolvedMapTheme), [resolvedMapTheme]);
+  const styles = useMemo(() => createMobileStyles(resolvedMapTheme, ui), [resolvedMapTheme, ui]);
   const fonts = getGeometricFonts(Platform.OS);
   const { height: windowHeight } = useWindowDimensions();
 
@@ -290,9 +307,6 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   const [tracking, setTracking] = useState(false);
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
-  const systemColorScheme = useColorScheme();
-  const [mapThemePreference, setMapThemePreference] = useState<MobileMapThemePreference>('system');
-  const resolvedMapTheme = resolveMobileMapTheme(mapThemePreference, systemColorScheme);
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
@@ -527,8 +541,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
         void getCachedRegionPmtilesUri().then(setLocalPmtilesUri).catch(() => {});
       });
     void refreshQueueCount().catch(() => {});
-    void getMapThemePreference().then(setMapThemePreference).catch(() => {});
-  }, [refreshQueueCount]);
+    void getMapThemePreference()
+      .then((pref) => {
+        setMapThemePreference(pref);
+        onThemePreferenceChange?.(pref);
+      })
+      .catch(() => {});
+  }, [onThemePreferenceChange, refreshQueueCount]);
 
   useEffect(() => {
     if (!chatOpen) return;
@@ -2350,9 +2369,13 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
           onPress={() => void handlePinLocationPress()}
         >
           {syncingBusy ? (
-            <ActivityIndicator size="small" color="#18181b" />
+            <ActivityIndicator size="small" color={ui.ink} />
           ) : (
-            <LocationPinIcon active={tracking} />
+            <LocationPinIcon
+              active={tracking}
+              tintColor={ui.ink}
+              holeColor={ui.surface}
+            />
           )}
           {tracking && <View style={styles.pinLiveBadge} />}
           {queuedCount > 0 && (
@@ -2508,7 +2531,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                       {trailBusy && activeTrailUserId === selectedMember.userId ? (
                         <ActivityIndicator
                           size="small"
-                          color={activeTrailUserId === selectedMember.userId ? '#ffffff' : '#18181b'}
+                          color={activeTrailUserId === selectedMember.userId ? ui.ctaText : ui.ink}
                         />
                       ) : null}
                       <Text
@@ -2626,7 +2649,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                       value={placeName}
                       onChangeText={setPlaceName}
                       placeholder="Home, School, Office..."
-                      placeholderTextColor="#94a3b8"
+                      placeholderTextColor={ui.placeholder}
                     />
 
                     <Text style={styles.fieldLabel}>Radius</Text>
@@ -2683,7 +2706,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                       disabled={placeBusy}
                       onPress={() => void handleCreatePlace()}
                     >
-                      {placeBusy && <ActivityIndicator size="small" color="#ffffff" />}
+                      {placeBusy && <ActivityIndicator size="small" color={ui.ctaText} />}
                       <Text style={styles.primaryBlackText}>
                         {placeBusy ? 'Saving Place...' : 'Save Place'}
                       </Text>
@@ -2771,7 +2794,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                             onPress={() => void handleDeletePlace(p.id)}
                           >
                             {deletingPlaceId === p.id ? (
-                              <ActivityIndicator size="small" color="#be123c" />
+                              <ActivityIndicator size="small" color={ui.errorText} />
                             ) : (
                               <Text style={styles.placeDeleteText}>Remove</Text>
                             )}
@@ -2801,7 +2824,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             }}
           >
             <View style={styles.chatTabRow}>
-              <PlacesTabIcon active={drawerMode === 'places'} />
+              <PlacesTabIcon
+                active={drawerMode === 'places'}
+                activeColor={ui.ink}
+                inactiveColor={ui.inkMuted}
+              />
               <Text style={[styles.tabLabel, drawerMode === 'places' && styles.tabLabelActive]}>
                 Places{places.length > 0 ? ` (${places.length})` : ''}
               </Text>
@@ -2817,7 +2844,11 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
             }}
           >
             <View style={styles.chatTabRow}>
-              <ChatTabIcon active={chatOpen} />
+              <ChatTabIcon
+                active={chatOpen}
+                activeColor={ui.ink}
+                inactiveColor={ui.inkMuted}
+              />
               <Text style={styles.tabLabel}>
                 Chat{messages.length > 0 ? ` (${messages.length})` : ''}
               </Text>
@@ -2897,7 +2928,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                             {savingThis ? (
                               <ActivityIndicator
                                 size="small"
-                                color={active ? '#ffffff' : '#18181b'}
+                                color={active ? ui.ctaText : ui.ink}
                               />
                             ) : (
                               <Text
@@ -3079,6 +3110,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                           style={[styles.themeSegmentBtn, active && styles.themeSegmentBtnActive]}
                           onPress={() => {
                             setMapThemePreference(pref);
+                            onThemePreferenceChange?.(pref);
                             void saveMapThemePreference(pref).catch(() => {});
                           }}
                         >
@@ -3156,10 +3188,19 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                     }}
                   >
                     <View style={styles.flexOne}>
-                      <Text style={[styles.settingsSectionTitle, selected && { color: '#ffffff' }]}>
+                      <Text
+                        style={[styles.settingsSectionTitle, selected && { color: ui.ctaText }]}
+                      >
                         {grp.name}
                       </Text>
-                      <Text style={[styles.settingsHint, selected && { color: '#d4d4d8' }]}>
+                      <Text
+                        style={[
+                          styles.settingsHint,
+                          selected && {
+                            color: resolvedMapTheme === 'dark' ? '#52525b' : '#d4d4d8',
+                          },
+                        ]}
+                      >
                         Sharing mode: {grp.myPrivacy}
                       </Text>
                     </View>
@@ -3214,7 +3255,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                 onPress={() => void handleGrantAlwaysLocation()}
               >
                 {locationPromptBusy === 'always' && (
-                  <ActivityIndicator size="small" color="#ffffff" />
+                  <ActivityIndicator size="small" color={ui.ctaText} />
                 )}
                 <Text style={styles.primaryBlackText}>
                   Allow All the Time (Recommended)
@@ -3227,7 +3268,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                 onPress={() => void handleGrantOneTimeLocation()}
               >
                 {locationPromptBusy === 'once' && (
-                  <ActivityIndicator size="small" color="#18181b" />
+                  <ActivityIndicator size="small" color={ui.ink} />
                 )}
                 <Text style={styles.outlineBlackText}>
                   Allow Once / While Using (Test)
@@ -3367,7 +3408,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   value={chatText}
                   onChangeText={setChatText}
                   placeholder={activeGroup ? 'Message group...' : 'Select a group'}
-                  placeholderTextColor="#71717a"
+                  placeholderTextColor={ui.placeholder}
                   returnKeyType="send"
                   onSubmitEditing={handleSendChat}
                 />
@@ -3457,7 +3498,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   onChangeText={setEditAvatarUrl}
                   autoCapitalize="none"
                   placeholder="https://example.com/photo.jpg"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={ui.placeholder}
                 />
 
                 <Text style={styles.fieldLabel}>Display Name</Text>
@@ -3466,7 +3507,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   value={editUsername}
                   onChangeText={setEditUsername}
                   placeholder="Your name"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={ui.placeholder}
                 />
 
                 <Text style={styles.fieldLabel}>Email Address</Text>
@@ -3477,7 +3518,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   autoCapitalize="none"
                   keyboardType="email-address"
                   placeholder="you@example.com"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={ui.placeholder}
                 />
 
                 <Text style={styles.fieldLabel}>User Halo Color</Text>
@@ -3492,7 +3533,8 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                         borderRadius: 999,
                         backgroundColor: hex,
                         borderWidth: editHaloColor?.toLowerCase() === hex ? 3 : 1.5,
-                        borderColor: editHaloColor?.toLowerCase() === hex ? '#18181b' : '#ffffff',
+                        borderColor:
+                          editHaloColor?.toLowerCase() === hex ? ui.ctaBg : ui.borderStrong,
                       }}
                     />
                   ))}
@@ -3522,7 +3564,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                         backgroundColor: hex,
                         borderWidth: editFuzzCircleColor?.toLowerCase() === hex ? 3 : 1.5,
                         borderColor:
-                          editFuzzCircleColor?.toLowerCase() === hex ? '#18181b' : '#ffffff',
+                          editFuzzCircleColor?.toLowerCase() === hex ? ui.ctaBg : ui.borderStrong,
                       }}
                     />
                   ))}
@@ -3547,7 +3589,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   disabled={accountBusy}
                   onPress={() => void handleSaveProfile()}
                 >
-                  {accountBusy && <ActivityIndicator size="small" color="#ffffff" />}
+                  {accountBusy && <ActivityIndicator size="small" color={ui.ctaText} />}
                   <Text style={styles.primaryBlackText}>
                     {accountBusy ? 'Saving Profile...' : 'Save Profile'}
                   </Text>
@@ -3575,7 +3617,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   autoCapitalize="none"
                   keyboardType="email-address"
                   placeholder={userProfile?.email ?? 'backup@example.com'}
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={ui.placeholder}
                 />
 
                 <TouchableOpacity
@@ -3583,7 +3625,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   disabled={recoveryBusy}
                   onPress={() => void handleSendRecoveryCode()}
                 >
-                  {recoveryAction === 'send' && <ActivityIndicator size="small" color="#ffffff" />}
+                  {recoveryAction === 'send' && <ActivityIndicator size="small" color={ui.ctaText} />}
                   <Text style={styles.primaryBlackText}>
                     {recoveryAction === 'send' ? 'Sending...' : 'Send Verification Code'}
                   </Text>
@@ -3600,7 +3642,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                       keyboardType="number-pad"
                       maxLength={6}
                       placeholder="123456"
-                      placeholderTextColor="#94a3b8"
+                      placeholderTextColor={ui.placeholder}
                     />
                     <TouchableOpacity
                       style={[styles.outlineBlackBtn, recoveryBusy && styles.btnBusy]}
@@ -3608,7 +3650,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                       onPress={() => void handleVerifyRecoveryEmail()}
                     >
                       {recoveryAction === 'verify' && (
-                        <ActivityIndicator size="small" color="#18181b" />
+                        <ActivityIndicator size="small" color={ui.ink} />
                       )}
                       <Text style={styles.outlineBlackText}>
                         {recoveryAction === 'verify' ? 'Verifying...' : 'Verify Email'}
@@ -3627,7 +3669,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                     onPress={() => void handleClearRecoveryEmail()}
                   >
                     {recoveryAction === 'clear' && (
-                      <ActivityIndicator size="small" color="#18181b" />
+                      <ActivityIndicator size="small" color={ui.ink} />
                     )}
                     <Text style={styles.removePhotoText}>
                       {recoveryAction === 'clear' ? 'Removing...' : 'Remove Backup Email'}
@@ -3649,7 +3691,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   onChangeText={setCurrentPassword}
                   secureTextEntry
                   placeholder="Current password"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={ui.placeholder}
                 />
 
                 <Text style={styles.fieldLabel}>New Password</Text>
@@ -3659,7 +3701,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   onChangeText={setNewPassword}
                   secureTextEntry
                   placeholder="Minimum 8 characters"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={ui.placeholder}
                 />
 
                 <Text style={styles.fieldLabel}>Confirm New Password</Text>
@@ -3669,7 +3711,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   onChangeText={setConfirmPassword}
                   secureTextEntry
                   placeholder="Repeat new password"
-                  placeholderTextColor="#94a3b8"
+                  placeholderTextColor={ui.placeholder}
                 />
 
                 {passwordError && <Text style={styles.errorText}>{passwordError}</Text>}
@@ -3680,7 +3722,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                   disabled={passwordBusy}
                   onPress={() => void handleChangePassword()}
                 >
-                  {passwordBusy && <ActivityIndicator size="small" color="#18181b" />}
+                  {passwordBusy && <ActivityIndicator size="small" color={ui.ink} />}
                   <Text style={styles.outlineBlackText}>
                     {passwordBusy ? 'Updating Password...' : 'Update Password'}
                   </Text>
@@ -3694,7 +3736,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
       <ColorPickerSheet
         visible={colorPickerTarget !== null}
         initialHex={colorPickerTarget === 'fuzz' ? editFuzzCircleColor : editHaloColor}
-        palette={palette}
+        palette={ui}
         fonts={fonts}
         onApply={(hex) => {
           if (colorPickerTarget === 'fuzz') {
@@ -3733,7 +3775,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                 onChangeText={setShareLabelInput}
                 maxLength={80}
                 placeholder="Label (optional, e.g. Meetup)"
-                placeholderTextColor="#a1a1aa"
+                placeholderTextColor={ui.placeholder}
               />
 
               <View style={styles.themeSegmentGroup}>
@@ -4004,7 +4046,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                         disabled={!qrPreview.valid || qrLoading}
                         onPress={() => void handleConfirmJoinInvite()}
                       >
-                        {qrLoading && <ActivityIndicator size="small" color="#ffffff" />}
+                        {qrLoading && <ActivityIndicator size="small" color={ui.ctaText} />}
                         <Text style={styles.primaryBlackText}>
                           {qrLoading ? 'Joining...' : `Join ${qrPreview.groupName}`}
                         </Text>
@@ -4048,7 +4090,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                           onChangeText={setQrPasteInput}
                           autoCapitalize="none"
                           placeholder="https://.../join?token=inv_... or inv_..."
-                          placeholderTextColor="#94a3b8"
+                          placeholderTextColor={ui.placeholder}
                         />
                         {qrError && <Text style={styles.errorText}>{qrError}</Text>}
                         <TouchableOpacity
@@ -4056,7 +4098,7 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
                           disabled={qrLoading || !qrPasteInput.trim()}
                           onPress={() => void resolveMobileInvite(qrPasteInput)}
                         >
-                          {qrLoading && <ActivityIndicator size="small" color="#18181b" />}
+                          {qrLoading && <ActivityIndicator size="small" color={ui.ink} />}
                           <Text style={styles.outlineBlackText}>
                             {qrLoading ? 'Checking...' : 'Verify Invite'}
                           </Text>
@@ -4080,909 +4122,921 @@ export function MobileMapScreen({ config, onSignedOut }: MobileMapScreenProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#cfe3ee' },
-  map: { flex: 1 },
-  marker: { alignItems: 'center' },
-  markerLabel: {
-    backgroundColor: 'rgba(255, 255, 255, 0.96)',
-    color: '#18181b',
-    fontSize: 11,
-    fontWeight: '700',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
-    marginBottom: 4,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    overflow: 'hidden',
-  },
-  markerLabelSelected: {
-    backgroundColor: '#18181b',
-    color: '#ffffff',
-    borderColor: '#18181b',
-  },
-  placeMarkerLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 8,
-    marginBottom: 3,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  placeMarkerPrivate: {
-    backgroundColor: 'rgba(238, 242, 255, 0.96)',
-    color: '#3730a3',
-    borderColor: '#c7d2fe',
-  },
-  placeMarkerGroup: {
-    backgroundColor: 'rgba(240, 253, 250, 0.96)',
-    color: '#115e59',
-    borderColor: '#99f6e4',
-  },
-  placeMarkerDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 999,
-    borderWidth: 2.5,
-    backgroundColor: '#ffffff',
-  },
-  draftPlacePin: {
-    width: 18,
-    height: 18,
-    borderRadius: 999,
-    backgroundColor: '#18181b',
-    borderWidth: 3,
-    borderColor: '#ffffff',
-  },
-  markerHalo: {
-    width: 24,
-    height: 24,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
-  },
-  markerDot: { width: 12, height: 12, borderRadius: 999 },
-  dotExact: { backgroundColor: '#18181b' },
-  dotFuzzed: { backgroundColor: '#d97706' },
-  selfMarkerLabel: {
-    backgroundColor: '#18181b',
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '700',
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: 999,
-    marginBottom: 4,
-    overflow: 'hidden',
-  },
-  selfMarkerHalo: {
-    width: 26,
-    height: 26,
-    borderRadius: 999,
-    borderWidth: 2,
-    borderColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selfMarkerDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 999,
-    borderWidth: 2,
-    borderColor: '#ffffff',
-  },
-  avatarRing: {
-    width: 36,
-    height: 36,
-    borderRadius: 999,
-    borderWidth: 2.5,
-    backgroundColor: '#18181b',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  avatarRingSelected: {
-    width: 42,
-    height: 42,
-    borderWidth: 3,
-  },
-  avatarRingSelf: {
-    width: 36,
-    height: 36,
-    borderRadius: 999,
-    borderWidth: 2.5,
-    backgroundColor: '#18181b',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  markerAvatarImg: { width: '100%', height: '100%' },
-  topOverlay: {
-    position: 'absolute',
-    left: 14,
-    right: 14,
-    gap: 10,
-  },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  groupPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    maxWidth: '66%',
-    backgroundColor: 'rgba(255, 255, 255, 0.94)',
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: 'rgba(226, 232, 240, 0.95)',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
-  },
-  groupPillName: { color: '#18181b', fontSize: 13, fontWeight: '700', flexShrink: 1 },
-  groupPillChevron: { color: '#64748b', fontSize: 12, fontWeight: '700' },
-  pickingBanner: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(24, 24, 27, 0.94)',
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-  },
-  pickingBannerText: { color: '#ffffff', fontSize: 12, fontWeight: '700' },
-  pickingCancelText: { color: '#93c5fd', fontSize: 12, fontWeight: '700' },
-  profileAvatarBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 999,
-    borderWidth: 2.5,
-    backgroundColor: '#18181b',
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 5,
-  },
-  topAvatarImg: { width: '100%', height: '100%' },
-  topAvatarInitial: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
-  floatingControlsWrap: {
-    position: 'absolute',
-    right: 14,
-    gap: 10,
-    alignItems: 'center',
-  },
-  mapActionBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255, 255, 255, 0.96)',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.14,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  pinLiveBadge: {
-    position: 'absolute',
-    bottom: 6,
-    right: 6,
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: '#10b981',
-    borderWidth: 1.5,
-    borderColor: '#ffffff',
-  },
-  floatingBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    backgroundColor: '#18181b',
-    borderRadius: 999,
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  floatingBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: '700' },
-  chatToastBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    backgroundColor: 'rgba(24, 24, 27, 0.95)',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  chatToastTextWrap: { flex: 1 },
-  chatToastSender: { color: '#e4e4e7', fontSize: 11, fontWeight: '700' },
-  chatToastBody: { color: '#ffffff', fontSize: 13, fontWeight: '500', marginTop: 1 },
-  chatToastAction: { color: '#ffffff', fontSize: 12, fontWeight: '700' },
-  bottomSheet: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.14,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: -4 },
-    elevation: 12,
-  },
-  sheetDragArea: {
-    paddingTop: 10,
-    paddingBottom: 6,
-    gap: 8,
-  },
-  sheetHandle: {
-    alignSelf: 'center',
-    width: 40,
-    height: 4.5,
-    borderRadius: 999,
-    backgroundColor: '#cbd5e1',
-  },
-  drawerHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  drawerHeaderTitle: {
-    color: '#18181b',
-    fontSize: 15,
-    fontWeight: '700',
-    flex: 1,
-  },
-  drawerCollapseText: {
-    color: '#64748b',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  memberStripScroll: {
-    flexGrow: 0,
-    marginBottom: 8,
-  },
-  memberStrip: {
-    gap: 8,
-    paddingVertical: 2,
-  },
-  memberChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#f8fafc',
-    borderColor: '#e2e8f0',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  memberChipSelected: {
-    backgroundColor: '#18181b',
-    borderColor: '#18181b',
-  },
-  memberChipAvatar: { width: 18, height: 18, borderRadius: 999 },
-  memberChipDot: { width: 7, height: 7, borderRadius: 999 },
-  memberChipText: { color: '#18181b', fontSize: 12, fontWeight: '600' },
-  memberChipTextSelected: { color: '#ffffff' },
-  openMapsBtn: {
-    backgroundColor: '#18181b',
-    borderRadius: 10,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    justifyContent: 'center',
-  },
-  openMapsBtnText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  shareInput: {
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
-    backgroundColor: '#fafafa',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    fontSize: 13,
-    color: '#18181b',
-  },
-  shareLinkCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
-    backgroundColor: '#fafafa',
-    padding: 10,
-  },
-  shareOpenBtn: {
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 9,
-    paddingVertical: 7,
-  },
-  shareOpenBtnText: {
-    color: '#18181b',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  shareRevokeBtn: {
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#fecdd3',
-    backgroundColor: '#fff1f2',
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-  },
-  shareRevokeBtnText: {
-    color: '#be123c',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  drawerBodyScroll: { flex: 1 },
-  drawerBodyContent: { paddingBottom: 10, gap: 10 },
-  memberDetailCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 14,
-    gap: 8,
-  },
-  memberDetailHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  memberDetailIdentity: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  memberDetailName: { color: '#18181b', fontSize: 16, fontWeight: '700' },
-  privacyStatusPill: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#a7f3d0',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  privacyStatusFuzzed: {
-    backgroundColor: '#fffbeb',
-    borderColor: '#fde68a',
-  },
-  privacyStatusText: { color: '#18181b', fontSize: 10, fontWeight: '700' },
-  closeMiniText: { color: '#64748b', fontSize: 12, fontWeight: '700' },
-  detailMetaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-  },
-  detailMetaLabel: { color: '#64748b', fontSize: 12, fontWeight: '600' },
-  detailMetaValue: { color: '#18181b', fontSize: 12, fontWeight: '600', flex: 1, textAlign: 'right' },
-  detailMetaMono: {
-    color: '#64748b',
-    fontSize: 11,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  detailActionRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  detailTrailBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: '#18181b',
-    backgroundColor: '#ffffff',
-    paddingVertical: 9,
-  },
-  detailTrailBtnActive: {
-    backgroundColor: '#18181b',
-  },
-  detailTrailBtnText: { color: '#18181b', fontSize: 12, fontWeight: '700' },
-  detailTrailBtnTextActive: { color: '#ffffff' },
-  detailFocusBtn: {
-    borderRadius: 10,
-    backgroundColor: '#e4e4e7',
-    paddingHorizontal: 14,
-    justifyContent: 'center',
-  },
-  detailFocusBtnText: { color: '#18181b', fontSize: 12, fontWeight: '700' },
-  emptyDrawerBox: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 14,
-  },
-  placesSection: { gap: 10 },
-  placesHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  addPlacePill: {
-    backgroundColor: '#18181b',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  addPlacePillText: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
-  placeFormCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 12,
-    gap: 8,
-  },
-  scopeChipRow: { gap: 6, paddingVertical: 2 },
-  scopeChip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#d4d4d8',
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-  },
-  scopeChipActive: {
-    backgroundColor: '#18181b',
-    borderColor: '#18181b',
-  },
-  scopeChipText: { color: '#3f3f46', fontSize: 11, fontWeight: '600' },
-  scopeChipTextActive: { color: '#ffffff' },
-  radiusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  radiusChip: {
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#d4d4d8',
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  radiusChipActive: { backgroundColor: '#18181b', borderColor: '#18181b' },
-  radiusChipText: { color: '#3f3f46', fontSize: 11, fontWeight: '600' },
-  radiusChipTextActive: { color: '#ffffff' },
-  coordBtnRow: { flexDirection: 'row', gap: 8 },
-  coordActionBtn: {
-    flex: 1,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#18181b',
-    backgroundColor: '#ffffff',
-    paddingVertical: 8,
-    alignItems: 'center',
-  },
-  coordActionText: { color: '#18181b', fontSize: 12, fontWeight: '700' },
-  placeListItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#fafafa',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  placeListItemActive: { borderColor: '#18181b', backgroundColor: '#ffffff' },
-  placeTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  placeScopeTag: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
-  placeTagPrivate: { backgroundColor: '#eef2ff' },
-  placeTagShared: { backgroundColor: '#f0fdfa' },
-  placeScopeTagText: { fontSize: 10, fontWeight: '700' },
-  placeTagTextPrivate: { color: '#4338ca' },
-  placeTagTextShared: { color: '#0f766e' },
-  placeDeleteBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: '#fff1f2',
-  },
-  placeDeleteText: { color: '#be123c', fontSize: 11, fontWeight: '700' },
-  tabBar: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingTop: 6,
-  },
-  tabItem: {
-    flex: 1,
-    borderRadius: 999,
-    paddingVertical: 10,
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-  },
-  tabItemActive: { backgroundColor: '#e4e4e7' },
-  tabLabel: { color: '#52525b', fontSize: 12, fontWeight: '700' },
-  tabLabelActive: { color: '#18181b' },
-  chatTabRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  unreadBadge: {
-    backgroundColor: '#18181b',
-    borderRadius: 999,
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  unreadBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: '700' },
-  profileHubCard: { maxHeight: '86%' },
-  hubIdentityRow: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, paddingRight: 8 },
-  hubAvatarCircle: {
-    width: 46,
-    height: 46,
-    borderRadius: 999,
-    borderWidth: 2,
-    backgroundColor: '#18181b',
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  hubAvatarInitial: { color: '#ffffff', fontSize: 17, fontWeight: '700' },
-  hubScroll: { gap: 10, paddingBottom: 16 },
-  hubFeedbackBanner: {
-    backgroundColor: '#f4f4f5',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  hubFeedbackText: { color: '#18181b', fontSize: 12, fontWeight: '600' },
-  hubSectionCard: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
-    backgroundColor: '#fafafa',
-    padding: 12,
-    gap: 8,
-  },
-  hubSectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  hubInlineLink: { color: '#18181b', fontSize: 12, fontWeight: '700' },
-  segmentedRow: {
-    flexDirection: 'row',
-    gap: 6,
-    backgroundColor: '#e4e4e7',
-    borderRadius: 10,
-    padding: 4,
-  },
-  segmentBtn: {
-    flex: 1,
-    borderRadius: 7,
-    paddingVertical: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentBtnActive: { backgroundColor: '#18181b' },
-  segmentText: { color: '#3f3f46', fontSize: 12, fontWeight: '700' },
-  segmentTextActive: { color: '#ffffff' },
-  locationPromptBody: { color: '#3f3f46', fontSize: 14, lineHeight: 20 },
-  boldText: { color: '#18181b', fontWeight: '700' },
-  settingsLinkBtn: { alignSelf: 'center', paddingVertical: 6 },
-  modalWrap: { flex: 1, backgroundColor: '#eef3f6', paddingTop: 52 },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  modalTitle: { color: '#18181b', fontSize: 18, fontWeight: '700' },
-  modalSubtitle: { color: '#64748b', fontSize: 12 },
-  closePill: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e2e8f0',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  closeText: { color: '#18181b', fontSize: 13, fontWeight: '700' },
-  chatList: { flex: 1, backgroundColor: '#fafafa' },
-  chatListContent: { padding: 16, gap: 10 },
-  chatEmptyWrap: { paddingVertical: 40, alignItems: 'center' },
-  chatEmptyText: { color: '#71717a', fontSize: 13, textAlign: 'center' },
-  dateSeparator: { alignItems: 'center', marginVertical: 8 },
-  dateSeparatorText: {
-    backgroundColor: '#e4e4e7',
-    color: '#52525b',
-    fontSize: 11,
-    fontWeight: '600',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 999,
-    overflow: 'hidden',
-  },
-  chatMessageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 4 },
-  chatRowMine: { justifyContent: 'flex-end' },
-  chatRowOther: { justifyContent: 'flex-start' },
-  chatAvatarSlot: { width: 28, height: 28 },
-  chatAvatarImg: { width: 28, height: 28, borderRadius: 999 },
-  chatAvatarFallback: {
-    width: 28,
-    height: 28,
-    borderRadius: 999,
-    backgroundColor: '#18181b',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chatAvatarInitials: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
-  chatColumn: { maxWidth: '78%' },
-  chatColumnMine: { alignItems: 'flex-end' },
-  chatColumnOther: { alignItems: 'flex-start' },
-  chatMetaHeader: {
-    color: '#71717a',
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 3,
-    paddingHorizontal: 2,
-  },
-  chatBubble: { borderRadius: 14, paddingHorizontal: 14, paddingVertical: 9 },
-  chatBubbleMine: { backgroundColor: '#18181b', borderBottomRightRadius: 4 },
-  chatBubbleOther: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e4e4e7',
-    borderWidth: 1,
-    borderBottomLeftRadius: 4,
-  },
-  chatBody: { fontSize: 14, lineHeight: 19 },
-  chatBodyMine: { color: '#ffffff' },
-  chatBodyOther: { color: '#18181b' },
-  chatTimeFooter: { color: '#a1a1aa', fontSize: 10, marginTop: 2, paddingHorizontal: 2 },
-  chatTimeFooterMine: { color: '#71717a' },
-  chatComposer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 24,
-    gap: 8,
-    backgroundColor: '#ffffff',
-    borderTopWidth: 1,
-    borderTopColor: '#e4e4e7',
-  },
-  chatInput: {
-    flex: 1,
-    backgroundColor: '#f4f4f5',
-    borderColor: '#e4e4e7',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    color: '#18181b',
-    fontSize: 14,
-  },
-  sendIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 999,
-    backgroundColor: '#18181b',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sendIconBtnDisabled: { opacity: 0.4 },
-  sendBtnText: { color: '#ffffff', fontWeight: '700', fontSize: 16 },
-  flexOne: { flex: 1 },
-  sheetBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(9, 9, 11, 0.45)',
-    justifyContent: 'flex-end',
-  },
-  sheetCard: {
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    gap: 12,
-  },
-  sheetHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  sheetOptionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
-    backgroundColor: '#fafafa',
-    padding: 14,
-  },
-  sheetOptionSelected: { backgroundColor: '#18181b', borderColor: '#18181b' },
-  menuRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
-    backgroundColor: '#fafafa',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  menuRowAction: { color: '#18181b', fontSize: 12, fontWeight: '700' },
-  themeSegmentGroup: {
-    flexDirection: 'row',
-    backgroundColor: '#e4e4e7',
-    borderRadius: 8,
-    padding: 2,
-    gap: 2,
-  },
-  themeSegmentBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
-  },
-  themeSegmentBtnActive: {
-    backgroundColor: '#18181b',
-  },
-  themeSegmentText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#52525b',
-  },
-  themeSegmentTextActive: {
-    color: '#ffffff',
-  },
-  progressTrack: {
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: '#e4e4e7',
-    overflow: 'hidden',
-  },
-  progressFill: { height: '100%', borderRadius: 999, backgroundColor: '#18181b' },
-  settingsScroll: { padding: 16, gap: 14, paddingBottom: 40 },
-  settingsCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
-    padding: 16,
-    gap: 10,
-  },
-  avatarPreviewRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginBottom: 4,
-  },
-  settingsAvatarCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 999,
-    backgroundColor: '#18181b',
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  settingsAvatarImg: { width: '100%', height: '100%' },
-  settingsAvatarInitial: { color: '#ffffff', fontSize: 22, fontWeight: '700' },
-  avatarMeta: { flex: 1, gap: 4 },
-  settingsSectionTitle: { color: '#18181b', fontSize: 14, fontWeight: '700' },
-  settingsHint: { color: '#71717a', fontSize: 12 },
-  removePhotoBtn: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#f4f4f5',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    marginTop: 2,
-  },
-  removePhotoText: { color: '#18181b', fontSize: 11, fontWeight: '600' },
-  fieldLabel: { color: '#71717a', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-  fieldInput: {
-    backgroundColor: '#fafafa',
-    borderColor: '#e4e4e7',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    color: '#18181b',
-    fontSize: 14,
-  },
-  errorText: { color: '#be123c', fontSize: 12, fontWeight: '600' },
-  successText: { color: '#18181b', fontSize: 12, fontWeight: '600' },
-  primaryBlackBtn: {
-    flexDirection: 'row',
-    backgroundColor: '#18181b',
-    borderRadius: 999,
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 4,
-  },
-  primaryBlackText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
-  outlineBlackBtn: {
-    flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    borderColor: '#18181b',
-    borderWidth: 1.5,
-    borderRadius: 999,
-    paddingVertical: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 4,
-  },
-  outlineBlackText: { color: '#18181b', fontSize: 13, fontWeight: '700' },
-  btnBusy: { opacity: 0.72 },
-  signOutFullBtn: {
-    backgroundColor: '#ffffff',
-    borderColor: '#fecdd3',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingVertical: 13,
-    alignItems: 'center',
-  },
-  signOutFullText: { color: '#be123c', fontSize: 13, fontWeight: '700' },
-  scannerFull: { flex: 1, backgroundColor: '#000000' },
-  scannerOverlayBar: {
-    position: 'absolute',
-    bottom: 48,
-    left: 20,
-    right: 20,
-    backgroundColor: 'rgba(24, 24, 27, 0.92)',
-    borderRadius: 12,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  scannerOverlayText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
-  headerTitleFlex: { flex: 1, paddingRight: 12 },
-  previewGroupName: { color: '#18181b', fontSize: 18, fontWeight: '700' },
-  skipPromptText: { color: '#18181b', fontSize: 12, fontWeight: '700', textAlign: 'center' },
-});
+export function createMobileStyles(
+  resolvedTheme: ResolvedMobileMapTheme,
+  ui: OnboardingPalette = getOnboardingPalette(resolvedTheme),
+) {
+  const isDark = resolvedTheme === 'dark';
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: isDark ? '#0c141d' : '#cfe3ee' },
+    map: { flex: 1 },
+    marker: { alignItems: 'center' },
+    markerLabel: {
+      backgroundColor: isDark ? 'rgba(24, 24, 27, 0.94)' : 'rgba(255, 255, 255, 0.96)',
+      color: ui.ink,
+      fontSize: 11,
+      fontWeight: '700',
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 999,
+      marginBottom: 4,
+      borderWidth: 1,
+      borderColor: ui.borderStrong,
+      overflow: 'hidden',
+    },
+    markerLabelSelected: {
+      backgroundColor: ui.ctaBg,
+      color: ui.ctaText,
+      borderColor: ui.ctaBg,
+    },
+    placeMarkerLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+      borderRadius: 8,
+      marginBottom: 3,
+      borderWidth: 1,
+      overflow: 'hidden',
+    },
+    placeMarkerPrivate: {
+      backgroundColor: isDark ? 'rgba(30, 27, 75, 0.94)' : 'rgba(238, 242, 255, 0.96)',
+      color: isDark ? '#c7d2fe' : '#3730a3',
+      borderColor: isDark ? '#4338ca' : '#c7d2fe',
+    },
+    placeMarkerGroup: {
+      backgroundColor: isDark ? 'rgba(19, 78, 74, 0.94)' : 'rgba(240, 253, 250, 0.96)',
+      color: isDark ? '#99f6e4' : '#115e59',
+      borderColor: isDark ? '#0f766e' : '#99f6e4',
+    },
+    placeMarkerDot: {
+      width: 14,
+      height: 14,
+      borderRadius: 999,
+      borderWidth: 2.5,
+      backgroundColor: ui.surface,
+    },
+    draftPlacePin: {
+      width: 18,
+      height: 18,
+      borderRadius: 999,
+      backgroundColor: ui.ctaBg,
+      borderWidth: 3,
+      borderColor: ui.surface,
+    },
+    markerHalo: {
+      width: 24,
+      height: 24,
+      borderRadius: 999,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#0f172a',
+      shadowOpacity: 0.18,
+      shadowRadius: 6,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 4,
+    },
+    markerDot: { width: 12, height: 12, borderRadius: 999 },
+    dotExact: { backgroundColor: ui.ink },
+    dotFuzzed: { backgroundColor: '#d97706' },
+    selfMarkerLabel: {
+      backgroundColor: ui.ctaBg,
+      color: ui.ctaText,
+      fontSize: 11,
+      fontWeight: '700',
+      paddingHorizontal: 9,
+      paddingVertical: 3,
+      borderRadius: 999,
+      marginBottom: 4,
+      overflow: 'hidden',
+    },
+    selfMarkerHalo: {
+      width: 26,
+      height: 26,
+      borderRadius: 999,
+      borderWidth: 2,
+      borderColor: '#ffffff',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    selfMarkerDot: {
+      width: 12,
+      height: 12,
+      borderRadius: 999,
+      borderWidth: 2,
+      borderColor: '#ffffff',
+    },
+    avatarRing: {
+      width: 36,
+      height: 36,
+      borderRadius: 999,
+      borderWidth: 2.5,
+      backgroundColor: '#18181b',
+      overflow: 'hidden',
+      shadowColor: '#000',
+      shadowOpacity: 0.25,
+      shadowRadius: 6,
+      elevation: 4,
+    },
+    avatarRingSelected: {
+      width: 42,
+      height: 42,
+      borderWidth: 3,
+    },
+    avatarRingSelf: {
+      width: 36,
+      height: 36,
+      borderRadius: 999,
+      borderWidth: 2.5,
+      backgroundColor: '#18181b',
+      overflow: 'hidden',
+      shadowColor: '#000',
+      shadowOpacity: 0.25,
+      shadowRadius: 6,
+      elevation: 4,
+    },
+    markerAvatarImg: { width: '100%', height: '100%' },
+    topOverlay: {
+      position: 'absolute',
+      left: 14,
+      right: 14,
+      gap: 10,
+    },
+    topRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+    },
+    groupPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      maxWidth: '66%',
+      backgroundColor: isDark ? 'rgba(24, 24, 27, 0.94)' : 'rgba(255, 255, 255, 0.94)',
+      borderRadius: 999,
+      paddingHorizontal: 14,
+      paddingVertical: 9,
+      borderWidth: 1,
+      borderColor: ui.borderStrong,
+      shadowColor: '#000000',
+      shadowOpacity: isDark ? 0.35 : 0.1,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 4,
+    },
+    groupPillName: { color: ui.ink, fontSize: 13, fontWeight: '700', flexShrink: 1 },
+    groupPillChevron: { color: ui.inkMuted, fontSize: 12, fontWeight: '700' },
+    pickingBanner: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: 'rgba(24, 24, 27, 0.94)',
+      borderRadius: 999,
+      borderWidth: isDark ? 1 : 0,
+      borderColor: ui.borderStrong,
+      paddingHorizontal: 14,
+      paddingVertical: 9,
+    },
+    pickingBannerText: { color: '#ffffff', fontSize: 12, fontWeight: '700' },
+    pickingCancelText: { color: '#93c5fd', fontSize: 12, fontWeight: '700' },
+    profileAvatarBtn: {
+      width: 44,
+      height: 44,
+      borderRadius: 999,
+      borderWidth: 2.5,
+      backgroundColor: '#18181b',
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000000',
+      shadowOpacity: isDark ? 0.38 : 0.2,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 5,
+    },
+    topAvatarImg: { width: '100%', height: '100%' },
+    topAvatarInitial: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
+    floatingControlsWrap: {
+      position: 'absolute',
+      right: 14,
+      gap: 10,
+      alignItems: 'center',
+    },
+    mapActionBtn: {
+      width: 48,
+      height: 48,
+      borderRadius: 999,
+      backgroundColor: isDark ? 'rgba(24, 24, 27, 0.94)' : 'rgba(255, 255, 255, 0.96)',
+      borderWidth: 1,
+      borderColor: ui.borderStrong,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000000',
+      shadowOpacity: isDark ? 0.36 : 0.14,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 6,
+    },
+    pinLiveBadge: {
+      position: 'absolute',
+      bottom: 6,
+      right: 6,
+      width: 8,
+      height: 8,
+      borderRadius: 999,
+      backgroundColor: '#10b981',
+      borderWidth: 1.5,
+      borderColor: ui.surface,
+    },
+    floatingBadge: {
+      position: 'absolute',
+      top: -4,
+      right: -4,
+      backgroundColor: ui.ctaBg,
+      borderRadius: 999,
+      minWidth: 18,
+      height: 18,
+      paddingHorizontal: 4,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    floatingBadgeText: { color: ui.ctaText, fontSize: 10, fontWeight: '700' },
+    chatToastBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+      backgroundColor: 'rgba(24, 24, 27, 0.95)',
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderWidth: 1,
+      borderColor: 'rgba(255, 255, 255, 0.15)',
+      shadowColor: '#000000',
+      shadowOpacity: 0.24,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 6,
+    },
+    chatToastTextWrap: { flex: 1 },
+    chatToastSender: { color: '#e4e4e7', fontSize: 11, fontWeight: '700' },
+    chatToastBody: { color: '#ffffff', fontSize: 13, fontWeight: '500', marginTop: 1 },
+    chatToastAction: { color: '#ffffff', fontSize: 12, fontWeight: '700' },
+    bottomSheet: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: ui.surface,
+      borderTopWidth: isDark ? 1 : 0,
+      borderTopColor: ui.border,
+      borderTopLeftRadius: 18,
+      borderTopRightRadius: 18,
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      shadowColor: '#000000',
+      shadowOpacity: isDark ? 0.45 : 0.14,
+      shadowRadius: 18,
+      shadowOffset: { width: 0, height: -4 },
+      elevation: 12,
+    },
+    sheetDragArea: {
+      paddingTop: 10,
+      paddingBottom: 6,
+      gap: 8,
+    },
+    sheetHandle: {
+      alignSelf: 'center',
+      width: 40,
+      height: 4.5,
+      borderRadius: 999,
+      backgroundColor: ui.borderStrong,
+    },
+    drawerHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    drawerHeaderTitle: {
+      color: ui.ink,
+      fontSize: 15,
+      fontWeight: '700',
+      flex: 1,
+    },
+    drawerCollapseText: {
+      color: ui.inkMuted,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    memberStripScroll: {
+      flexGrow: 0,
+      marginBottom: 8,
+    },
+    memberStrip: {
+      gap: 8,
+      paddingVertical: 2,
+    },
+    memberChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      backgroundColor: ui.surfaceMuted,
+      borderColor: ui.border,
+      borderWidth: 1,
+      borderRadius: 999,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+    },
+    memberChipSelected: {
+      backgroundColor: ui.ctaBg,
+      borderColor: ui.ctaBg,
+    },
+    memberChipAvatar: { width: 18, height: 18, borderRadius: 999 },
+    memberChipDot: { width: 7, height: 7, borderRadius: 999 },
+    memberChipText: { color: ui.ink, fontSize: 12, fontWeight: '600' },
+    memberChipTextSelected: { color: ui.ctaText },
+    openMapsBtn: {
+      backgroundColor: ui.ctaBg,
+      borderRadius: 10,
+      paddingHorizontal: 11,
+      paddingVertical: 8,
+      justifyContent: 'center',
+    },
+    openMapsBtnText: {
+      color: ui.ctaText,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    shareInput: {
+      borderWidth: 1,
+      borderColor: ui.border,
+      backgroundColor: ui.surfaceMuted,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      fontSize: 13,
+      color: ui.ink,
+    },
+    shareLinkCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: ui.border,
+      backgroundColor: ui.surfaceMuted,
+      padding: 10,
+    },
+    shareOpenBtn: {
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: ui.border,
+      backgroundColor: ui.surface,
+      paddingHorizontal: 9,
+      paddingVertical: 7,
+    },
+    shareOpenBtnText: {
+      color: ui.ink,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    shareRevokeBtn: {
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: ui.errorBorder,
+      backgroundColor: ui.errorBg,
+      paddingHorizontal: 8,
+      paddingVertical: 7,
+    },
+    shareRevokeBtnText: {
+      color: ui.errorText,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    drawerBodyScroll: { flex: 1 },
+    drawerBodyContent: { paddingBottom: 10, gap: 10 },
+    memberDetailCard: {
+      backgroundColor: ui.surfaceMuted,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: ui.border,
+      padding: 14,
+      gap: 8,
+    },
+    memberDetailHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    memberDetailIdentity: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    memberDetailName: { color: ui.ink, fontSize: 16, fontWeight: '700' },
+    privacyStatusPill: {
+      backgroundColor: ui.badgeSuccessBg,
+      borderColor: ui.badgeSuccessBorder,
+      borderWidth: 1,
+      borderRadius: 999,
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+    },
+    privacyStatusFuzzed: {
+      backgroundColor: ui.badgeWarnBg,
+      borderColor: ui.badgeWarnBorder,
+    },
+    privacyStatusText: { color: ui.ink, fontSize: 10, fontWeight: '700' },
+    closeMiniText: { color: ui.inkMuted, fontSize: 12, fontWeight: '700' },
+    detailMetaRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: 10,
+    },
+    detailMetaLabel: { color: ui.inkMuted, fontSize: 12, fontWeight: '600' },
+    detailMetaValue: { color: ui.ink, fontSize: 12, fontWeight: '600', flex: 1, textAlign: 'right' },
+    detailMetaMono: {
+      color: ui.inkMuted,
+      fontSize: 11,
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    },
+    detailActionRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+    detailTrailBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      borderRadius: 10,
+      borderWidth: 1.5,
+      borderColor: ui.ctaBg,
+      backgroundColor: ui.surface,
+      paddingVertical: 9,
+    },
+    detailTrailBtnActive: {
+      backgroundColor: ui.ctaBg,
+    },
+    detailTrailBtnText: { color: ui.ink, fontSize: 12, fontWeight: '700' },
+    detailTrailBtnTextActive: { color: ui.ctaText },
+    detailFocusBtn: {
+      borderRadius: 10,
+      backgroundColor: ui.surfaceChip,
+      paddingHorizontal: 14,
+      justifyContent: 'center',
+    },
+    detailFocusBtnText: { color: ui.ink, fontSize: 12, fontWeight: '700' },
+    emptyDrawerBox: {
+      backgroundColor: ui.surfaceMuted,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: ui.border,
+      padding: 14,
+    },
+    placesSection: { gap: 10 },
+    placesHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    addPlacePill: {
+      backgroundColor: ui.ctaBg,
+      borderRadius: 999,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+    },
+    addPlacePillText: { color: ui.ctaText, fontSize: 11, fontWeight: '700' },
+    placeFormCard: {
+      backgroundColor: ui.surfaceMuted,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: ui.border,
+      padding: 12,
+      gap: 8,
+    },
+    scopeChipRow: { gap: 6, paddingVertical: 2 },
+    scopeChip: {
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: ui.borderStrong,
+      backgroundColor: ui.surface,
+      paddingHorizontal: 11,
+      paddingVertical: 6,
+    },
+    scopeChipActive: {
+      backgroundColor: ui.ctaBg,
+      borderColor: ui.ctaBg,
+    },
+    scopeChipText: { color: ui.inkSubtle, fontSize: 11, fontWeight: '600' },
+    scopeChipTextActive: { color: ui.ctaText },
+    radiusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    radiusChip: {
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: ui.borderStrong,
+      backgroundColor: ui.surface,
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+    },
+    radiusChipActive: { backgroundColor: ui.ctaBg, borderColor: ui.ctaBg },
+    radiusChipText: { color: ui.inkSubtle, fontSize: 11, fontWeight: '600' },
+    radiusChipTextActive: { color: ui.ctaText },
+    coordBtnRow: { flexDirection: 'row', gap: 8 },
+    coordActionBtn: {
+      flex: 1,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: ui.ctaBg,
+      backgroundColor: ui.surface,
+      paddingVertical: 8,
+      alignItems: 'center',
+    },
+    coordActionText: { color: ui.ink, fontSize: 12, fontWeight: '700' },
+    placeListItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: ui.border,
+      backgroundColor: ui.surfaceMuted,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
+    placeListItemActive: { borderColor: ui.ctaBg, backgroundColor: ui.surface },
+    placeTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    placeScopeTag: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
+    placeTagPrivate: { backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#eef2ff' },
+    placeTagShared: { backgroundColor: isDark ? 'rgba(20, 184, 166, 0.2)' : '#f0fdfa' },
+    placeScopeTagText: { fontSize: 10, fontWeight: '700' },
+    placeTagTextPrivate: { color: isDark ? '#a5b4fc' : '#4338ca' },
+    placeTagTextShared: { color: isDark ? '#5eead4' : '#0f766e' },
+    placeDeleteBtn: {
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 8,
+      backgroundColor: ui.errorBg,
+    },
+    placeDeleteText: { color: ui.errorText, fontSize: 11, fontWeight: '700' },
+    tabBar: {
+      flexDirection: 'row',
+      gap: 8,
+      paddingTop: 6,
+    },
+    tabItem: {
+      flex: 1,
+      borderRadius: 999,
+      paddingVertical: 10,
+      alignItems: 'center',
+      backgroundColor: ui.surfaceMuted,
+    },
+    tabItemActive: { backgroundColor: ui.surfaceChip },
+    tabLabel: { color: ui.inkSubtle, fontSize: 12, fontWeight: '700' },
+    tabLabelActive: { color: ui.ink },
+    chatTabRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    unreadBadge: {
+      backgroundColor: ui.ctaBg,
+      borderRadius: 999,
+      minWidth: 18,
+      height: 18,
+      paddingHorizontal: 5,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    unreadBadgeText: { color: ui.ctaText, fontSize: 10, fontWeight: '700' },
+    profileHubCard: { maxHeight: '86%' },
+    hubIdentityRow: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, paddingRight: 8 },
+    hubAvatarCircle: {
+      width: 46,
+      height: 46,
+      borderRadius: 999,
+      borderWidth: 2,
+      backgroundColor: '#18181b',
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    hubAvatarInitial: { color: '#ffffff', fontSize: 17, fontWeight: '700' },
+    hubScroll: { gap: 10, paddingBottom: 16 },
+    hubFeedbackBanner: {
+      backgroundColor: ui.surfaceChip,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+    },
+    hubFeedbackText: { color: ui.ink, fontSize: 12, fontWeight: '600' },
+    hubSectionCard: {
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: ui.border,
+      backgroundColor: ui.surfaceMuted,
+      padding: 12,
+      gap: 8,
+    },
+    hubSectionHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    hubInlineLink: { color: ui.ink, fontSize: 12, fontWeight: '700' },
+    segmentedRow: {
+      flexDirection: 'row',
+      gap: 6,
+      backgroundColor: isDark ? '#3f3f46' : '#e4e4e7',
+      borderRadius: 10,
+      padding: 4,
+    },
+    segmentBtn: {
+      flex: 1,
+      borderRadius: 7,
+      paddingVertical: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    segmentBtnActive: { backgroundColor: ui.ctaBg },
+    segmentText: { color: ui.inkSubtle, fontSize: 12, fontWeight: '700' },
+    segmentTextActive: { color: ui.ctaText },
+    locationPromptBody: { color: ui.inkSubtle, fontSize: 14, lineHeight: 20 },
+    boldText: { color: ui.ink, fontWeight: '700' },
+    settingsLinkBtn: { alignSelf: 'center', paddingVertical: 6 },
+    modalWrap: { flex: 1, backgroundColor: ui.canvas, paddingTop: 52 },
+    modalHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 18,
+      paddingBottom: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: ui.border,
+    },
+    modalTitle: { color: ui.ink, fontSize: 18, fontWeight: '700' },
+    modalSubtitle: { color: ui.inkMuted, fontSize: 12 },
+    closePill: {
+      backgroundColor: ui.surface,
+      borderColor: ui.borderStrong,
+      borderWidth: 1,
+      borderRadius: 999,
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+    },
+    closeText: { color: ui.ink, fontSize: 13, fontWeight: '700' },
+    chatList: { flex: 1, backgroundColor: ui.canvas },
+    chatListContent: { padding: 16, gap: 10 },
+    chatEmptyWrap: { paddingVertical: 40, alignItems: 'center' },
+    chatEmptyText: { color: ui.inkMuted, fontSize: 13, textAlign: 'center' },
+    dateSeparator: { alignItems: 'center', marginVertical: 8 },
+    dateSeparatorText: {
+      backgroundColor: ui.surfaceChip,
+      color: ui.inkSubtle,
+      fontSize: 11,
+      fontWeight: '600',
+      paddingHorizontal: 10,
+      paddingVertical: 3,
+      borderRadius: 999,
+      overflow: 'hidden',
+    },
+    chatMessageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 4 },
+    chatRowMine: { justifyContent: 'flex-end' },
+    chatRowOther: { justifyContent: 'flex-start' },
+    chatAvatarSlot: { width: 28, height: 28 },
+    chatAvatarImg: { width: 28, height: 28, borderRadius: 999 },
+    chatAvatarFallback: {
+      width: 28,
+      height: 28,
+      borderRadius: 999,
+      backgroundColor: ui.ctaBg,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    chatAvatarInitials: { color: ui.ctaText, fontSize: 11, fontWeight: '700' },
+    chatColumn: { maxWidth: '78%' },
+    chatColumnMine: { alignItems: 'flex-end' },
+    chatColumnOther: { alignItems: 'flex-start' },
+    chatMetaHeader: {
+      color: ui.inkMuted,
+      fontSize: 11,
+      fontWeight: '600',
+      marginBottom: 3,
+      paddingHorizontal: 2,
+    },
+    chatBubble: { borderRadius: 14, paddingHorizontal: 14, paddingVertical: 9 },
+    chatBubbleMine: { backgroundColor: ui.ctaBg, borderBottomRightRadius: 4 },
+    chatBubbleOther: {
+      backgroundColor: ui.surface,
+      borderColor: ui.border,
+      borderWidth: 1,
+      borderBottomLeftRadius: 4,
+    },
+    chatBody: { fontSize: 14, lineHeight: 19 },
+    chatBodyMine: { color: ui.ctaText },
+    chatBodyOther: { color: ui.ink },
+    chatTimeFooter: { color: ui.inkMuted, fontSize: 10, marginTop: 2, paddingHorizontal: 2 },
+    chatTimeFooterMine: { color: ui.inkMuted },
+    chatComposer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 14,
+      paddingTop: 10,
+      paddingBottom: 24,
+      gap: 8,
+      backgroundColor: ui.surface,
+      borderTopWidth: 1,
+      borderTopColor: ui.border,
+    },
+    chatInput: {
+      flex: 1,
+      backgroundColor: ui.surfaceMuted,
+      borderColor: ui.border,
+      borderWidth: 1,
+      borderRadius: 999,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      color: ui.ink,
+      fontSize: 14,
+    },
+    sendIconBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 999,
+      backgroundColor: ui.ctaBg,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    sendIconBtnDisabled: { opacity: 0.4 },
+    sendBtnText: { color: ui.ctaText, fontWeight: '700', fontSize: 16 },
+    flexOne: { flex: 1 },
+    sheetBackdrop: {
+      flex: 1,
+      backgroundColor: isDark ? 'rgba(0, 0, 0, 0.72)' : 'rgba(9, 9, 11, 0.45)',
+      justifyContent: 'flex-end',
+    },
+    sheetCard: {
+      backgroundColor: ui.surface,
+      borderTopWidth: isDark ? 1 : 0,
+      borderTopColor: ui.border,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      padding: 20,
+      gap: 12,
+    },
+    sheetHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    sheetOptionBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: ui.border,
+      backgroundColor: ui.surfaceMuted,
+      padding: 14,
+    },
+    sheetOptionSelected: { backgroundColor: ui.ctaBg, borderColor: ui.ctaBg },
+    menuRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: ui.border,
+      backgroundColor: ui.surfaceMuted,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+    },
+    menuRowAction: { color: ui.ink, fontSize: 12, fontWeight: '700' },
+    themeSegmentGroup: {
+      flexDirection: 'row',
+      backgroundColor: isDark ? '#3f3f46' : '#e4e4e7',
+      borderRadius: 8,
+      padding: 2,
+      gap: 2,
+    },
+    themeSegmentBtn: {
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      borderRadius: 6,
+    },
+    themeSegmentBtnActive: {
+      backgroundColor: ui.ctaBg,
+    },
+    themeSegmentText: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: ui.inkSubtle,
+    },
+    themeSegmentTextActive: {
+      color: ui.ctaText,
+    },
+    progressTrack: {
+      height: 8,
+      borderRadius: 999,
+      backgroundColor: ui.borderStrong,
+      overflow: 'hidden',
+    },
+    progressFill: { height: '100%', borderRadius: 999, backgroundColor: ui.ctaBg },
+    settingsScroll: { padding: 16, gap: 14, paddingBottom: 40 },
+    settingsCard: {
+      backgroundColor: ui.surface,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: ui.border,
+      padding: 16,
+      gap: 10,
+    },
+    avatarPreviewRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 14,
+      marginBottom: 4,
+    },
+    settingsAvatarCircle: {
+      width: 60,
+      height: 60,
+      borderRadius: 999,
+      backgroundColor: '#18181b',
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    settingsAvatarImg: { width: '100%', height: '100%' },
+    settingsAvatarInitial: { color: '#ffffff', fontSize: 22, fontWeight: '700' },
+    avatarMeta: { flex: 1, gap: 4 },
+    settingsSectionTitle: { color: ui.ink, fontSize: 14, fontWeight: '700' },
+    settingsHint: { color: ui.inkMuted, fontSize: 12 },
+    removePhotoBtn: {
+      alignSelf: 'flex-start',
+      backgroundColor: ui.surfaceChip,
+      borderRadius: 999,
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      marginTop: 2,
+    },
+    removePhotoText: { color: ui.ink, fontSize: 11, fontWeight: '600' },
+    fieldLabel: { color: ui.inkMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+    fieldInput: {
+      backgroundColor: ui.surfaceMuted,
+      borderColor: ui.border,
+      borderWidth: 1,
+      borderRadius: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      color: ui.ink,
+      fontSize: 14,
+    },
+    errorText: { color: ui.errorText, fontSize: 12, fontWeight: '600' },
+    successText: { color: ui.badgeSuccessText, fontSize: 12, fontWeight: '600' },
+    primaryBlackBtn: {
+      flexDirection: 'row',
+      backgroundColor: ui.ctaBg,
+      borderRadius: 999,
+      paddingVertical: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      marginTop: 4,
+    },
+    primaryBlackText: { color: ui.ctaText, fontSize: 13, fontWeight: '700' },
+    outlineBlackBtn: {
+      flexDirection: 'row',
+      backgroundColor: ui.secondaryBg,
+      borderColor: ui.ctaBg,
+      borderWidth: 1.5,
+      borderRadius: 999,
+      paddingVertical: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      marginTop: 4,
+    },
+    outlineBlackText: { color: ui.ink, fontSize: 13, fontWeight: '700' },
+    btnBusy: { opacity: 0.72 },
+    signOutFullBtn: {
+      backgroundColor: ui.surface,
+      borderColor: ui.errorBorder,
+      borderWidth: 1,
+      borderRadius: 999,
+      paddingVertical: 13,
+      alignItems: 'center',
+    },
+    signOutFullText: { color: ui.errorText, fontSize: 13, fontWeight: '700' },
+    scannerFull: { flex: 1, backgroundColor: '#000000' },
+    scannerOverlayBar: {
+      position: 'absolute',
+      bottom: 48,
+      left: 20,
+      right: 20,
+      backgroundColor: 'rgba(24, 24, 27, 0.92)',
+      borderRadius: 12,
+      padding: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    scannerOverlayText: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
+    headerTitleFlex: { flex: 1, paddingRight: 12 },
+    previewGroupName: { color: ui.ink, fontSize: 18, fontWeight: '700' },
+    skipPromptText: { color: ui.ink, fontSize: 12, fontWeight: '700', textAlign: 'center' },
+  });
+}

@@ -29,7 +29,13 @@ import {
   apiSendPublicSharePing,
   apiStopPublicSharePing,
 } from '@/lib/api';
-import { type MapThemePreference, resolveMapTheme } from '@/lib/mapTheme';
+import {
+  persistThemePreference,
+  readStoredThemePreference,
+  resolveMapTheme,
+  THEME_CHANGE_EVENT,
+  type MapThemePreference,
+} from '@/lib/mapTheme';
 
 interface StoredGuestSession {
   guestId: string;
@@ -65,11 +71,19 @@ export default function PublicSharePage() {
   displayNameRef.current = displayName;
 
   useEffect(() => {
+    setThemePref(readStoredThemePreference());
     const media = window.matchMedia?.('(prefers-color-scheme: dark)');
     if (media) setSystemPrefersDark(media.matches);
     const onChange = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches);
+    const onThemeSync = () => setThemePref(readStoredThemePreference());
     media?.addEventListener?.('change', onChange);
-    return () => media?.removeEventListener?.('change', onChange);
+    window.addEventListener(THEME_CHANGE_EVENT, onThemeSync);
+    window.addEventListener('storage', onThemeSync);
+    return () => {
+      media?.removeEventListener?.('change', onChange);
+      window.removeEventListener(THEME_CHANGE_EVENT, onThemeSync);
+      window.removeEventListener('storage', onThemeSync);
+    };
   }, []);
 
   useEffect(() => {
@@ -307,7 +321,7 @@ export default function PublicSharePage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-[#f4f4f5] p-6 text-xs text-zinc-500">
+      <div className="flex min-h-dvh items-center justify-center bg-[#f4f4f5] p-6 text-xs text-zinc-500 dark:bg-zinc-950 dark:text-zinc-400">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         Loading temporary share map...
       </div>
@@ -316,18 +330,20 @@ export default function PublicSharePage() {
 
   if (error || !snapshot) {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-[#f4f4f5] px-4 py-8">
-        <div className="w-full max-w-md rounded-xl border border-zinc-200/80 bg-white p-7 text-center shadow-[0_18px_50px_rgba(9,9,11,0.08)]">
-          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-rose-50 text-rose-600">
+      <div className="flex min-h-dvh items-center justify-center bg-[#f4f4f5] px-4 py-8 dark:bg-zinc-950">
+        <div className="w-full max-w-md rounded-xl border border-zinc-200/80 bg-white p-7 text-center shadow-[0_18px_50px_rgba(9,9,11,0.08)] dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400">
             <ShieldAlert className="h-5 w-5" />
           </div>
-          <h1 className="text-base font-bold text-zinc-950">Share Link Unavailable</h1>
-          <p className="mt-1.5 text-xs text-zinc-500">
+          <h1 className="text-base font-bold text-zinc-950 dark:text-zinc-50">
+            Share Link Unavailable
+          </h1>
+          <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
             {error ?? 'This temporary share link has expired or been revoked.'}
           </p>
           <Link
             href="/"
-            className="lo-press mt-5 inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white hover:bg-zinc-800"
+            className="lo-press mt-5 inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
           >
             <MapPin className="h-3.5 w-3.5" />
             Open LovedOnes
@@ -355,18 +371,18 @@ export default function PublicSharePage() {
 
       {/* Top Capsule: Creator, Countdown & Participant Pills */}
       <div className="pointer-events-none absolute left-[calc(0.75rem+var(--lo-safe-left,0px))] right-[calc(0.75rem+var(--lo-safe-right,0px))] top-[calc(0.75rem+var(--lo-safe-top,0px))] z-20 flex flex-col gap-2 sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:right-auto sm:top-[calc(1rem+var(--lo-safe-top,0px))] sm:w-[360px]">
-        <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/94 p-3 shadow-[0_12px_36px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+        <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3 shadow-[0_12px_36px_rgba(9,9,11,0.12)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950">
                   <MapPin className="h-3.5 w-3.5" />
                 </span>
-                <span className="truncate text-xs font-bold text-zinc-950">
+                <span className="truncate text-xs font-bold text-zinc-950 dark:text-zinc-50">
                   {snapshot.label ?? `${snapshot.creator.username}'s Live Share`}
                 </span>
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500 dark:text-zinc-400">
                 <span className="inline-flex items-center gap-1">
                   <Clock className="h-3 w-3" />
                   {remainingLabel}
@@ -376,7 +392,7 @@ export default function PublicSharePage() {
                   {visiblePins.length} active
                 </span>
                 {snapshot.creator.hidden && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                     <EyeOff className="h-2.5 w-2.5" />
                     {snapshot.creator.username} is in Ghost mode
                   </span>
@@ -386,13 +402,14 @@ export default function PublicSharePage() {
 
             <button
               type="button"
-              title="Toggle map theme"
-              onClick={() =>
-                setThemePref((prev) =>
-                  prev === 'system' ? 'dark' : prev === 'dark' ? 'light' : 'system',
-                )
-              }
-              className="lo-press shrink-0 rounded-lg border border-zinc-200 bg-white p-1.5 text-zinc-700 hover:bg-zinc-100"
+              title={`Theme: ${themePref === 'system' ? 'Auto' : themePref === 'dark' ? 'Dark' : 'Light'}`}
+              onClick={() => {
+                const next: MapThemePreference =
+                  themePref === 'system' ? 'dark' : themePref === 'dark' ? 'light' : 'system';
+                setThemePref(next);
+                persistThemePreference(next);
+              }}
+              className="lo-press shrink-0 rounded-lg border border-zinc-200 bg-white p-1.5 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
             >
               {resolvedMapTheme === 'dark' ? (
                 <Moon className="h-3.5 w-3.5" />
@@ -403,7 +420,7 @@ export default function PublicSharePage() {
           </div>
 
           {visiblePins.length > 0 && (
-            <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-zinc-100 pt-2.5">
+            <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
               {visiblePins.map((pin) => {
                 const maps = buildExternalMapsUrls({
                   latitude: pin.latitude,
@@ -417,8 +434,8 @@ export default function PublicSharePage() {
                     key={pin.userId}
                     className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] transition ${
                       isSelected
-                        ? 'border-zinc-950 bg-zinc-950 text-white'
-                        : 'border-zinc-200 bg-zinc-50 text-zinc-800'
+                        ? 'border-zinc-950 bg-zinc-950 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200'
                     }`}
                   >
                     <button
@@ -435,7 +452,9 @@ export default function PublicSharePage() {
                       rel="noopener noreferrer"
                       title={`Open ${pin.username} in Maps`}
                       className={`ml-0.5 rounded p-0.5 ${
-                        isSelected ? 'text-white/90 hover:text-white' : 'text-zinc-500 hover:text-zinc-950'
+                        isSelected
+                          ? 'text-white/90 hover:text-white dark:text-zinc-950/90 dark:hover:text-zinc-950'
+                          : 'text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
                       }`}
                     >
                       <Navigation className="h-3 w-3" />
@@ -451,17 +470,17 @@ export default function PublicSharePage() {
       {/* Bottom Mutual Guest Share Controls */}
       {snapshot.allowGuestSharing && (
         <div className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] right-[calc(3.25rem+var(--lo-safe-right,0px))] z-20 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))] sm:left-1/2 sm:right-auto sm:w-full sm:max-w-md sm:-translate-x-1/2">
-          <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/85 bg-white/95 p-3 shadow-[0_14px_38px_rgba(9,9,11,0.14)] backdrop-blur-xl">
+          <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/85 bg-white/95 p-3 shadow-[0_14px_38px_rgba(9,9,11,0.14)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
             {sharingLive || guestSession ? (
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-950">
-                    <Radio className="h-3.5 w-3.5 text-emerald-600" />
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-950 dark:text-zinc-50">
+                    <Radio className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                     <span className="truncate">
                       {shareStatus ?? `Visible on this link as ${guestSession?.displayName ?? displayName}`}
                     </span>
                   </div>
-                  <p className="text-[10px] text-zinc-500">
+                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
                     Only people on this exact link see your temporary pin.
                   </p>
                 </div>
@@ -469,7 +488,7 @@ export default function PublicSharePage() {
                   type="button"
                   disabled={shareBusy}
                   onClick={() => void handleStopGuestShare()}
-                  className="lo-press shrink-0 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                  className="lo-press shrink-0 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
                 >
                   Stop
                 </button>
@@ -483,12 +502,12 @@ export default function PublicSharePage() {
                     value={displayName}
                     onChange={(e) => setDisplayName(e.target.value)}
                     placeholder="Your name to share back..."
-                    className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                   />
                   <button
                     type="submit"
                     disabled={shareBusy}
-                    className="lo-press flex shrink-0 items-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
+                    className="lo-press flex shrink-0 items-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                   >
                     {shareBusy ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -498,12 +517,14 @@ export default function PublicSharePage() {
                     Share My Pin
                   </button>
                 </div>
-                <p className="text-[10px] text-zinc-500">
+                <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
                   Guests on this link see only each other—never private group members.
                 </p>
               </form>
             )}
-            {shareError && <p className="mt-1.5 text-[11px] text-rose-600">{shareError}</p>}
+            {shareError && (
+              <p className="mt-1.5 text-[11px] text-rose-600 dark:text-rose-400">{shareError}</p>
+            )}
           </div>
         </div>
       )}

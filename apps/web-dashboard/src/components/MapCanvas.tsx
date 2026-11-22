@@ -333,17 +333,17 @@ function buildPopupDetailsHtml(params: {
   extraLines?: string[];
 }): string {
   const extras = (params.extraLines ?? [])
-    .map((line) => `<div class="text-zinc-500">${escapeHtml(line)}</div>`)
+    .map((line) => `<div class="text-zinc-500 dark:text-zinc-400">${escapeHtml(line)}</div>`)
     .join('');
   return `
-    <details class="mt-1.5 border-t border-zinc-100 pt-1.5">
-      <summary class="cursor-pointer select-none text-[11px] font-medium text-zinc-500 hover:text-zinc-900">
+    <details class="mt-1.5 border-t border-zinc-100 pt-1.5 dark:border-zinc-800">
+      <summary class="cursor-pointer select-none text-[11px] font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
         Details
       </summary>
       <div class="mt-1 space-y-0.5 text-[11px]">
         ${extras}
-        <div class="font-mono text-zinc-500">${params.latitude.toFixed(4)}, ${params.longitude.toFixed(4)}</div>
-        <div class="text-zinc-400">${escapeHtml(new Date(params.recordedAt).toLocaleTimeString())}</div>
+        <div class="font-mono text-zinc-500 dark:text-zinc-400">${params.latitude.toFixed(4)}, ${params.longitude.toFixed(4)}</div>
+        <div class="text-zinc-400 dark:text-zinc-500">${escapeHtml(new Date(params.recordedAt).toLocaleTimeString())}</div>
       </div>
     </details>
   `;
@@ -380,7 +380,7 @@ function buildExternalMapsPopupRowHtml(
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const urls = buildExternalMapsUrls({ latitude, longitude, label, userAgent: ua });
   return `
-    <div class="mt-2 flex items-center gap-1.5 pt-1.5 border-t border-zinc-100">
+    <div class="mt-2 flex items-center gap-1.5 border-t border-zinc-100 pt-1.5 dark:border-zinc-800">
       <a
         href="${escapeHtml(urls.primaryUrl)}"
         target="_blank"
@@ -514,7 +514,7 @@ export function MapCanvas({
     const safeAvatar = isSafeAvatarUrl(resolvedAvatar) ? resolvedAvatar : null;
     const safeUser = escapeHtml(loc.username);
     const popupAvatarHtml = safeAvatar
-      ? `<img src="${escapeHtml(safeAvatar)}" alt="${safeUser}" class="h-7 w-7 rounded-full object-cover border border-zinc-200 shrink-0" />`
+      ? `<img src="${escapeHtml(safeAvatar)}" alt="${safeUser}" class="h-7 w-7 rounded-full object-cover border border-zinc-200 dark:border-zinc-700 shrink-0" />`
       : '';
     const privacyBadge = loc.isFuzzed ? `${loc.privacyMode} · ~1 km` : loc.privacyMode;
     const ctx = mapRef.current
@@ -528,7 +528,7 @@ export function MapCanvas({
         )
       : null;
     const contextHtml = ctx
-      ? `<div class="text-[11px] text-zinc-700">${escapeHtml(ctx.prefix)} <span class="font-medium text-zinc-950">${escapeHtml(ctx.label)}</span></div>`
+      ? `<div class="text-[11px] text-zinc-700 dark:text-zinc-300">${escapeHtml(ctx.prefix)} <span class="font-medium text-zinc-950 dark:text-zinc-100">${escapeHtml(ctx.label)}</span></div>`
       : '';
     const extraLines =
       loc.batteryLevel !== null && loc.batteryLevel !== undefined
@@ -551,12 +551,12 @@ export function MapCanvas({
         <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">
             ${popupAvatarHtml}
-            <div class="truncate font-semibold text-zinc-950">${safeUser}</div>
+            <div class="truncate font-semibold text-zinc-950 dark:text-zinc-50">${safeUser}</div>
           </div>
-          <span class="shrink-0 rounded-full ${loc.isFuzzed ? 'bg-amber-100 text-amber-800' : 'bg-zinc-100 text-zinc-700'} px-2 py-0.5 text-[10px] font-semibold">${escapeHtml(privacyBadge)}</span>
+          <span class="shrink-0 rounded-full ${loc.isFuzzed ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300' : 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'} px-2 py-0.5 text-[10px] font-semibold">${escapeHtml(privacyBadge)}</span>
         </div>
         ${contextHtml}
-        <div class="text-[11px] text-zinc-500">Last seen ${escapeHtml(formatRelativeTime(loc.recordedAt))}</div>
+        <div class="text-[11px] text-zinc-500 dark:text-zinc-400">Last seen ${escapeHtml(formatRelativeTime(loc.recordedAt))}</div>
         ${mapsRowHtml}
         ${detailsHtml}
       </div>
@@ -579,7 +579,7 @@ export function MapCanvas({
         )
       : null;
     const contextHtml = ctx
-      ? `<div class="text-[11px] text-zinc-700">${escapeHtml(ctx.prefix)} <span class="font-medium text-zinc-950">${escapeHtml(ctx.label)}</span></div>`
+      ? `<div class="text-[11px] text-zinc-700 dark:text-zinc-300">${escapeHtml(ctx.prefix)} <span class="font-medium text-zinc-950 dark:text-zinc-100">${escapeHtml(ctx.label)}</span></div>`
       : '';
     const detailsHtml = buildPopupDetailsHtml({
       latitude: fix.latitude,
@@ -590,9 +590,9 @@ export function MapCanvas({
     const mapsRowHtml = buildExternalMapsPopupRowHtml(fix.latitude, fix.longitude, 'My Location');
     return `
       <div class="text-xs space-y-1 min-w-[185px]">
-        <div class="font-semibold text-zinc-950">You (Live GPS)</div>
+        <div class="font-semibold text-zinc-950 dark:text-zinc-50">You (Live GPS)</div>
         ${contextHtml}
-        <div class="text-[11px] text-zinc-500">Updated ${escapeHtml(formatRelativeTime(fix.recordedAt))}</div>
+        <div class="text-[11px] text-zinc-500 dark:text-zinc-400">Updated ${escapeHtml(formatRelativeTime(fix.recordedAt))}</div>
         ${mapsRowHtml}
         ${detailsHtml}
       </div>
@@ -794,7 +794,7 @@ export function MapCanvas({
 
         const pill = document.createElement('div');
         pill.className =
-          'mb-1.5 rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-950 shadow-md backdrop-blur';
+          'mb-1.5 rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-950 shadow-md backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-50';
         pill.textContent = loc.username;
 
         const haloShadow = `0 0 0 4px ${hexToRgba(
@@ -1079,8 +1079,8 @@ export function MapCanvas({
       );
       const popupHtml = `
         <div class="text-xs space-y-0.5 min-w-[180px]">
-          <div class="font-semibold text-zinc-900">${safeName}</div>
-          <div class="text-zinc-500">${visibilityTag} · ${Math.round(place.radiusMeters)} m</div>
+          <div class="font-semibold text-zinc-900 dark:text-zinc-50">${safeName}</div>
+          <div class="text-zinc-500 dark:text-zinc-400">${visibilityTag} · ${Math.round(place.radiusMeters)} m</div>
           ${placeMapsHtml}
         </div>
       `;
@@ -1095,8 +1095,8 @@ export function MapCanvas({
           'lo-pin-drop flex flex-col items-center transition-transform duration-200 ease-out hover:scale-110';
         const label = document.createElement('div');
         label.className = place.isPrivate
-          ? 'rounded-lg border border-indigo-200/90 bg-indigo-50/95 px-2.5 py-0.5 text-[10px] font-semibold text-indigo-950 shadow-sm backdrop-blur'
-          : 'rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-900 shadow-sm backdrop-blur';
+          ? 'rounded-lg border border-indigo-200/90 bg-indigo-50/95 px-2.5 py-0.5 text-[10px] font-semibold text-indigo-950 shadow-sm backdrop-blur dark:border-indigo-500/40 dark:bg-indigo-950/90 dark:text-indigo-200'
+          : 'rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-900 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-100';
         label.textContent = `${place.name} · ${Math.round(place.radiusMeters)}m${place.isPrivate ? ' (Private)' : ''}`;
         const dot = document.createElement('div');
         dot.className = place.isPrivate

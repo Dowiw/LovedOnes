@@ -231,17 +231,17 @@ export function QrJoinModal({
       aria-modal="true"
       aria-label="Join a Group via QR"
     >
-      <div className="lo-modal-in max-h-[calc(var(--lo-app-height,100dvh)-2rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))] w-full max-w-md overflow-y-auto rounded-xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.24)]">
+      <div className="lo-modal-in max-h-[calc(var(--lo-app-height,100dvh)-2rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))] w-full max-w-md overflow-y-auto rounded-xl border border-white/80 bg-white p-6 shadow-[0_24px_64px_rgba(15,23,42,0.24)] dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-[0_24px_64px_rgba(0,0,0,0.65)]">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950">
               <QrCode className="h-4 w-4" />
             </span>
             <div>
-              <h2 className="text-base font-bold tracking-tight text-zinc-950">
+              <h2 className="text-base font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
                 {isOnboardingPrompt ? 'Were you invited to a group?' : 'Join Group via QR'}
               </h2>
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 {isOnboardingPrompt
                   ? 'Scan an invite QR code, upload a screenshot, or paste the invite link — or skip to explore the map first.'
                   : 'Scan an admin QR code, upload an invite image, or paste an invite link/token.'}
@@ -252,7 +252,7 @@ export function QrJoinModal({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="rounded-full p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950"
+            className="rounded-full p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           >
             <X className="h-4 w-4" />
           </button>
@@ -260,7 +260,7 @@ export function QrJoinModal({
 
         {!preview ? (
           <>
-            <div className="mb-4 grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold">
+            <div className="mb-4 grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold dark:bg-zinc-800">
               {(
                 [
                   ['camera', 'Camera', Camera],
@@ -277,8 +277,8 @@ export function QrJoinModal({
                   }}
                   className={`lo-press flex items-center justify-center gap-1.5 rounded-md py-1.5 transition ${
                     tab === id
-                      ? 'bg-zinc-950 text-white shadow-sm'
-                      : 'text-zinc-600 hover:text-zinc-950'
+                      ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                      : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
                   }`}
                 >
                   <Icon className="h-3.5 w-3.5" />
@@ -290,20 +290,20 @@ export function QrJoinModal({
             {tab === 'camera' && (
               <div className="space-y-3">
                 {cameraError ? (
-                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-center text-xs text-zinc-600">
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-center text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/60 dark:text-zinc-400">
                     <p>{cameraError}</p>
                     <div className="mt-3 flex justify-center gap-2">
                       <button
                         type="button"
                         onClick={() => setTab('upload')}
-                        className="lo-press rounded-lg bg-zinc-950 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
+                        className="lo-press rounded-lg bg-zinc-950 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                       >
                         Upload QR Image
                       </button>
                       <button
                         type="button"
                         onClick={() => setTab('paste')}
-                        className="lo-press rounded-lg border border-zinc-300 bg-white px-3.5 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-100"
+                        className="lo-press rounded-lg border border-zinc-300 bg-white px-3.5 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
                       >
                         Paste Link
                       </button>
@@ -339,13 +339,13 @@ export function QrJoinModal({
                   type="button"
                   disabled={loadingPreview}
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-zinc-300 bg-zinc-50/70 px-4 py-10 text-center transition hover:border-zinc-900 hover:bg-zinc-100/70 disabled:opacity-50"
+                  className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-zinc-300 bg-zinc-50/70 px-4 py-10 text-center transition hover:border-zinc-900 hover:bg-zinc-100/70 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950/50 dark:hover:border-zinc-500 dark:hover:bg-zinc-800/50"
                 >
-                  <ImageUp className="h-6 w-6 text-zinc-700" />
-                  <span className="text-xs font-semibold text-zinc-900">
+                  <ImageUp className="h-6 w-6 text-zinc-700 dark:text-zinc-300" />
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
                     {loadingPreview ? 'Scanning QR image...' : 'Choose QR Screenshot or Photo'}
                   </span>
-                  <span className="text-[11px] text-zinc-500">
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
                     PNG, JPG, or WebP screenshot of an admin invite QR
                   </span>
                 </button>
@@ -360,20 +360,20 @@ export function QrJoinModal({
                 }}
                 className="space-y-2.5"
               >
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                   Invite Link, Token, or QR JSON
                   <textarea
                     rows={3}
                     value={pasteText}
                     onChange={(e) => setPasteText(e.target.value)}
                     placeholder="https://.../join?token=inv_... or inv_..."
-                    className="mt-1.5 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 font-mono text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    className="mt-1.5 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 font-mono text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
                   />
                 </label>
                 <button
                   type="submit"
                   disabled={loadingPreview || !pasteText.trim()}
-                  className="lo-press flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-60"
+                  className="lo-press flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                 >
                   {loadingPreview && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   <span>{loadingPreview ? 'Checking invite...' : 'Verify Invite'}</span>
@@ -383,18 +383,18 @@ export function QrJoinModal({
           </>
         ) : (
           <div className="space-y-4">
-            <div className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-xs">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            <div className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-xs dark:border-zinc-800 dark:bg-zinc-950/60">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 Invite Preview
               </div>
-              <div className="text-base font-bold text-zinc-950">{preview.groupName}</div>
-              <div className="flex flex-wrap gap-3 pt-1 text-zinc-600">
+              <div className="text-base font-bold text-zinc-950 dark:text-zinc-50">{preview.groupName}</div>
+              <div className="flex flex-wrap gap-3 pt-1 text-zinc-600 dark:text-zinc-400">
                 <span>
-                  Role: <strong className="text-zinc-950">{preview.assignedRole}</strong>
+                  Role: <strong className="text-zinc-950 dark:text-zinc-100">{preview.assignedRole}</strong>
                 </span>
                 <span>
                   Status:{' '}
-                  <strong className={preview.valid ? 'text-zinc-950' : 'text-rose-600'}>
+                  <strong className={preview.valid ? 'text-zinc-950 dark:text-zinc-100' : 'text-rose-600 dark:text-rose-400'}>
                     {preview.valid ? 'Active' : 'Expired / Used Up'}
                   </strong>
                 </span>
@@ -402,7 +402,7 @@ export function QrJoinModal({
             </div>
 
             {!preview.valid && (
-              <div className="flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+              <div className="flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700 dark:border-rose-800/60 dark:bg-rose-950/50 dark:text-rose-300">
                 <ShieldAlert className="h-4 w-4 shrink-0" />
                 This invite has expired or reached its max uses. Ask an admin for a new QR.
               </div>
@@ -415,7 +415,7 @@ export function QrJoinModal({
                   setPreview(null);
                   setError(null);
                 }}
-                className="lo-press flex-1 rounded-lg border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100"
+                className="lo-press flex-1 rounded-lg border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
               >
                 Scan Different QR
               </button>
@@ -423,11 +423,11 @@ export function QrJoinModal({
                 type="button"
                 disabled={!preview.valid || joining}
                 onClick={() => void handleConfirm()}
-                className="lo-press relative flex flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
+                className="lo-press relative flex flex-1 items-center justify-center gap-1.5 overflow-hidden rounded-lg bg-zinc-950 py-2.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
               >
                 {joining ? (
                   <>
-                    <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                    <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15 dark:bg-zinc-950/15" />
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   </>
                 ) : (
@@ -444,17 +444,17 @@ export function QrJoinModal({
         )}
 
         {error && (
-          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700 dark:border-rose-800/60 dark:bg-rose-950/50 dark:text-rose-300">
             {error}
           </div>
         )}
 
         {isOnboardingPrompt && (
-          <div className="mt-4 border-t border-zinc-100 pt-3">
+          <div className="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-800">
             <button
               type="button"
               onClick={onClose}
-              className="lo-press w-full rounded-lg border border-zinc-200 bg-white py-2 text-xs font-semibold text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950"
+              className="lo-press w-full rounded-lg border border-zinc-200 bg-white py-2 text-xs font-semibold text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-zinc-50"
             >
               Skip for now — take me to the map
             </button>

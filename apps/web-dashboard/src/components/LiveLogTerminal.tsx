@@ -200,21 +200,21 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-5 py-3.5">
+    <div className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800">
         <div className="flex items-center gap-2.5">
-          <Terminal className="h-4 w-4 text-zinc-950" />
-          <span className="text-sm font-semibold text-zinc-950">Live Service Logs</span>
+          <Terminal className="h-4 w-4 text-zinc-950 dark:text-zinc-100" />
+          <span className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Live Service Logs</span>
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
               connected
-                ? 'bg-zinc-950 text-white'
-                : 'bg-zinc-100 text-zinc-500'
+                ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
             }`}
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                connected ? 'bg-white' : 'bg-zinc-400'
+                connected ? 'bg-white dark:bg-zinc-950' : 'bg-zinc-400'
               }`}
             />
             {connected ? 'Live' : 'Disconnected'}
@@ -227,15 +227,15 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter logs (user, group, action)..."
-            className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none"
+            className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
           />
           <button
             type="button"
             onClick={() => setRetentionOpen((v) => !v)}
             className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
               retentionOpen
-                ? 'border-zinc-950 bg-zinc-950 text-white'
-                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950'
+                ? 'border-zinc-950 bg-zinc-950 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-zinc-50'
             }`}
           >
             <Clock className="h-3.5 w-3.5" />
@@ -246,8 +246,8 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
             onClick={() => setShowRawJson((r) => !r)}
             className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
               showRawJson
-                ? 'border-zinc-950 bg-zinc-950 text-white'
-                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950'
+                ? 'border-zinc-950 bg-zinc-950 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-zinc-50'
             }`}
           >
             {showRawJson ? 'Raw JSON' : 'Readable'}
@@ -255,7 +255,7 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
           <button
             type="button"
             onClick={() => setPaused((p) => !p)}
-            className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-950"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-zinc-50"
           >
             {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
             {paused ? 'Resume' : 'Pause'}
@@ -263,7 +263,7 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
           <button
             type="button"
             onClick={() => setLines([])}
-            className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-950"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-zinc-50"
           >
             <Trash2 className="h-3.5 w-3.5" />
             Clear
@@ -274,12 +274,12 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
       {retentionOpen && (
         <form
           onSubmit={(e) => void handleSaveRetention(e)}
-          className="space-y-3 border-b border-zinc-200 bg-zinc-50/90 px-5 py-4"
+          className="space-y-3 border-b border-zinc-200 bg-zinc-50/90 px-5 py-4 dark:border-zinc-800 dark:bg-zinc-950/60"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 className="text-xs font-semibold text-zinc-950">Log Retention Policy</h3>
-              <p className="text-[11px] text-zinc-500">
+              <h3 className="text-xs font-semibold text-zinc-950 dark:text-zinc-100">Log Retention Policy</h3>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                 Controls how long rotated disk logs and Redis live terminal entries are kept before pruning.
               </p>
             </div>
@@ -291,8 +291,8 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
                   onClick={() => setRetentionDaysInput(String(days))}
                   className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${
                     Number(retentionDaysInput) === days
-                      ? 'bg-zinc-950 text-white'
-                      : 'border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100'
+                      ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                      : 'border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'
                   }`}
                 >
                   {days}d
@@ -302,7 +302,7 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <label className="space-y-1 text-[11px] font-medium text-zinc-600">
+            <label className="space-y-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
               <span>Keep logs (days)</span>
               <input
                 type="number"
@@ -310,10 +310,10 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
                 max={365}
                 value={retentionDaysInput}
                 onChange={(e) => setRetentionDaysInput(e.target.value)}
-                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
               />
             </label>
-            <label className="space-y-1 text-[11px] font-medium text-zinc-600">
+            <label className="space-y-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
               <span>Max files / service</span>
               <input
                 type="number"
@@ -321,10 +321,10 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
                 max={100}
                 value={maxFilesInput}
                 onChange={(e) => setMaxFilesInput(e.target.value)}
-                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
               />
             </label>
-            <label className="space-y-1 text-[11px] font-medium text-zinc-600">
+            <label className="space-y-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
               <span>Live terminal buffer lines</span>
               <input
                 type="number"
@@ -332,10 +332,10 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
                 max={10000}
                 value={maxBufferInput}
                 onChange={(e) => setMaxBufferInput(e.target.value)}
-                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
               />
             </label>
-            <label className="space-y-1 text-[11px] font-medium text-zinc-600">
+            <label className="space-y-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
               <span>Disk alert threshold (MB)</span>
               <input
                 type="number"
@@ -343,18 +343,18 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
                 max={50000}
                 value={maxStorageInput}
                 onChange={(e) => setMaxStorageInput(e.target.value)}
-                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
               />
             </label>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-            <label className="flex items-center gap-2 text-xs text-zinc-700">
+            <label className="flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
               <input
                 type="checkbox"
                 checked={autoPruneInput}
                 onChange={(e) => setAutoPruneInput(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-950"
+                className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-950 dark:border-zinc-600 dark:accent-zinc-100"
               />
               <span>Automatically prune expired rotated logs</span>
             </label>
@@ -364,14 +364,14 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
                 type="button"
                 disabled={pruningNow || savingRetention}
                 onClick={() => void handlePruneNow()}
-                className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
               >
                 {pruningNow ? 'Pruning...' : 'Prune Expired Now'}
               </button>
               <button
                 type="submit"
                 disabled={savingRetention || pruningNow}
-                className="rounded-lg bg-zinc-950 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                className="rounded-lg bg-zinc-950 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
               >
                 {savingRetention ? 'Saving...' : 'Save Retention'}
               </button>
@@ -379,10 +379,10 @@ export function LiveLogTerminal({ accessToken, onRetentionUpdated }: LiveLogTerm
           </div>
 
           {retentionError && (
-            <div className="text-[11px] font-medium text-rose-600">{retentionError}</div>
+            <div className="text-[11px] font-medium text-rose-600 dark:text-rose-400">{retentionError}</div>
           )}
           {retentionFeedback && (
-            <div className="text-[11px] font-medium text-emerald-700">{retentionFeedback}</div>
+            <div className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">{retentionFeedback}</div>
           )}
         </form>
       )}
