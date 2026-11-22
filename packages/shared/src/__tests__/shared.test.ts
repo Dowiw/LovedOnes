@@ -50,6 +50,15 @@ import {
   isOriginAllowed,
   resolveClientIp,
 } from '../auth.js';
+import {
+  collectServiceNodeTelemetry,
+  dismissAdminNotice,
+  dismissAllAdminNotices,
+  listAdminNotices,
+  loadResourceLimitsSettings,
+  recordAdminNotice,
+  saveResourceLimitsSettings,
+} from '../telemetry.js';
 
 describe('@loved-ones/shared', () => {
   it('validates QR invite payloads', () => {
@@ -939,5 +948,82 @@ describe('@loved-ones/shared', () => {
         nowMs,
       }).kind,
     ).toBe('gps_off');
+  });
+
+  it('persists, coalesces, and dismisses admin quota notices and resource limits', async () => {
+    const kv = new Map<string, string>();
+    const fakeRedis = {
+      async get(key: string) {
+        return kv.get(key) ?? null;
+      },
+      async set(key: string, val: string) {
+        kv.set(key, val);
+        return 'OK';
+      },
+      async del(key: string) {
+        return kv.delete(key) ? 1 : 0;
+      },
+    } as never;
+
+    const defaults = await loadResourceLimitsSettings(fakeRedis);
+    expect(defaults.autoTrimOnQuota).toBe(true);
+    expect(defaults.maxDatabaseMb).toBe(0);
+
+    const saved = await saveResourceLimitsSettings(fakeRedis, {
+      maxDatabaseMb: 512,
+      perUserMaxPoints: 5000,
+      maxMapStorageMb: 1024,
+    });
+    expect(saved.maxDatabaseMb).toBe(512);
+    expect(saved.perUserMaxPoints).toBe(5000);
+    expect(saved.maxMapStorageMb).toBe(1024);
+
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const first = await recordAdminNotice(fakeRedis, {
+      kind: 'quota_trim',
+      userId,
+      username: 'Alice',
+      deletedPoints: 40,
+      rangeStart: '2026-11-01T10:00:00.000Z',
+      rangeEnd: '2026-11-02T12:00:00.000Z',
+      scope: 'user_points',
+    });
+    // Coalesces consecutive trims for the same user & scope
+    const coalesced = await recordAdminNotice(fakeRedis, {
+      kind: 'quota_trim',
+      userId,
+      username: 'Alice',
+      deletedPoints: 15,
+      rangeStart: '2026-11-02T12:01:00.000Z',
+      rangeEnd: '2026-11-03T08:30:00.000Z',
+      scope: 'user_points',
+    });
+    expect(coalesced.id).toBe(first.id);
+    expect(coalesced.deletedPoints).toBe(55);
+    expect(coalesced.rangeStart).toBe('2026-11-01T10:00:00.000Z');
+    expect(coalesced.rangeEnd).toBe('2026-11-03T08:30:00.000Z');
+    expect(coalesced.message).toContain('55 location point(s) for Alice');
+
+    const listed = await listAdminNotices(fakeRedis);
+    expect(listed).toHaveLength(1);
+
+    expect(await dismissAdminNotice(fakeRedis, first.id)).toBe(true);
+    expect(await listAdminNotices(fakeRedis)).toHaveLength(0);
+
+    await recordAdminNotice(fakeRedis, {
+      kind: 'system',
+      title: 'Test notice',
+      message: 'Cleared test',
+    });
+    expect(await dismissAllAdminNotices(fakeRedis)).toBe(1);
+    expect(await listAdminNotices(fakeRedis)).toHaveLength(0);
+
+    const nodeSnap = await collectServiceNodeTelemetry({
+      service: 'test-service',
+      mounts: [{ mountLabel: 'logs', path: os.tmpdir() }],
+    });
+    expect(nodeSnap.snapshot.service).toBe('test-service');
+    expect(nodeSnap.snapshot.rssBytes).toBeGreaterThan(0);
+    expect(nodeSnap.snapshot.disks.length).toBeGreaterThanOrEqual(1);
   });
 });

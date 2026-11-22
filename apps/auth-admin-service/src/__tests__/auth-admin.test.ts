@@ -557,6 +557,58 @@ describe('@loved-ones/auth-admin-service integration', () => {
     expect(manualPruneRes.statusCode).toBe(200);
     expect(manualPruneRes.json().settings.retentionDays).toBe(3);
 
+    // 15b. Resource allocation limits, table breakdown, cluster nodes, and prune routes
+    const memberLimitsForbidden = await app.inject({
+      method: 'GET',
+      url: '/api/admin/resource-limits',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+    });
+    expect(memberLimitsForbidden.statusCode).toBe(403);
+
+    const updateLimitsRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/admin/resource-limits',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+      payload: {
+        maxDatabaseMb: 1024,
+        perUserMaxPoints: 5000,
+        perUserMaxLocationMb: 25,
+        maxMapStorageMb: 2048,
+        autoTrimOnQuota: true,
+      },
+    });
+    expect(updateLimitsRes.statusCode).toBe(200);
+    expect(updateLimitsRes.json().settings).toMatchObject({
+      maxDatabaseMb: 1024,
+      perUserMaxPoints: 5000,
+      perUserMaxLocationMb: 25,
+      maxMapStorageMb: 2048,
+      autoTrimOnQuota: true,
+    });
+
+    const telWithBreakdown = await app.inject({
+      method: 'GET',
+      url: '/api/admin/telemetry',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(telWithBreakdown.statusCode).toBe(200);
+    const telBody = telWithBreakdown.json();
+    expect(telBody.databaseBreakdown).toBeDefined();
+    expect(telBody.databaseBreakdown.tables.length).toBeGreaterThan(0);
+    expect(telBody.resourceLimits.perUserMaxPoints).toBe(5000);
+    expect(Array.isArray(telBody.nodes)).toBe(true);
+    expect(telBody.nodes.some((n: { service: string }) => n.service === 'auth-admin-service')).toBe(true);
+    expect(telBody.redis?.available).toBe(true);
+
+    const pruneResourcesRes = await app.inject({
+      method: 'POST',
+      url: '/api/admin/resource-limits/prune',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+      payload: { vacuum: false },
+    });
+    expect(pruneResourcesRes.statusCode).toBe(200);
+    expect(pruneResourcesRes.json().vacuumed).toBe(false);
+
     // 16. Onboarding IP handshake + 1-per-IP 24h admin-approved registration requests
     const memberReqListForbidden = await app.inject({
       method: 'GET',

@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { GroupRole, PrivacyMode, SystemRole } from '@loved-ones/shared';
 import { createTokenService } from '@loved-ones/shared/auth';
@@ -14,6 +17,7 @@ import {
   PublicAccountRecord,
   SessionStore,
 } from '../domain/auth-group-module.js';
+import { MapRegionsModule } from '../domain/map-regions-module.js';
 import { TelemetryQueryModule, TelemetryQueryStore } from '../domain/telemetry-query-module.js';
 
 function createInMemoryAuthGroupStore(): AuthGroupStore & {
@@ -765,8 +769,78 @@ describe('TelemetryQueryModule domain interface', () => {
     expect(snapshot.totalLocationPoints).toBe(10);
     expect(snapshot.totalActiveSockets).toBe(2);
     expect(snapshot.users.map((u) => u.username)).toEqual(['HighCpu', 'LowCpu']);
+    expect(snapshot.users[0].totalDbBytes).toBe(400);
+    expect(snapshot.nodes).toEqual([]);
+    expect(snapshot.notices).toEqual([]);
 
     const logs = await mod.getRecentLogs(2);
     expect(logs.logs).toEqual(['line-1', 'line-2']);
+  });
+
+  it('enforces maxMapStorageMb cap in MapRegionsModule without touching primary region', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lovedones-mapcap-'));
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'regions'), { recursive: true });
+      const header = Buffer.alloc(127);
+      header.write('PMTiles', 0, 'ascii');
+      header.writeUInt8(3, 7);
+      header.writeBigUInt64LE(127n, 8);
+      header.writeBigUInt64LE(0n, 16);
+      header.writeBigUInt64LE(127n, 24);
+      header.writeBigUInt64LE(0n, 32);
+      header.writeBigUInt64LE(127n, 40);
+      header.writeBigUInt64LE(0n, 48);
+      header.writeBigUInt64LE(127n, 56);
+      header.writeBigUInt64LE(0n, 64);
+      header.writeBigUInt64LE(1n, 72);
+      header.writeBigUInt64LE(1n, 80);
+      header.writeBigUInt64LE(1n, 88);
+      header.writeUInt8(1, 96);
+      header.writeUInt8(1, 97);
+      header.writeUInt8(1, 98);
+      header.writeUInt8(1, 99);
+      header.writeUInt8(0, 100);
+      header.writeUInt8(15, 101);
+      // Small bbox around London (-0.5, 51.2 -> 0.5, 51.8)
+      header.writeInt32LE(Math.round(-0.5 * 10_000_000), 102);
+      header.writeInt32LE(Math.round(51.2 * 10_000_000), 106);
+      header.writeInt32LE(Math.round(0.5 * 10_000_000), 110);
+      header.writeInt32LE(Math.round(51.8 * 10_000_000), 114);
+      const archiveBuf = Buffer.concat([header, Buffer.alloc(385)]);
+      fs.writeFileSync(path.join(tmpDir, 'regions', 'existing.pmtiles'), archiveBuf);
+
+      const mod = new MapRegionsModule({
+        tilesDir: tmpDir,
+        maxMapStorageMb: 0.0001, // ~104 bytes
+        cityResolver: {
+          async resolve(lat, lon) {
+            return {
+              cityName: 'Lyon',
+              displayName: 'Lyon, FR',
+              countryCode: 'FR',
+              bbox: [lon - 0.1, lat - 0.1, lon + 0.1, lat + 0.1],
+            };
+          },
+        },
+        tileExtractor: {
+          async extract({ outputPath }) {
+            fs.writeFileSync(outputPath, Buffer.alloc(1024));
+            return { sourceBuild: 'test.pmtiles' };
+          },
+        },
+      });
+
+      const summary = await mod.getMapStorageSummary();
+      expect(summary.regionsBytes).toBe(512);
+      await expect(
+        mod.requestCityDownload(
+          { id: '22222222-2222-4222-8222-222222222222', role: 'HOST_ADMIN' },
+          { latitude: 45.764, longitude: 4.8357 },
+        ),
+      ).rejects.toMatchObject({ statusCode: 507 });
+      await mod.close();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
