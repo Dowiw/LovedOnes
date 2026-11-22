@@ -2,7 +2,7 @@
   "expo": {
     "name": "LovedOnes",
     "slug": "loved-ones",
-    "version": "0.1.2",
+    "version": "0.1.2-1",
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/icon.png",
@@ -28,7 +28,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "org.lovedones.app",
-      "buildNumber": "3",
+      "buildNumber": "4",
       "icon": "./assets/icon.png",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Share your live location with authorized family groups.",
@@ -42,7 +42,7 @@
     },
     "android": {
       "package": "org.lovedones.app",
-      "versionCode": 3,
+      "versionCode": 4,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "monochromeImage": "./assets/monochrome-icon.png",
