@@ -220,7 +220,7 @@ export default function AdminDashboardPage() {
 
   if (!session || session.user.role !== 'HOST_ADMIN') {
     return (
-      <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)]">
+      <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)] dark:bg-zinc-950">
         <NavBar
           user={session?.user ?? null}
           onSignOut={() => {
@@ -229,16 +229,16 @@ export default function AdminDashboardPage() {
           }}
         />
         <main className="mx-auto max-w-md px-4 py-16 text-center">
-          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-8 shadow-sm backdrop-blur-xl">
-            <h1 className="text-lg font-bold tracking-tight text-zinc-950">
+          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-8 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+            <h1 className="text-lg font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
               Host Admin Access Required
             </h1>
-            <p className="mt-2 text-xs text-zinc-500">
+            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
               Sign in as the Host Admin on the main map to inspect storage, telemetry, and live logs.
             </p>
             <Link
               href="/"
-              className="lo-press mt-5 inline-block rounded-lg bg-zinc-950 px-5 py-2 text-xs font-semibold text-white hover:bg-zinc-800"
+              className="lo-press mt-5 inline-block rounded-lg bg-zinc-950 px-5 py-2 text-xs font-semibold text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
             >
               Back to Map
             </Link>
@@ -249,7 +249,7 @@ export default function AdminDashboardPage() {
   }
 
   return (
-    <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)]">
+    <div className="min-h-dvh bg-[#f4f4f5] pb-[var(--lo-safe-bottom,0px)] dark:bg-zinc-950">
       <NavBar
         user={session.user}
         onSignOut={() => {
@@ -261,8 +261,10 @@ export default function AdminDashboardPage() {
       <main className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-zinc-950">System Telemetry</h1>
-            <p className="text-xs text-zinc-500">
+            <h1 className="text-xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
+              System Telemetry
+            </h1>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
               Live 5s updates · Storage footprint · Per-account compute &amp; sockets
             </p>
           </div>
@@ -271,7 +273,7 @@ export default function AdminDashboardPage() {
             <button
               type="button"
               onClick={() => void refreshData(session.accessToken)}
-              className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-4 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950"
+              className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-4 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:text-white"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Refresh
@@ -279,23 +281,23 @@ export default function AdminDashboardPage() {
             <button
               type="button"
               onClick={() => setShowInviteModal((v) => !v)}
-              className="lo-press flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800"
+              className="lo-press flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
             >
-              <QrCode className="h-3.5 w-3.5 text-white" />
+              <QrCode className="h-3.5 w-3.5" />
               New Invite
             </button>
           </div>
         </div>
 
         {error && (
-          <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300">
             {error}
           </div>
         )}
 
         {telemetry?.logStorageAlert && (
-          <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+          <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/50 dark:text-amber-300">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
             <span>
               Log directory ({telemetry.logDir}) is at {telemetry.logStoragePercent}% of configured
               storage limit.
@@ -311,29 +313,29 @@ export default function AdminDashboardPage() {
           />
         )}
 
-        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-5 py-3.5">
-            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-950">
-              <UserPlus className="h-4 w-4 text-zinc-700" />
+        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800">
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+              <UserPlus className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
               Account Requests
               {registrationRequests.filter((r) => r.status === 'PENDING').length > 0 && (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
                   {registrationRequests.filter((r) => r.status === 'PENDING').length} pending
                 </span>
               )}
             </div>
-            <span className="text-[11px] text-zinc-500">
+            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
               1 request per IP · Expires automatically after 24h
             </span>
           </div>
 
           {registrationRequests.length === 0 ? (
-            <div className="px-5 py-5 text-xs text-zinc-500">
+            <div className="px-5 py-5 text-xs text-zinc-500 dark:text-zinc-400">
               No pending or recent account requests yet. New mobile onboarding requests appear here
               with a 24-hour countdown timer.
             </div>
           ) : (
-            <div className="divide-y divide-zinc-100">
+            <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {registrationRequests.map((req) => {
                 const isPending = req.status === 'PENDING';
                 const countdown = isPending ? formatCountdownRemaining(req.expiresAt, nowMs) : null;
@@ -354,7 +356,7 @@ export default function AdminDashboardPage() {
                   >
                     <div className="flex items-center gap-3">
                       <div
-                        className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-bold text-zinc-800"
+                        className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-bold text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100"
                         style={{ boxShadow: `0 0 0 2.5px ${halo}` }}
                       >
                         {isSafeAvatarUrl(req.avatarUrl) ? (
@@ -369,20 +371,20 @@ export default function AdminDashboardPage() {
                       </div>
                       <div className="space-y-0.5">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold text-zinc-950">
+                          <span className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
                             {req.username}
                           </span>
-                          <span className="text-xs text-zinc-500">{req.email}</span>
+                          <span className="text-xs text-zinc-500 dark:text-zinc-400">{req.email}</span>
                           {req.groupName && (
-                            <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] font-medium text-zinc-700">
+                            <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                               Group: {req.groupName}
                             </span>
                           )}
                         </div>
-                        <div className="flex flex-wrap items-center gap-3 text-[11px] text-zinc-500">
+                        <div className="flex flex-wrap items-center gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
                           <span className="font-mono">IP {req.requesterIp}</span>
                           {isPending && countdown && (
-                            <span className="inline-flex items-center gap-1 font-mono text-amber-700">
+                            <span className="inline-flex items-center gap-1 font-mono text-amber-700 dark:text-amber-300">
                               <Clock className="h-3 w-3" />
                               Expires in {countdown}
                             </span>
@@ -391,10 +393,10 @@ export default function AdminDashboardPage() {
                             <span
                               className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                                 req.status === 'APPROVED'
-                                  ? 'bg-emerald-50 text-emerald-700'
+                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
                                   : req.status === 'DENIED'
-                                    ? 'bg-rose-50 text-rose-700'
-                                    : 'bg-zinc-100 text-zinc-500'
+                                    ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                                    : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
                               }`}
                             >
                               {req.status}
@@ -410,7 +412,7 @@ export default function AdminDashboardPage() {
                           type="button"
                           disabled={busy}
                           onClick={() => void handleReviewRegistrationRequest(req.id, 'approve')}
-                          className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
+                          className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                         >
                           {busy ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -423,7 +425,7 @@ export default function AdminDashboardPage() {
                           type="button"
                           disabled={busy}
                           onClick={() => void handleReviewRegistrationRequest(req.id, 'deny')}
-                          className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                          className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
                         >
                           <X className="h-3.5 w-3.5" />
                           Deny
@@ -437,14 +439,16 @@ export default function AdminDashboardPage() {
           )}
         </section>
 
-        <section className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl">
+        <section className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-semibold text-zinc-950">Remote System Update</h2>
+                <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                  Remote System Update
+                </h2>
                 {updateStatus ? (
                   updateStatus.running ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
                       <Loader2 className="h-3 w-3 animate-spin" />
                       {updateStatus.phase === 'pulling'
                         ? 'Pulling updates'
@@ -453,37 +457,37 @@ export default function AdminDashboardPage() {
                           : 'Restarting services'}
                     </span>
                   ) : !updateStatus.enabled ? (
-                    <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-medium text-zinc-600">
+                    <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
                       Local / Disabled
                     </span>
                   ) : updateStatus.updateAvailable ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
                       <ArrowUpCircle className="h-3 w-3" />
                       {updateStatus.commitsBehind} update
                       {updateStatus.commitsBehind === 1 ? '' : 's'} available
                     </span>
                   ) : updateStatus.phase === 'failed' ? (
-                    <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700">
+                    <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700 dark:bg-rose-950/70 dark:text-rose-300">
                       Last update failed
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300">
                       <CheckCircle2 className="h-3 w-3" />
                       Up to date
                     </span>
                   )
                 ) : (
-                  <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] text-zinc-500">
+                  <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
                     Checking...
                   </span>
                 )}
               </div>
 
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 {updateStatus?.currentCommit ? (
                   <>
                     Running{' '}
-                    <span className="font-mono font-medium text-zinc-800">
+                    <span className="font-mono font-medium text-zinc-800 dark:text-zinc-200">
                       {updateStatus.branch ?? 'HEAD'}@{updateStatus.currentCommit}
                     </span>
                     {updateStatus.currentCommitMessage
@@ -503,15 +507,15 @@ export default function AdminDashboardPage() {
                 type="button"
                 disabled={checkingUpdate || Boolean(updateStatus?.running) || !updateStatus?.enabled}
                 onClick={() => void handleCheckForUpdates()}
-                className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3.5 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50"
+                className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3.5 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-white"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdate ? 'animate-spin' : ''}`} />
                 {checkingUpdate ? 'Checking...' : 'Check Updates'}
               </button>
 
               {confirmUpdateMode ? (
-                <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1">
-                  <span className="text-[11px] font-medium text-zinc-700">
+                <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1 dark:border-zinc-700 dark:bg-zinc-800">
+                  <span className="text-[11px] font-medium text-zinc-700 dark:text-zinc-200">
                     {confirmUpdateMode === 'pull'
                       ? 'Pull & restart stack?'
                       : 'Rebuild & restart stack?'}
@@ -520,7 +524,7 @@ export default function AdminDashboardPage() {
                     type="button"
                     disabled={startingUpdate}
                     onClick={() => void handleTriggerUpdate(confirmUpdateMode === 'rebuild')}
-                    className="lo-press inline-flex items-center gap-1 rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                    className="lo-press inline-flex items-center gap-1 rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                   >
                     {startingUpdate && <Loader2 className="h-3 w-3 animate-spin" />}
                     Confirm
@@ -529,7 +533,7 @@ export default function AdminDashboardPage() {
                     type="button"
                     disabled={startingUpdate}
                     onClick={() => setConfirmUpdateMode(null)}
-                    className="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-200/70"
+                    className="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-200/70 dark:text-zinc-300 dark:hover:bg-zinc-700"
                   >
                     Cancel
                   </button>
@@ -544,7 +548,7 @@ export default function AdminDashboardPage() {
                     updateStatus.workingTreeDirty
                   }
                   onClick={() => setConfirmUpdateMode('pull')}
-                  className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                 >
                   <ArrowUpCircle className="h-3.5 w-3.5" />
                   Update System
@@ -559,7 +563,7 @@ export default function AdminDashboardPage() {
                     Boolean(updateStatus?.workingTreeDirty)
                   }
                   onClick={() => setConfirmUpdateMode('rebuild')}
-                  className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                 >
                   <ArrowUpCircle className="h-3.5 w-3.5" />
                   Rebuild &amp; Restart
@@ -570,7 +574,7 @@ export default function AdminDashboardPage() {
                 <button
                   type="button"
                   onClick={() => setShowUpdateLogs((v) => !v)}
-                  className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50"
+                  className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                 >
                   <Terminal className="h-3.5 w-3.5" />
                   {showUpdateLogs ? 'Hide Output' : 'Build Output'}
@@ -580,7 +584,7 @@ export default function AdminDashboardPage() {
           </div>
 
           {updateStatus?.workingTreeDirty && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/50 dark:text-amber-300">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               <span>
                 Host repository has uncommitted changes to tracked files. Clean or commit them on
@@ -590,8 +594,8 @@ export default function AdminDashboardPage() {
           )}
 
           {reconnectingDuringUpdate && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-700" />
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-700 dark:text-zinc-300" />
               <span>
                 Updated containers are swapping cleanly — reconnecting automatically in a few
                 seconds...
@@ -600,13 +604,13 @@ export default function AdminDashboardPage() {
           )}
 
           {updateStatus?.error && !updateStatus.running && (
-            <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300">
               {updateStatus.error}
             </div>
           )}
 
           {updateStatus?.phase === 'completed' && updateStatus.finishedAt && !updateStatus.running && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-950/50 dark:text-emerald-300">
               <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
               <span>
                 Last update completed cleanly
@@ -617,14 +621,14 @@ export default function AdminDashboardPage() {
           )}
 
           {updateStatus && updateStatus.pendingCommits.length > 0 && (
-            <div className="mt-3 rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-3">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+            <div className="mt-3 rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-3 dark:border-zinc-700 dark:bg-zinc-800/70">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                 Pending Updates ({updateStatus.upstreamBranch ?? 'upstream'})
               </div>
-              <ul className="mt-1.5 space-y-1 text-xs text-zinc-700">
+              <ul className="mt-1.5 space-y-1 text-xs text-zinc-700 dark:text-zinc-300">
                 {updateStatus.pendingCommits.map((c) => (
                   <li key={c.sha} className="flex items-baseline gap-2">
-                    <span className="font-mono text-[11px] font-semibold text-zinc-900">
+                    <span className="font-mono text-[11px] font-semibold text-zinc-900 dark:text-zinc-100">
                       {c.sha}
                     </span>
                     <span className="truncate">{c.message}</span>
@@ -637,70 +641,74 @@ export default function AdminDashboardPage() {
           {(showUpdateLogs || updateStatus?.running) &&
             updateStatus &&
             updateStatus.logs.length > 0 && (
-              <pre className="mt-3 max-h-48 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed text-zinc-200">
+              <pre className="mt-3 max-h-48 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed text-zinc-200 dark:border dark:border-zinc-800">
                 {updateStatus.logs.join('\n')}
               </pre>
             )}
         </section>
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl">
-            <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
+          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+            <div className="flex items-center justify-between text-xs font-medium text-zinc-500 dark:text-zinc-400">
               <span>Log Disk Usage</span>
-              <HardDrive className="h-4 w-4 text-zinc-700" />
+              <HardDrive className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
             </div>
-            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950">
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
               {telemetry ? formatBytes(telemetry.logStorageBytes) : '—'}
             </div>
-            <div className="mt-1 text-[11px] text-zinc-400">
+            <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
               Limit: {telemetry ? formatBytes(telemetry.maxLogStorageBytes) : '—'} (
               {telemetry?.logStoragePercent ?? 0}%)
             </div>
           </div>
 
-          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl">
-            <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
+          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+            <div className="flex items-center justify-between text-xs font-medium text-zinc-500 dark:text-zinc-400">
               <span>Spatial Database</span>
-              <Database className="h-4 w-4 text-zinc-700" />
+              <Database className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
             </div>
-            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950">
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
               {telemetry ? formatBytes(telemetry.databaseBytes) : '—'}
             </div>
-            <div className="mt-1 text-[11px] text-zinc-400">
+            <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
               {telemetry?.totalLocationPoints.toLocaleString() ?? 0} stored pings
             </div>
           </div>
 
-          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl">
-            <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
+          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+            <div className="flex items-center justify-between text-xs font-medium text-zinc-500 dark:text-zinc-400">
               <span>Active Connections</span>
-              <Radio className="h-4 w-4 text-zinc-700" />
+              <Radio className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
             </div>
-            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950">
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
               {telemetry?.totalActiveSockets ?? 0}
             </div>
-            <div className="mt-1 text-[11px] text-zinc-400">Open live WebSocket clients</div>
+            <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+              Open live WebSocket clients
+            </div>
           </div>
 
-          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl">
-            <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
+          <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+            <div className="flex items-center justify-between text-xs font-medium text-zinc-500 dark:text-zinc-400">
               <span>Accounts</span>
-              <Cpu className="h-4 w-4 text-zinc-700" />
+              <Cpu className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
             </div>
-            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950">
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
               {telemetry?.users.length ?? 0}
             </div>
-            <div className="mt-1 text-[11px] text-zinc-400">Sorted by recent compute</div>
+            <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+              Sorted by recent compute
+            </div>
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
-          <div className="border-b border-zinc-100 px-5 py-3.5 text-sm font-semibold text-zinc-950">
+        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+          <div className="border-b border-zinc-100 px-5 py-3.5 text-sm font-semibold text-zinc-950 dark:border-zinc-800 dark:text-zinc-50">
             Account Resource Usage
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-zinc-50/90 text-zinc-500">
+              <thead className="bg-zinc-50/90 text-zinc-500 dark:bg-zinc-950/60 dark:text-zinc-400">
                 <tr>
                   <th className="px-5 py-3 font-medium">Account</th>
                   <th className="px-5 py-3 font-medium">CPU / min</th>
@@ -714,36 +722,48 @@ export default function AdminDashboardPage() {
                   <th className="px-5 py-3 text-right font-medium">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-100">
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {telemetry?.users.map((u) => {
                   const isSelf = u.userId === session.user.id;
                   const confirming = confirmRemoveUserId === u.userId;
                   const busy = removingUserId === u.userId;
                   return (
-                    <tr key={u.userId} className="hover:bg-zinc-50/80">
+                    <tr key={u.userId} className="hover:bg-zinc-50/80 dark:hover:bg-zinc-800/50">
                       <td className="px-5 py-3">
-                        <div className="font-medium text-zinc-950">{u.username}</div>
-                        <div className="text-[11px] text-zinc-400">{u.email}</div>
+                        <div className="font-medium text-zinc-950 dark:text-zinc-50">
+                          {u.username}
+                        </div>
+                        <div className="text-[11px] text-zinc-400 dark:text-zinc-500">
+                          {u.email}
+                        </div>
                       </td>
-                      <td className="px-5 py-3 font-mono text-zinc-900">
+                      <td className="px-5 py-3 font-mono text-zinc-900 dark:text-zinc-100">
                         {u.cpuMsPerMin.toFixed(2)} ms
                       </td>
-                      <td className="px-5 py-3 font-mono text-zinc-900">{u.pingsPerMin}</td>
-                      <td className="px-5 py-3 font-mono text-zinc-600">
+                      <td className="px-5 py-3 font-mono text-zinc-900 dark:text-zinc-100">
+                        {u.pingsPerMin}
+                      </td>
+                      <td className="px-5 py-3 font-mono text-zinc-600 dark:text-zinc-300">
                         {u.cpuMsTotal.toFixed(2)} ms
                       </td>
-                      <td className="px-5 py-3 font-mono text-zinc-600">{u.eventsCount}</td>
-                      <td className="px-5 py-3 font-mono text-zinc-600">{u.activeSockets}</td>
-                      <td className="px-5 py-3 font-mono text-zinc-600">
+                      <td className="px-5 py-3 font-mono text-zinc-600 dark:text-zinc-300">
+                        {u.eventsCount}
+                      </td>
+                      <td className="px-5 py-3 font-mono text-zinc-600 dark:text-zinc-300">
+                        {u.activeSockets}
+                      </td>
+                      <td className="px-5 py-3 font-mono text-zinc-600 dark:text-zinc-300">
                         {formatBytes(u.redisMemoryBytes)}
                       </td>
-                      <td className="px-5 py-3 font-mono text-zinc-700">
+                      <td className="px-5 py-3 font-mono text-zinc-700 dark:text-zinc-200">
                         {formatBytes(u.locationBytes)}
                       </td>
-                      <td className="px-5 py-3 font-mono text-zinc-600">{u.locationPoints}</td>
+                      <td className="px-5 py-3 font-mono text-zinc-600 dark:text-zinc-300">
+                        {u.locationPoints}
+                      </td>
                       <td className="px-5 py-3 text-right">
                         {isSelf ? (
-                          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500">
+                          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
                             You
                           </span>
                         ) : confirming ? (
@@ -761,7 +781,7 @@ export default function AdminDashboardPage() {
                               type="button"
                               disabled={busy}
                               onClick={() => setConfirmRemoveUserId(null)}
-                              className="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-100"
+                              className="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                             >
                               Cancel
                             </button>
@@ -770,7 +790,7 @@ export default function AdminDashboardPage() {
                           <button
                             type="button"
                             onClick={() => setConfirmRemoveUserId(u.userId)}
-                            className="lo-press inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100"
+                            className="lo-press inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
                           >
                             <Trash2 className="h-3 w-3" />
                             Remove
@@ -785,21 +805,21 @@ export default function AdminDashboardPage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl">
-          <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3.5">
-            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-950">
-              <CloudDownload className="h-4 w-4 text-zinc-700" />
+        <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+          <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800">
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+              <CloudDownload className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
               Downloaded Map Regions ({mapRegions.filter((r) => !r.isStub).length})
             </div>
             {mapJobs.some((j) => j.status === 'resolving' || j.status === 'downloading') && (
-              <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+              <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
                 Download active
               </span>
             )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-zinc-50/90 text-zinc-500">
+              <thead className="bg-zinc-50/90 text-zinc-500 dark:bg-zinc-950/60 dark:text-zinc-400">
                 <tr>
                   <th className="px-5 py-3 font-medium">Region</th>
                   <th className="px-5 py-3 font-medium">Bounds (Lon/Lat)</th>
@@ -809,31 +829,33 @@ export default function AdminDashboardPage() {
                   <th className="px-5 py-3 text-right font-medium">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-100">
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {mapRegions.map((r) => (
-                  <tr key={r.id} className="hover:bg-zinc-50/80">
+                  <tr key={r.id} className="hover:bg-zinc-50/80 dark:hover:bg-zinc-800/50">
                     <td className="px-5 py-3">
-                      <div className="font-medium text-zinc-950">
+                      <div className="font-medium text-zinc-950 dark:text-zinc-50">
                         {r.displayName ?? r.name}
                       </div>
-                      <div className="font-mono text-[11px] text-zinc-400">{r.url}</div>
+                      <div className="font-mono text-[11px] text-zinc-400 dark:text-zinc-500">
+                        {r.url}
+                      </div>
                     </td>
-                    <td className="px-5 py-3 font-mono text-[11px] text-zinc-600">
+                    <td className="px-5 py-3 font-mono text-[11px] text-zinc-600 dark:text-zinc-300">
                       {r.minLon.toFixed(2)}, {r.minLat.toFixed(2)} → {r.maxLon.toFixed(2)},{' '}
                       {r.maxLat.toFixed(2)}
                     </td>
-                    <td className="px-5 py-3 font-mono text-zinc-700">
+                    <td className="px-5 py-3 font-mono text-zinc-700 dark:text-zinc-200">
                       z{r.minZoom}–{r.maxZoom}
                     </td>
-                    <td className="px-5 py-3 font-mono text-zinc-700">
+                    <td className="px-5 py-3 font-mono text-zinc-700 dark:text-zinc-200">
                       {formatBytes(r.sizeBytes)}
                     </td>
                     <td className="px-5 py-3">
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                           r.isStub
-                            ? 'bg-zinc-100 text-zinc-500'
-                            : 'bg-zinc-950 text-white'
+                            ? 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                            : 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
                         }`}
                       >
                         {r.isStub ? 'Placeholder Stub' : r.isPrimary ? 'Primary' : 'City Extract'}
@@ -851,7 +873,7 @@ export default function AdminDashboardPage() {
                                 setError(err instanceof Error ? err.message : 'Delete failed'),
                               );
                           }}
-                          className="lo-press inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100"
+                          className="lo-press inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
                         >
                           <Trash2 className="h-3 w-3" />
                           Remove

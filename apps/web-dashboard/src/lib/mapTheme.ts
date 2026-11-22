@@ -2,6 +2,7 @@ export type MapThemePreference = 'system' | 'light' | 'dark';
 export type ResolvedMapTheme = 'light' | 'dark';
 
 export const MAP_THEME_STORAGE_KEY = 'lovedones_map_theme_v1';
+export const THEME_CHANGE_EVENT = 'lovedones:theme-change';
 
 export function parseMapThemePreference(raw: string | null | undefined): MapThemePreference {
   if (raw === 'light' || raw === 'dark' || raw === 'system') {
@@ -17,6 +18,40 @@ export function resolveMapTheme(
   if (preference === 'dark') return 'dark';
   if (preference === 'light') return 'light';
   return systemPrefersDark ? 'dark' : 'light';
+}
+
+export function readStoredThemePreference(): MapThemePreference {
+  if (typeof window === 'undefined') return 'system';
+  try {
+    return parseMapThemePreference(window.localStorage.getItem(MAP_THEME_STORAGE_KEY));
+  } catch {
+    return 'system';
+  }
+}
+
+export function applyDocumentTheme(resolved: ResolvedMapTheme): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.classList.toggle('dark', resolved === 'dark');
+  root.dataset.theme = resolved;
+  root.dataset.mapTheme = resolved;
+  root.style.colorScheme = resolved;
+}
+
+export function persistThemePreference(pref: MapThemePreference): ResolvedMapTheme {
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(MAP_THEME_STORAGE_KEY, pref);
+    } catch {
+      // ignore storage quota errors
+    }
+    const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+    const resolved = resolveMapTheme(pref, systemDark);
+    applyDocumentTheme(resolved);
+    window.dispatchEvent(new CustomEvent(THEME_CHANGE_EVENT, { detail: { pref, resolved } }));
+    return resolved;
+  }
+  return resolveMapTheme(pref, false);
 }
 
 export interface MapLayerPaintOverride {

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { JetBrains_Mono, Plus_Jakarta_Sans } from 'next/font/google';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { MobileViewportSync } from '@/components/MobileViewportSync';
+import { ThemeSync } from '@/components/ThemeSync';
 import './globals.css';
 
 const plusJakartaSans = Plus_Jakarta_Sans({
@@ -97,10 +98,20 @@ export const viewport: Viewport = {
   ],
 };
 
+const THEME_INIT_SCRIPT = `(function(){try{var k='lovedones_map_theme_v1';var p=localStorage.getItem(k);var sys=window.matchMedia('(prefers-color-scheme: dark)').matches;var d=(p==='dark')||(p!=='light'&&sys);var r=document.documentElement;r.classList.toggle('dark',d);r.dataset.theme=d?'dark':'light';r.dataset.mapTheme=d?'dark':'light';r.style.colorScheme=d?'dark':'light';}catch(e){}})();`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${plusJakartaSans.variable} ${jetbrainsMono.variable}`}>
-      <body className="min-h-dvh bg-[#f4f4f5] font-sans text-zinc-900 antialiased selection:bg-zinc-950 selection:text-white">
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${plusJakartaSans.variable} ${jetbrainsMono.variable}`}
+    >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
+      <body className="min-h-dvh bg-[#f4f4f5] font-sans text-zinc-900 antialiased selection:bg-zinc-950 selection:text-white dark:bg-zinc-950 dark:text-zinc-100 dark:selection:bg-zinc-100 dark:selection:text-zinc-950">
+        <ThemeSync />
         <MobileViewportSync />
         {children}
       </body>

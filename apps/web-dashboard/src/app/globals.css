@@ -25,6 +25,12 @@ body {
   font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
 }
 
+html.dark,
+html.dark body {
+  background-color: #09090b;
+  color: #f4f4f5;
+}
+
 .lo-app-shell {
   height: 100vh;
   height: 100dvh;
@@ -42,6 +48,10 @@ textarea {
 * {
   scrollbar-width: thin;
   scrollbar-color: #d4d4d8 transparent;
+}
+
+html.dark * {
+  scrollbar-color: #3f3f46 transparent;
 }
 
 @keyframes lo-float-in {
@@ -277,46 +287,58 @@ textarea {
   left: var(--lo-safe-left, 0px) !important;
 }
 
+html.dark .maplibregl-ctrl-group,
 [data-map-theme='dark'] .maplibregl-ctrl-group {
   background: rgba(24, 24, 27, 0.9) !important;
   border-color: rgba(63, 63, 70, 0.9) !important;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
 }
 
+html.dark .maplibregl-ctrl-group button + button,
 [data-map-theme='dark'] .maplibregl-ctrl-group button + button {
   border-top-color: rgba(63, 63, 70, 0.7) !important;
 }
 
+html.dark .maplibregl-ctrl-icon,
 [data-map-theme='dark'] .maplibregl-ctrl-icon {
   filter: invert(1) brightness(0.92);
 }
 
+html.dark .maplibregl-popup-content,
 [data-map-theme='dark'] .maplibregl-popup-content {
   background: rgba(24, 24, 27, 0.96) !important;
   color: #f4f4f5 !important;
   border-color: rgba(63, 63, 70, 0.9) !important;
 }
 
+html.dark .maplibregl-popup-content .text-zinc-950,
+html.dark .maplibregl-popup-content .text-zinc-900,
 [data-map-theme='dark'] .maplibregl-popup-content .text-zinc-950,
 [data-map-theme='dark'] .maplibregl-popup-content .text-zinc-900 {
   color: #f4f4f5 !important;
 }
 
+html.dark .maplibregl-popup-content .text-zinc-700,
+html.dark .maplibregl-popup-content .text-zinc-500,
+html.dark .maplibregl-popup-content .text-zinc-400,
 [data-map-theme='dark'] .maplibregl-popup-content .text-zinc-700,
 [data-map-theme='dark'] .maplibregl-popup-content .text-zinc-500,
 [data-map-theme='dark'] .maplibregl-popup-content .text-zinc-400 {
   color: #a1a1aa !important;
 }
 
+html.dark .maplibregl-popup-tip,
 [data-map-theme='dark'] .maplibregl-popup-tip {
   border-top-color: rgba(24, 24, 27, 0.96) !important;
 }
 
+html.dark .lo-popup-maps-primary,
 [data-map-theme='dark'] .lo-popup-maps-primary {
   background-color: #f4f4f5 !important;
   color: #09090b !important;
 }
 
+html.dark .lo-popup-maps-secondary,
 [data-map-theme='dark'] .lo-popup-maps-secondary {
   background-color: #27272a !important;
   border-color: #3f3f46 !important;

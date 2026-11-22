@@ -665,4 +665,29 @@ describe('@loved-ones/mobile-app', () => {
     expect(statusDenied.level).toBe('denied');
     expect(statusDenied.canAskAgain).toBe(false);
   });
+
+  it('resolves mobile UI dark/light palettes from explicit and system theme preferences', async () => {
+    const store = createMemoryKeyValueStore();
+    expect(await getMapThemePreference(store)).toBe('system');
+
+    await saveMapThemePreference('dark', store);
+    const savedPref = await getMapThemePreference(store);
+    expect(savedPref).toBe('dark');
+
+    const resolvedDark = resolveMobileMapTheme(savedPref, 'light');
+    expect(resolvedDark).toBe('dark');
+
+    const darkPalette = getOnboardingPalette(resolvedDark);
+    const lightPalette = getOnboardingPalette(resolveMobileMapTheme('light', 'dark'));
+
+    expect(darkPalette.scheme).toBe('dark');
+    expect(darkPalette.statusBarStyle).toBe('light');
+    expect(darkPalette.canvas).toBe('#09090b');
+    expect(darkPalette.surface).toBe('#18181b');
+    expect(darkPalette.ink).toBe('#fafafa');
+    expect(lightPalette.scheme).toBe('light');
+    expect(lightPalette.statusBarStyle).toBe('dark');
+    expect(lightPalette.surface).toBe('#ffffff');
+    expect(lightPalette.ink).toBe('#18181b');
+  });
 });

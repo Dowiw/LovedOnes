@@ -117,7 +117,10 @@ import {
   MAP_THEME_STORAGE_KEY,
   type MapThemePreference,
   parseMapThemePreference,
+  persistThemePreference,
+  readStoredThemePreference,
   resolveMapTheme,
+  THEME_CHANGE_EVENT,
 } from '@/lib/mapTheme';
 
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
@@ -318,8 +321,8 @@ export default function HomePage() {
       if (savedLang === 'en' || savedLang === 'local') {
         setLabelLanguage(savedLang);
       }
-      const savedTheme = window.localStorage.getItem(MAP_THEME_STORAGE_KEY);
-      setMapThemePreference(parseMapThemePreference(savedTheme));
+      const savedTheme = readStoredThemePreference();
+      setMapThemePreference(savedTheme);
       const savedAlerts = window.localStorage.getItem('lovedones_chat_alerts_v1');
       if (savedAlerts === 'off') {
         setChatAlertsEnabled(false);
@@ -468,12 +471,20 @@ export default function HomePage() {
 
   function handleChangeMapTheme(pref: MapThemePreference) {
     setMapThemePreference(pref);
-    try {
-      window.localStorage.setItem(MAP_THEME_STORAGE_KEY, pref);
-    } catch {
-      // ignore storage failures
-    }
+    persistThemePreference(pref);
   }
+
+  useEffect(() => {
+    const syncStoredTheme = () => {
+      setMapThemePreference(readStoredThemePreference());
+    };
+    window.addEventListener(THEME_CHANGE_EVENT, syncStoredTheme);
+    window.addEventListener('storage', syncStoredTheme);
+    return () => {
+      window.removeEventListener(THEME_CHANGE_EVENT, syncStoredTheme);
+      window.removeEventListener('storage', syncStoredTheme);
+    };
+  }, []);
 
   const resolvedMapTheme = resolveMapTheme(mapThemePreference, systemPrefersDark);
 
@@ -1606,60 +1617,90 @@ export default function HomePage() {
 
   if (!session) {
     return (
-      <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#f4f4f5] pb-[calc(1.5rem+var(--lo-safe-bottom,0px))] pl-[calc(1rem+var(--lo-safe-left,0px))] pr-[calc(1rem+var(--lo-safe-right,0px))] pt-[calc(1.5rem+var(--lo-safe-top,0px))]">
-        <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl" />
-        <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl" />
+      <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#f4f4f5] pb-[calc(1.5rem+var(--lo-safe-bottom,0px))] pl-[calc(1rem+var(--lo-safe-left,0px))] pr-[calc(1rem+var(--lo-safe-right,0px))] pt-[calc(1.5rem+var(--lo-safe-top,0px))] dark:bg-zinc-950">
+        <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl dark:bg-zinc-800/30" />
+        <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl dark:bg-zinc-800/20" />
 
         {removedToast && (
           <div
             role="status"
             aria-live="assertive"
-            className="lo-feedback-in fixed inset-x-4 top-[calc(1.25rem+var(--lo-safe-top,0px))] z-50 mx-auto flex max-w-md items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/95 px-4 py-3 text-xs text-rose-800 shadow-[0_14px_32px_rgba(190,18,60,0.16)] backdrop-blur-md"
+            className="lo-feedback-in fixed inset-x-4 top-[calc(1.25rem+var(--lo-safe-top,0px))] z-50 mx-auto flex max-w-md items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/95 px-4 py-3 text-xs text-rose-800 shadow-[0_14px_32px_rgba(190,18,60,0.16)] backdrop-blur-md dark:border-rose-500/30 dark:bg-rose-950/95 dark:text-rose-200"
           >
-            <Bell className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+            <Bell className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
             <div>
-              <p className="font-semibold text-rose-950">Account Removed</p>
-              <p className="mt-0.5 leading-relaxed text-rose-700">{removedToast}</p>
+              <p className="font-semibold text-rose-950 dark:text-rose-100">Account Removed</p>
+              <p className="mt-0.5 leading-relaxed text-rose-700 dark:text-rose-300">
+                {removedToast}
+              </p>
             </div>
           </div>
         )}
 
-        <div className="lo-float-in relative w-full max-w-md rounded-xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
-          <div className="mb-6 flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white">
-              <BrandMark className="h-6 w-6" />
-            </span>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight text-zinc-900">LovedOnes</h1>
-              <p className="text-xs text-zinc-500">Private group map &amp; check-ins</p>
+        <div className="lo-float-in relative w-full max-w-md rounded-xl border border-white/80 bg-white/90 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 dark:shadow-[0_24px_60px_rgba(0,0,0,0.5)]">
+          <div className="mb-6 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950">
+                <BrandMark className="h-6 w-6" />
+              </span>
+              <div>
+                <h1 className="text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                  LovedOnes
+                </h1>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Private group map &amp; check-ins
+                </p>
+              </div>
             </div>
+            <button
+              type="button"
+              title={`Theme: ${mapThemePreference === 'system' ? 'Auto' : mapThemePreference === 'dark' ? 'Dark' : 'Light'}`}
+              onClick={() =>
+                handleChangeMapTheme(
+                  mapThemePreference === 'system'
+                    ? 'dark'
+                    : mapThemePreference === 'dark'
+                      ? 'light'
+                      : 'system',
+                )
+              }
+              className="lo-press rounded-lg border border-zinc-200 bg-white p-2 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+            >
+              {resolvedMapTheme === 'dark' ? (
+                <Moon className="h-4 w-4" />
+              ) : (
+                <Sun className="h-4 w-4" />
+              )}
+            </button>
           </div>
 
           {forgotMode ? (
             <div className="space-y-4">
               <div>
-                <h2 className="text-sm font-bold text-zinc-900">Recover forgotten password</h2>
-                <p className="mt-0.5 text-xs text-zinc-500">
+                <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50">
+                  Recover forgotten password
+                </h2>
+                <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
                   Enter your account email or verified backup email to receive a 6-digit reset code.
                 </p>
               </div>
 
               {forgotStep === 'request' ? (
                 <form onSubmit={handleForgotPasswordRequest} className="space-y-3.5">
-                  <label className="block text-xs font-medium text-zinc-600">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
                     Account or Verified Backup Email
                     <input
                       type="email"
                       required
                       value={forgotEmail}
                       onChange={(e) => setForgotEmail(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                       placeholder="you@example.com"
                     />
                   </label>
 
                   {authError && (
-                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300">
                       {authError}
                     </div>
                   )}
@@ -1667,11 +1708,11 @@ export default function HomePage() {
                   <button
                     type="submit"
                     disabled={authLoading}
-                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80"
+                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                   >
                     {authLoading && (
                       <>
-                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15 dark:bg-zinc-950/15" />
                         <Loader2 className="h-4 w-4 animate-spin" />
                       </>
                     )}
@@ -1680,7 +1721,7 @@ export default function HomePage() {
                 </form>
               ) : (
                 <form onSubmit={handleForgotPasswordReset} className="space-y-3">
-                  <label className="block text-xs font-medium text-zinc-600">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
                     6-Digit Reset Code
                     <input
                       type="text"
@@ -1690,12 +1731,12 @@ export default function HomePage() {
                       required
                       value={forgotCode}
                       onChange={(e) => setForgotCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 font-mono text-sm tracking-widest text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 font-mono text-sm tracking-widest text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                       placeholder="123456"
                     />
                   </label>
 
-                  <label className="block text-xs font-medium text-zinc-600">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
                     New Password
                     <input
                       type="password"
@@ -1703,12 +1744,12 @@ export default function HomePage() {
                       minLength={8}
                       value={forgotNewPassword}
                       onChange={(e) => setForgotNewPassword(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                       placeholder="Minimum 8 characters"
                     />
                   </label>
 
-                  <label className="block text-xs font-medium text-zinc-600">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
                     Confirm New Password
                     <input
                       type="password"
@@ -1716,19 +1757,19 @@ export default function HomePage() {
                       minLength={8}
                       value={forgotConfirmPassword}
                       onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                       placeholder="Repeat new password"
                     />
                   </label>
 
                   {authNotice && (
-                    <div className="rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2.5 text-xs text-zinc-800">
+                    <div className="rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2.5 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
                       {authNotice}
                     </div>
                   )}
 
                   {authError && (
-                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300">
                       {authError}
                     </div>
                   )}
@@ -1736,11 +1777,11 @@ export default function HomePage() {
                   <button
                     type="submit"
                     disabled={authLoading}
-                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80"
+                    className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                   >
                     {authLoading && (
                       <>
-                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
+                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15 dark:bg-zinc-950/15" />
                         <Loader2 className="h-4 w-4 animate-spin" />
                       </>
                     )}
@@ -1758,7 +1799,7 @@ export default function HomePage() {
                     setAuthError(null);
                     setAuthNotice(null);
                   }}
-                  className="font-medium text-zinc-600 hover:text-zinc-950 hover:underline"
+                  className="font-medium text-zinc-600 hover:text-zinc-950 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
                 >
                   Back to sign in
                 </button>
@@ -1769,7 +1810,7 @@ export default function HomePage() {
                       setForgotStep('request');
                       setAuthError(null);
                     }}
-                    className="font-medium text-zinc-600 hover:text-zinc-950 hover:underline"
+                    className="font-medium text-zinc-600 hover:text-zinc-950 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
                   >
                     Use another email / resend
                   </button>
@@ -1778,7 +1819,7 @@ export default function HomePage() {
             </div>
           ) : (
             <>
-              <div className="mb-5 flex rounded-lg bg-slate-100 p-1 text-xs font-medium">
+              <div className="mb-5 flex rounded-lg bg-slate-100 p-1 text-xs font-medium dark:bg-zinc-800">
                 <button
                   type="button"
                   onClick={() => {
@@ -1786,8 +1827,11 @@ export default function HomePage() {
                     setAuthError(null);
                     setAuthNotice(null);
                   }}
-                  className={`flex-1 rounded-md py-2 transition ${authMode === 'login' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
-                    }`}
+                  className={`flex-1 rounded-md py-2 transition ${
+                    authMode === 'login'
+                      ? 'bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                      : 'text-zinc-600 dark:text-zinc-400 dark:hover:text-zinc-200'
+                  }`}
                 >
                   Sign in
                 </button>
@@ -1798,28 +1842,31 @@ export default function HomePage() {
                     setAuthError(null);
                     setAuthNotice(null);
                   }}
-                  className={`flex-1 rounded-md py-2 transition ${authMode === 'register' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
-                    }`}
+                  className={`flex-1 rounded-md py-2 transition ${
+                    authMode === 'register'
+                      ? 'bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                      : 'text-zinc-600 dark:text-zinc-400 dark:hover:text-zinc-200'
+                  }`}
                 >
                   Create account
                 </button>
               </div>
 
               <form onSubmit={handleAuthSubmit} className="space-y-3.5">
-                <label className="block text-xs font-medium text-zinc-600">
+                <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
                   Email
                   <input
                     type="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                     placeholder="you@example.com"
                   />
                 </label>
 
                 {authMode === 'register' && (
-                  <label className="block text-xs font-medium text-zinc-600">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
                     Username
                     <input
                       type="text"
@@ -1827,13 +1874,13 @@ export default function HomePage() {
                       minLength={2}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                       placeholder="Alex"
                     />
                   </label>
                 )}
 
-                <label className="block text-xs font-medium text-zinc-600">
+                <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
                   Password
                   <input
                     type="password"
@@ -1841,19 +1888,19 @@ export default function HomePage() {
                     minLength={8}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                     placeholder="••••••••"
                   />
                 </label>
 
                 {authNotice && (
-                  <div className="rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2.5 text-xs font-medium text-zinc-900">
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2.5 text-xs font-medium text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100">
                     {authNotice}
                   </div>
                 )}
 
                 {authError && (
-                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300">
                     {authError}
                   </div>
                 )}
@@ -1861,14 +1908,14 @@ export default function HomePage() {
                 <button
                   type="submit"
                   disabled={authLoading}
-                  className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80"
+                  className="lo-press relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg bg-zinc-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-80 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                 >
-                  {authLoading && (
-                    <>
-                      <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15" />
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    </>
-                  )}
+                    {authLoading && (
+                      <>
+                        <span className="lo-progress-bar absolute inset-y-0 left-0 w-1/3 bg-white/15 dark:bg-zinc-950/15" />
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      </>
+                    )}
                   <span>
                     {authLoading
                       ? authMode === 'login'
@@ -1891,7 +1938,7 @@ export default function HomePage() {
                         setAuthError(null);
                         setAuthNotice(null);
                       }}
-                      className="text-xs font-medium text-zinc-600 hover:text-zinc-950 hover:underline"
+                      className="text-xs font-medium text-zinc-600 hover:text-zinc-950 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
                     >
                       Forgot password?
                     </button>
@@ -1901,21 +1948,21 @@ export default function HomePage() {
             </>
           )}
 
-          <div className="mt-4 border-t border-zinc-100 pt-4">
+          <div className="mt-4 border-t border-zinc-100 pt-4 dark:border-zinc-800">
             {preAuthInvite ? (
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 text-xs">
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 text-xs dark:border-zinc-700 dark:bg-zinc-800">
                 <div className="min-w-0">
-                  <div className="truncate font-semibold text-zinc-900">
+                  <div className="truncate font-semibold text-zinc-900 dark:text-zinc-100">
                     Joining: {preAuthInvite.groupName}
                   </div>
-                  <div className="text-[11px] text-zinc-500">
+                  <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
                     Role {preAuthInvite.assignedRole} on {authMode === 'register' ? 'registration' : 'sign in'}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setPreAuthInvite(null)}
-                  className="rounded-full p-1 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-950"
+                  className="rounded-full p-1 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
                   title="Remove invite"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -1925,7 +1972,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setPreAuthQrOpen(true)}
-                className="lo-press flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50 hover:text-zinc-950"
+                className="lo-press flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-white py-2.5 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-white"
               >
                 <QrCode className="h-3.5 w-3.5" />
                 Have an invite QR or link? Scan or paste
@@ -1933,7 +1980,7 @@ export default function HomePage() {
             )}
           </div>
 
-          <p className="mt-3 text-center text-[11px] text-zinc-400">
+          <p className="mt-3 text-center text-[11px] text-zinc-400 dark:text-zinc-500">
             First registered account automatically becomes Host Admin.
           </p>
         </div>
@@ -1987,12 +2034,12 @@ export default function HomePage() {
       {webVersionInfo?.updateAvailable &&
         dismissedWebUpdateVersion !== webVersionInfo.serverVersion && (
           <div className="pointer-events-none fixed left-1/2 top-[calc(1rem+var(--lo-safe-top,0px))] z-30 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2">
-            <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-3 rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+            <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-3 rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.12)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
               <div className="min-w-0">
-                <p className="truncate text-xs font-semibold text-zinc-950">
+                <p className="truncate text-xs font-semibold text-zinc-950 dark:text-zinc-50">
                   Server updated to v{webVersionInfo.serverVersion}
                 </p>
-                <p className="truncate text-[11px] text-zinc-500">
+                <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
                   Reload this tab to load the latest dashboard.
                 </p>
               </div>
@@ -2000,14 +2047,14 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => window.location.reload()}
-                  className="lo-press rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800"
+                  className="lo-press rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                 >
                   Reload
                 </button>
                 <button
                   type="button"
                   onClick={() => setDismissedWebUpdateVersion(webVersionInfo.serverVersion)}
-                  className="rounded-lg px-2 py-1 text-[11px] font-medium text-zinc-500 hover:bg-zinc-100"
+                  className="rounded-lg px-2 py-1 text-[11px] font-medium text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
                 >
                   Dismiss
                 </button>
@@ -2023,30 +2070,32 @@ export default function HomePage() {
           dismissedUncoveredKey !== uncoveredTarget.coordKey &&
           (allowMemberMapDownloads || session.user.role === 'HOST_ADMIN'))) && (
         <div className="pointer-events-none fixed left-1/2 top-[calc(4rem+var(--lo-safe-top,0px))] z-20 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 md:top-[calc(1rem+var(--lo-safe-top,0px))]">
-          <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.1)] backdrop-blur-xl">
+          <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
             {activeMapJob ? (
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2 text-xs font-medium text-zinc-900">
+                <div className="flex items-center justify-between gap-2 text-xs font-medium text-zinc-900 dark:text-zinc-100">
                   <span className="flex min-w-0 items-center gap-2">
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-zinc-700" />
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-zinc-700 dark:text-zinc-300" />
                     <span className="truncate">
                       {activeMapJob.message ?? `Downloading ${activeMapJob.cityName}…`}
                     </span>
                   </span>
-                  <span className="shrink-0 font-mono text-[11px] text-zinc-500">
+                  <span className="shrink-0 font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
                     {activeMapJob.progressPct}%
                   </span>
                 </div>
-                <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-100">
+                <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                   <div
-                    className="h-full rounded-full bg-zinc-950 transition-all duration-300"
+                    className="h-full rounded-full bg-zinc-950 transition-all duration-300 dark:bg-zinc-100"
                     style={{ width: `${Math.max(8, activeMapJob.progressPct)}%` }}
                   />
                 </div>
               </div>
             ) : mapDownloadError ? (
               <div className="flex items-center justify-between gap-2.5 text-xs">
-                <span className="min-w-0 flex-1 text-rose-700">{mapDownloadError}</span>
+                <span className="min-w-0 flex-1 text-rose-700 dark:text-rose-400">
+                  {mapDownloadError}
+                </span>
                 {uncoveredTarget && (
                   <button
                     type="button"
@@ -2057,7 +2106,7 @@ export default function HomePage() {
                         uncoveredTarget.longitude,
                       )
                     }
-                    className="lo-press shrink-0 rounded-lg bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white"
+                    className="lo-press shrink-0 rounded-lg bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950"
                   >
                     Retry
                   </button>
@@ -2065,7 +2114,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => setMapDownloadError(null)}
-                  className="shrink-0 rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900"
+                  className="shrink-0 rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -2073,11 +2122,11 @@ export default function HomePage() {
             ) : (
               uncoveredTarget && (
                 <div className="flex items-center justify-between gap-2.5">
-                  <div className="flex min-w-0 items-center gap-2 text-xs text-zinc-700">
-                    <CloudDownload className="h-4 w-4 shrink-0 text-zinc-900" />
+                  <div className="flex min-w-0 items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
+                    <CloudDownload className="h-4 w-4 shrink-0 text-zinc-900 dark:text-zinc-100" />
                     <span className="truncate">
                       No map tiles cached for{' '}
-                      <span className="font-semibold text-zinc-950">
+                      <span className="font-semibold text-zinc-950 dark:text-zinc-50">
                         {uncoveredTarget.contextLabel}
                       </span>
                     </span>
@@ -2092,7 +2141,7 @@ export default function HomePage() {
                           uncoveredTarget.longitude,
                         )
                       }
-                      className="lo-press rounded-lg bg-zinc-950 px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                      className="lo-press rounded-lg bg-zinc-950 px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                     >
                       {mapDownloadBusy ? 'Starting…' : 'Download city map'}
                     </button>
@@ -2100,7 +2149,7 @@ export default function HomePage() {
                       type="button"
                       onClick={() => setDismissedUncoveredKey(uncoveredTarget.coordKey)}
                       aria-label="Dismiss missing map prompt"
-                      className="rounded-md p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900"
+                      className="rounded-md p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -2115,13 +2164,13 @@ export default function HomePage() {
       {/* Incoming Chat Toast Notification */}
       {chatToast && (
         <div className="pointer-events-none fixed left-1/2 top-[calc(0.75rem+var(--lo-safe-top,0px))] z-30 w-[calc(100vw-1.5rem)] max-w-sm -translate-x-1/2 sm:top-[calc(1rem+var(--lo-safe-top,0px))]">
-          <div className="lo-float-in pointer-events-auto flex items-start gap-2.5 rounded-xl border border-zinc-200/90 bg-white/95 p-3 shadow-[0_14px_38px_rgba(15,23,42,0.16)] backdrop-blur-xl">
+          <div className="lo-float-in pointer-events-auto flex items-start gap-2.5 rounded-xl border border-zinc-200/90 bg-white/95 p-3 shadow-[0_14px_38px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
             <button
               type="button"
               onClick={openChatTab}
               className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
             >
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white dark:bg-zinc-800">
                 {isSafeAvatarUrl(chatToast.senderAvatarUrl) ? (
                   <img
                     src={chatToast.senderAvatarUrl}
@@ -2133,21 +2182,23 @@ export default function HomePage() {
                 )}
               </span>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-900">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-900 dark:text-zinc-100">
                   <MessageSquare className="h-3 w-3 shrink-0" />
                   <span className="truncate">{chatToast.senderUsername}</span>
-                  <span className="text-[10px] font-normal text-zinc-400">
+                  <span className="text-[10px] font-normal text-zinc-400 dark:text-zinc-500">
                     · {activeGroup?.name ?? 'Chat'}
                   </span>
                 </div>
-                <p className="mt-0.5 line-clamp-2 text-xs text-zinc-600">{chatToast.content}</p>
+                <p className="mt-0.5 line-clamp-2 text-xs text-zinc-600 dark:text-zinc-300">
+                  {chatToast.content}
+                </p>
               </div>
             </button>
             <button
               type="button"
               onClick={() => setChatToast(null)}
               aria-label="Dismiss chat notification"
-              className="shrink-0 rounded-md p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900"
+              className="shrink-0 rounded-md p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -2160,7 +2211,7 @@ export default function HomePage() {
         ref={leftDockRef}
         className="pointer-events-none absolute left-[calc(0.75rem+var(--lo-safe-left,0px))] top-[calc(0.75rem+var(--lo-safe-top,0px))] z-20 flex max-w-[calc(100vw-1.5rem-var(--lo-safe-left,0px)-var(--lo-safe-right,0px))] flex-col gap-2.5 sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:top-[calc(1rem+var(--lo-safe-top,0px))] sm:w-[316px]"
       >
-        <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-1.5 rounded-xl border border-zinc-200/80 bg-white/92 p-1.5 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
+        <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-1.5 rounded-xl border border-zinc-200/80 bg-white/95 p-1.5 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
           <button
             type="button"
             onClick={() => {
@@ -2176,23 +2227,25 @@ export default function HomePage() {
             aria-expanded={groupPopoverOpen}
             title="Switch active group or privacy mode"
             className={`lo-press flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition ${
-              groupPopoverOpen ? 'bg-zinc-100 text-zinc-950' : 'hover:bg-zinc-100/80'
+              groupPopoverOpen
+                ? 'bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-zinc-50'
+                : 'hover:bg-zinc-100/80 dark:hover:bg-zinc-800/80'
             }`}
           >
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950">
               <MapPin className="h-3.5 w-3.5" />
             </span>
             <div className="min-w-0 flex-1 leading-tight">
-              <div className="truncate text-xs font-bold tracking-tight text-zinc-950">
+              <div className="truncate text-xs font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
                 {activeGroup?.name ?? 'LovedOnes'}
               </div>
-              <div className="truncate text-[10px] font-medium text-zinc-500">
+              <div className="truncate text-[10px] font-medium text-zinc-500 dark:text-zinc-400">
                 {activeGroup ? activeGroup.myPrivacy : 'Select or join group'}
               </div>
             </div>
             <ChevronDown
-              className={`h-3.5 w-3.5 shrink-0 text-zinc-500 transition-transform duration-200 ${
-                groupPopoverOpen ? 'rotate-180 text-zinc-950' : ''
+              className={`h-3.5 w-3.5 shrink-0 text-zinc-500 transition-transform duration-200 dark:text-zinc-400 ${
+                groupPopoverOpen ? 'rotate-180 text-zinc-950 dark:text-zinc-100' : ''
               }`}
             />
           </button>
@@ -2214,15 +2267,15 @@ export default function HomePage() {
               title="Workspace menu (GPS, labels, tracker, account)"
               className={`lo-press relative rounded-lg p-2 transition ${
                 menuOpen
-                  ? 'bg-zinc-950 text-white'
-                  : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950'
+                  ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                  : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-50'
               }`}
             >
               <Menu className="h-4 w-4" />
               {geoSharing && !menuOpen && (
                 <span
                   title="Live GPS active"
-                  className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-zinc-950 ring-2 ring-white"
+                  className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-zinc-950 ring-2 ring-white dark:bg-emerald-400 dark:ring-zinc-900"
                 />
               )}
             </button>
@@ -2237,13 +2290,13 @@ export default function HomePage() {
               title="Toggle inspector panel"
               className={`lo-press relative rounded-lg p-2 transition md:hidden ${
                 rightOpen
-                  ? 'bg-zinc-950 text-white'
-                  : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950'
+                  ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                  : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-50'
               }`}
             >
               <PanelRight className="h-4 w-4" />
               {!rightOpen && unreadChatCount + pendingIncomingCount > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1 text-[9px] font-bold text-white ring-2 ring-white">
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1 text-[9px] font-bold text-white ring-2 ring-white dark:bg-zinc-100 dark:text-zinc-950 dark:ring-zinc-900">
                   {unreadChatCount + pendingIncomingCount > 9
                     ? '9+'
                     : unreadChatCount + pendingIncomingCount}
@@ -2254,9 +2307,9 @@ export default function HomePage() {
         </div>
 
         {groupPopoverOpen && (
-          <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+          <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
             <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+              <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 <Users className="h-3.5 w-3.5" />
                 Groups ({groups.length})
               </span>
@@ -2268,7 +2321,7 @@ export default function HomePage() {
                     setJoinQrOnboardingPrompt(false);
                     setJoinQrOpen(true);
                   }}
-                  className="lo-press flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100"
+                  className="lo-press flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
                 >
                   <QrCode className="h-3 w-3" />
                   Join QR
@@ -2276,7 +2329,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => setShowNewGroupForm((v) => !v)}
-                  className="lo-press flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950"
+                  className="lo-press flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
                 >
                   <Plus className="h-3 w-3" />
                   New
@@ -2292,8 +2345,8 @@ export default function HomePage() {
                   onClick={() => setActiveGroupId(g.id)}
                   className={`lo-press rounded-lg px-3 py-1 text-xs font-medium transition ${
                     activeGroup?.id === g.id
-                      ? 'bg-zinc-950 text-white shadow-sm'
-                      : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950'
+                      ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                      : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 hover:text-zinc-950 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-zinc-100'
                   }`}
                 >
                   {g.name}
@@ -2301,7 +2354,7 @@ export default function HomePage() {
               ))}
               {groups.length === 0 && (
                 <div className="w-full space-y-2 pt-0.5">
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
                     Not in a group yet. Scan an invite QR code or create one.
                   </p>
                   <button
@@ -2311,7 +2364,7 @@ export default function HomePage() {
                       setJoinQrOnboardingPrompt(false);
                       setJoinQrOpen(true);
                     }}
-                    className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800"
+                    className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                   >
                     <QrCode className="h-3.5 w-3.5" />
                     Scan or Paste QR Invite
@@ -2327,12 +2380,12 @@ export default function HomePage() {
                   value={newGroupName}
                   onChange={(e) => setNewGroupName(e.target.value)}
                   placeholder="Group name..."
-                  className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                  className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                 />
                 <button
                   type="submit"
                   disabled={creatingGroup || !newGroupName.trim()}
-                  className="lo-press flex items-center justify-center gap-1 rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+                  className="lo-press flex items-center justify-center gap-1 rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950"
                 >
                   {creatingGroup && <Loader2 className="h-3 w-3 animate-spin" />}
                   <span>{creatingGroup ? 'Adding...' : 'Add'}</span>
@@ -2341,28 +2394,28 @@ export default function HomePage() {
             )}
 
             {activeGroup && (
-              <div className="mt-3 border-t border-zinc-100 pt-3">
-                <div className="mb-1.5 flex items-center justify-between text-[11px] text-zinc-500">
+              <div className="mt-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+                <div className="mb-1.5 flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
                   <span className="flex items-center gap-1.5 font-medium">
                     Sharing mode
                     {privacySavingMode && (
-                      <span className="lo-feedback-in inline-flex items-center gap-1 text-[10px] font-semibold text-zinc-600">
+                      <span className="lo-feedback-in inline-flex items-center gap-1 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300">
                         <Loader2 className="h-2.5 w-2.5 animate-spin" />
                         Saving...
                       </span>
                     )}
                     {!privacySavingMode && privacyFeedback && (
-                      <span className="lo-feedback-in inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                      <span className="lo-feedback-in inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
                         <Check className="h-2.5 w-2.5" />
                         Saved
                       </span>
                     )}
                   </span>
-                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600">
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                     {activeGroup.myRole}
                   </span>
                 </div>
-                <div className="grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1">
+                <div className="grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
                   {(['EXACT', 'FUZZED', 'GHOST'] as PrivacyMode[]).map((mode) => {
                     const savingThis = privacySavingMode === mode;
                     const active = activeGroup.myPrivacy === mode || savingThis;
@@ -2374,8 +2427,8 @@ export default function HomePage() {
                         onClick={() => void handlePrivacyChange(mode)}
                         className={`lo-press flex items-center justify-center gap-1 rounded-md py-1.5 text-[11px] font-semibold transition disabled:cursor-wait ${
                           active
-                            ? 'bg-zinc-950 text-white shadow-sm'
-                            : 'text-zinc-600 hover:text-zinc-950'
+                            ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                            : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
                         }`}
                       >
                         {savingThis ? (
@@ -2393,7 +2446,7 @@ export default function HomePage() {
                   })}
                 </div>
                 {myPrivacyOverrideUntil && Date.parse(myPrivacyOverrideUntil) > Date.now() && (
-                  <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900">
+                  <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-[11px] font-medium text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100">
                     Exact check-in active until{' '}
                     {new Date(myPrivacyOverrideUntil).toLocaleTimeString()}
                   </div>
@@ -2404,10 +2457,10 @@ export default function HomePage() {
         )}
 
         {menuOpen && (
-          <div className="lo-float-in pointer-events-auto max-h-[calc(var(--lo-app-height,100dvh)-5.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))] space-y-3 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl">
+          <div className="lo-float-in pointer-events-auto max-h-[calc(var(--lo-app-height,100dvh)-5.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))] space-y-3 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
             {/* Live GPS Beacon */}
             <div>
-              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                 Location Beacon
               </div>
               <div className="flex items-center gap-1.5">
@@ -2416,8 +2469,8 @@ export default function HomePage() {
                   onClick={() => setGeoSharing((s) => !s)}
                   className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
                     geoSharing
-                      ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100'
-                      : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800'
+                      ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100 dark:border-zinc-200 dark:bg-zinc-800 dark:text-zinc-50 dark:hover:bg-zinc-700'
+                      : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200'
                   }`}
                 >
                   <Radio className="h-3.5 w-3.5" />
@@ -2438,7 +2491,7 @@ export default function HomePage() {
                         nonce: Date.now(),
                       });
                     }}
-                    className="lo-press rounded-lg border border-zinc-200 bg-white p-2 text-zinc-800 hover:bg-zinc-50"
+                    className="lo-press rounded-lg border border-zinc-200 bg-white p-2 text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
                   >
                     <LocateFixed className="h-3.5 w-3.5" />
                   </button>
@@ -2447,28 +2500,30 @@ export default function HomePage() {
                   type="button"
                   disabled={sendingTestPing}
                   onClick={() => void handleSendTestPing()}
-                  className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 disabled:opacity-60"
+                  className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-white"
                 >
                   {sendingTestPing && <Loader2 className="h-3 w-3 animate-spin" />}
                   <span>{sendingTestPing ? 'Sending...' : 'Test Ping'}</span>
                 </button>
               </div>
               {geoStatus && (
-                <p className="mt-2 truncate font-mono text-[11px] text-zinc-500">{geoStatus}</p>
+                <p className="mt-2 truncate font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+                  {geoStatus}
+                </p>
               )}
             </div>
 
             {/* Map Theme (Auto / Light / Dark) */}
-            <div className="flex items-center justify-between border-t border-zinc-100 pt-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800">
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-3 dark:border-zinc-800">
+              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
                 {resolvedMapTheme === 'dark' ? (
-                  <Moon className="h-3.5 w-3.5 text-zinc-500" />
+                  <Moon className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                 ) : (
-                  <Sun className="h-3.5 w-3.5 text-zinc-500" />
+                  <Sun className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                 )}
                 Map Theme
               </div>
-              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5">
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
                 {(
                   [
                     ['system', 'Auto', Monitor],
@@ -2482,8 +2537,8 @@ export default function HomePage() {
                     onClick={() => handleChangeMapTheme(pref)}
                     className={`lo-press flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold transition ${
                       mapThemePreference === pref
-                        ? 'bg-zinc-950 text-white shadow-sm'
-                        : 'text-zinc-600 hover:text-zinc-950'
+                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
                     }`}
                   >
                     <Icon className="h-3 w-3" />
@@ -2494,12 +2549,12 @@ export default function HomePage() {
             </div>
 
             {/* Map Label Language */}
-            <div className="flex items-center justify-between border-t border-zinc-100 pt-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800">
-                <Globe className="h-3.5 w-3.5 text-zinc-500" />
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-3 dark:border-zinc-800">
+              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                <Globe className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                 Map Labels
               </div>
-              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5">
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
                 {(
                   [
                     ['en', 'EN'],
@@ -2512,8 +2567,8 @@ export default function HomePage() {
                     onClick={() => handleChangeLabelLanguage(lang)}
                     className={`lo-press rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
                       labelLanguage === lang
-                        ? 'bg-zinc-950 text-white shadow-sm'
-                        : 'text-zinc-600 hover:text-zinc-950'
+                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
                     }`}
                   >
                     {label}
@@ -2523,23 +2578,23 @@ export default function HomePage() {
             </div>
 
             {/* Offline City Map Regions */}
-            <div className="border-t border-zinc-100 pt-2.5">
+            <div className="border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
               <button
                 type="button"
                 onClick={() => setOfflineMapsOpen((v) => !v)}
-                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100"
+                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
               >
-                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
-                  <CloudDownload className="h-3.5 w-3.5 text-zinc-500" />
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                  <CloudDownload className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                   Offline City Maps
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700">
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                     {mapRegions.filter((r) => !r.isStub).length}
                   </span>
                   <ChevronDown
-                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform ${
-                      offlineMapsOpen ? 'rotate-180 text-zinc-800' : ''
+                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform dark:text-zinc-500 ${
+                      offlineMapsOpen ? 'rotate-180 text-zinc-800 dark:text-zinc-200' : ''
                     }`}
                   />
                 </span>
@@ -2562,18 +2617,18 @@ export default function HomePage() {
                             nonce: Date.now(),
                           });
                         }}
-                        className="flex w-full items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/70 px-2.5 py-1.5 text-left text-[11px] transition hover:bg-zinc-100"
+                        className="flex w-full items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/70 px-2.5 py-1.5 text-left text-[11px] transition hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-800/70 dark:hover:bg-zinc-800"
                       >
-                        <span className="min-w-0 truncate font-medium text-zinc-900">
+                        <span className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-100">
                           {region.displayName ?? region.name}
                         </span>
-                        <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500">
+                        <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
                           {formatBytes(region.sizeBytes)}
                         </span>
                       </button>
                     ))}
                   {mapRegions.filter((r) => !r.isStub).length === 0 && (
-                    <p className="text-[11px] text-zinc-500">
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                       Only the empty placeholder tile stub is loaded. Download any city below.
                     </p>
                   )}
@@ -2587,7 +2642,7 @@ export default function HomePage() {
                           setMenuOpen(false);
                           void handleRequestMapDownload(target.latitude, target.longitude);
                         }}
-                        className="lo-press mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                        className="lo-press mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                       >
                         <CloudDownload className="h-3.5 w-3.5" />
                         {activeMapJob ? 'Download in progress…' : 'Download map for current view'}
@@ -2598,7 +2653,7 @@ export default function HomePage() {
             </div>
 
             {/* Guest Share Links (Temporary Meetup Links) */}
-            <div className="border-t border-zinc-100 pt-2.5">
+            <div className="border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
               <button
                 type="button"
                 onClick={() => {
@@ -2607,21 +2662,21 @@ export default function HomePage() {
                     void apiListShareLinks(session.accessToken).then(setShareLinks).catch(() => {});
                   }
                 }}
-                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100"
+                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
               >
-                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
-                  <Share2 className="h-3.5 w-3.5 text-zinc-500" />
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                  <Share2 className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                   Guest Share Links
                 </span>
                 <span className="flex items-center gap-1.5">
                   {shareLinks.length > 0 && (
-                    <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white">
+                    <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
                       {shareLinks.length}
                     </span>
                   )}
                   <ChevronDown
-                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform ${
-                      shareLinksOpen ? 'rotate-180 text-zinc-800' : ''
+                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform dark:text-zinc-500 ${
+                      shareLinksOpen ? 'rotate-180 text-zinc-800 dark:text-zinc-200' : ''
                     }`}
                   />
                 </span>
@@ -2629,7 +2684,7 @@ export default function HomePage() {
 
               {shareLinksOpen && (
                 <div className="mt-2 space-y-2.5 px-1">
-                  <p className="text-[11px] leading-snug text-zinc-500">
+                  <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
                     Share an isolated link with people outside your group. Only participants on the
                     same link see each other.
                   </p>
@@ -2639,14 +2694,14 @@ export default function HomePage() {
                     value={shareLabelInput}
                     onChange={(e) => setShareLabelInput(e.target.value)}
                     placeholder="Label (optional, e.g. Meetup)"
-                    className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                    className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                   />
-                  <label className="flex items-center gap-2 text-[11px] text-zinc-700">
+                  <label className="flex items-center gap-2 text-[11px] text-zinc-700 dark:text-zinc-300">
                     <input
                       type="checkbox"
                       checked={shareAllowMutual}
                       onChange={(e) => setShareAllowMutual(e.target.checked)}
-                      className="rounded border-zinc-300"
+                      className="rounded border-zinc-300 dark:border-zinc-600 dark:bg-zinc-800"
                     />
                     Allow guests on this link to share back
                   </label>
@@ -2654,7 +2709,7 @@ export default function HomePage() {
                     <select
                       value={shareDurationMinutes}
                       onChange={(e) => setShareDurationMinutes(Number(e.target.value))}
-                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                     >
                       <option value={15}>15 min</option>
                       <option value={60}>1 hour</option>
@@ -2665,14 +2720,14 @@ export default function HomePage() {
                       type="button"
                       disabled={shareLinkBusy || !activeGroup || activeGroup.myRole === 'SPECTATOR'}
                       onClick={() => void handleCreateShareLink()}
-                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                     >
                       {shareLinkBusy && <Loader2 className="h-3 w-3 animate-spin" />}
                       Create Link
                     </button>
                   </div>
                   {shareLinkError && (
-                    <p className="text-[11px] text-rose-600">{shareLinkError}</p>
+                    <p className="text-[11px] text-rose-600 dark:text-rose-400">{shareLinkError}</p>
                   )}
                   {shareLinks.length > 0 && (
                     <div className="space-y-1.5">
@@ -2684,13 +2739,13 @@ export default function HomePage() {
                         return (
                           <div
                             key={item.token}
-                            className="space-y-1.5 rounded-lg border border-zinc-200/80 bg-zinc-50 p-2 text-[10px]"
+                            className="space-y-1.5 rounded-lg border border-zinc-200/80 bg-zinc-50 p-2 text-[10px] dark:border-zinc-700 dark:bg-zinc-800/80"
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="truncate font-semibold text-zinc-900">
+                              <span className="truncate font-semibold text-zinc-900 dark:text-zinc-100">
                                 {item.label ?? `${item.groupName} Share`}
                               </span>
-                              <span className="shrink-0 text-zinc-500">
+                              <span className="shrink-0 text-zinc-500 dark:text-zinc-400">
                                 {item.allowGuestSharing
                                   ? `${item.activeGuestCount} guest${item.activeGuestCount === 1 ? '' : 's'}`
                                   : 'View-only'}
@@ -2700,19 +2755,19 @@ export default function HomePage() {
                               <input
                                 readOnly
                                 value={resolvedUrl}
-                                className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[10px] text-zinc-700"
+                                className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[10px] text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
                               />
                               <button
                                 type="button"
                                 onClick={() => handleCopyText(`share:${item.token}`, resolvedUrl)}
-                                className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 hover:bg-zinc-100"
+                                className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-700"
                               >
                                 {copiedField === `share:${item.token}` ? 'Copied' : 'Copy'}
                               </button>
                               <Link
                                 href={`/share/${item.token}`}
                                 target="_blank"
-                                className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 hover:bg-zinc-100"
+                                className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-700"
                               >
                                 Open
                               </Link>
@@ -2721,7 +2776,7 @@ export default function HomePage() {
                                 disabled={shareLinkBusy}
                                 onClick={() => void handleRevokeShareLink(item.token)}
                                 title="Revoke share link"
-                                className="shrink-0 rounded-md border border-rose-200 bg-rose-50 p-1 text-rose-600 hover:bg-rose-100"
+                                className="shrink-0 rounded-md border border-rose-200 bg-rose-50 p-1 text-rose-600 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-400 dark:hover:bg-rose-950"
                               >
                                 <Trash2 className="h-3 w-3" />
                               </button>
@@ -2736,25 +2791,25 @@ export default function HomePage() {
             </div>
 
             {/* HTTP Tracker Token */}
-            <div className="border-t border-zinc-100 pt-2.5">
+            <div className="border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
               <button
                 type="button"
                 onClick={() => setTrackerOpen((v) => !v)}
-                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100"
+                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
               >
-                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
-                  <KeyRound className="h-3.5 w-3.5 text-zinc-500" />
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                  <KeyRound className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                   HTTP Tracker Token
                 </span>
                 <span className="flex items-center gap-1.5">
                   {trackerActive && (
-                    <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-900">
+                    <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100">
                       {Math.max(1, Math.ceil(trackerTtlSeconds / 86400))}d left
                     </span>
                   )}
                   <ChevronDown
-                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform ${
-                      trackerOpen ? 'rotate-180 text-zinc-800' : ''
+                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform dark:text-zinc-500 ${
+                      trackerOpen ? 'rotate-180 text-zinc-800 dark:text-zinc-200' : ''
                     }`}
                   />
                 </span>
@@ -2766,7 +2821,7 @@ export default function HomePage() {
                     <select
                       value={trackerDays}
                       onChange={(e) => setTrackerDays(Number(e.target.value))}
-                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                     >
                       <option value={7}>7 days</option>
                       <option value={30}>30 days</option>
@@ -2777,7 +2832,7 @@ export default function HomePage() {
                       type="button"
                       disabled={trackerLoading}
                       onClick={() => void handleGenerateTrackerToken()}
-                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
+                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                     >
                       {trackerLoading && <Loader2 className="h-3 w-3 animate-spin" />}
                       <span>
@@ -2794,7 +2849,7 @@ export default function HomePage() {
                         disabled={trackerLoading}
                         onClick={() => void handleRevokeTrackerToken()}
                         title="Revoke token"
-                        className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100 disabled:opacity-60"
+                        className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-400 dark:hover:bg-rose-950"
                       >
                         {trackerLoading ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2805,14 +2860,14 @@ export default function HomePage() {
                     )}
                   </div>
                   {trackerFeedback && (
-                    <div className="lo-feedback-in flex items-center gap-1 text-[10px] font-semibold text-emerald-700">
+                    <div className="lo-feedback-in flex items-center gap-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
                       <Check className="h-3 w-3" />
                       {trackerFeedback}
                     </div>
                   )}
 
                   {trackerIssued && (
-                    <div className="space-y-1.5 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2.5 text-[10px]">
+                    <div className="space-y-1.5 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2.5 text-[10px] dark:border-zinc-700 dark:bg-zinc-800/80">
                       {(
                         [
                           ['owntracks', 'OwnTracks URL', trackerIssued.owntracksUrl],
@@ -2821,20 +2876,20 @@ export default function HomePage() {
                         ] as const
                       ).map(([key, label, val]) => (
                         <div key={key}>
-                          <div className="font-medium text-zinc-500">{label}</div>
+                          <div className="font-medium text-zinc-500 dark:text-zinc-400">{label}</div>
                           <div className="mt-0.5 flex items-center gap-1">
                             <input
                               readOnly
                               value={val}
-                              className="w-full rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[10px] text-zinc-800"
+                              className="w-full rounded-md border border-zinc-200 bg-white px-2 py-1 font-mono text-[10px] text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
                             />
                             <button
                               type="button"
                               onClick={() => handleCopyText(key, val)}
-                              className="shrink-0 rounded-md border border-zinc-200 bg-white p-1.5 text-zinc-700 hover:bg-zinc-100"
+                              className="shrink-0 rounded-md border border-zinc-200 bg-white p-1.5 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-700"
                             >
                               {copiedField === key ? (
-                                <Check className="h-3 w-3 text-zinc-950" />
+                                <Check className="h-3 w-3 text-zinc-950 dark:text-zinc-100" />
                               ) : (
                                 <Copy className="h-3 w-3" />
                               )}
@@ -2849,14 +2904,14 @@ export default function HomePage() {
             </div>
 
             {/* Install App & Background Push Alerts (PWA) */}
-            <div className="space-y-2 border-t border-zinc-100 pt-2.5">
+            <div className="space-y-2 border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800">
-                  <Smartphone className="h-3.5 w-3.5 text-zinc-500" />
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                  <Smartphone className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                   App &amp; Push Alerts
                 </span>
                 {isStandalonePwa && (
-                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700">
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                     Installed
                   </span>
                 )}
@@ -2866,7 +2921,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => void handleInstallPwa()}
-                  className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-100"
+                  className="lo-press flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
                 >
                   <Download className="h-3.5 w-3.5" />
                   Install LovedOnes App
@@ -2874,9 +2929,9 @@ export default function HomePage() {
               )}
 
               {needsIosInstallForPush && (
-                <p className="rounded-lg border border-zinc-200/80 bg-zinc-50 px-2.5 py-2 text-[11px] leading-snug text-zinc-600">
-                  On iOS Safari, tap <span className="font-semibold text-zinc-900">Share</span> →{' '}
-                  <span className="font-semibold text-zinc-900">Add to Home Screen</span> to unlock
+                <p className="rounded-lg border border-zinc-200/80 bg-zinc-50 px-2.5 py-2 text-[11px] leading-snug text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                  On iOS Safari, tap <span className="font-semibold text-zinc-900 dark:text-zinc-100">Share</span> →{' '}
+                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">Add to Home Screen</span> to unlock
                   background push alerts.
                 </p>
               )}
@@ -2889,8 +2944,8 @@ export default function HomePage() {
                     onClick={() => void handleToggleWebPush()}
                     className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold transition disabled:opacity-60 ${
                       pushSubscribed
-                        ? 'border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50'
-                        : 'bg-zinc-950 text-white hover:bg-zinc-800'
+                        ? 'border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'
+                        : 'bg-zinc-950 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200'
                     }`}
                   >
                     {pushBusy ? (
@@ -2907,7 +2962,7 @@ export default function HomePage() {
                       type="button"
                       disabled={pushBusy}
                       onClick={() => void handleTestWebPush()}
-                      className="lo-press rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+                      className="lo-press rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
                     >
                       Test
                     </button>
@@ -2916,14 +2971,18 @@ export default function HomePage() {
               )}
 
               {!pushSupported && !needsIosInstallForPush && (
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
                   Push alerts require HTTPS and Service Worker support.
                 </p>
               )}
 
-              {pushError && <p className="lo-feedback-in text-[11px] text-rose-600">{pushError}</p>}
+              {pushError && (
+                <p className="lo-feedback-in text-[11px] text-rose-600 dark:text-rose-400">
+                  {pushError}
+                </p>
+              )}
               {pushFeedback && (
-                <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
                   <Check className="h-3 w-3" />
                   {pushFeedback}
                 </p>
@@ -2931,17 +2990,17 @@ export default function HomePage() {
             </div>
 
             {/* Account, Host Admin & Sign Out */}
-            <div className="space-y-1 border-t border-zinc-100 pt-2.5">
+            <div className="space-y-1 border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
               <button
                 type="button"
                 onClick={() => {
                   setMenuOpen(false);
                   setAccountSettingsOpen(true);
                 }}
-                className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition hover:bg-zinc-100"
+                className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
               >
                 <span className="flex items-center gap-2.5">
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-[10px] font-bold text-white">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-[10px] font-bold text-white dark:bg-zinc-800">
                     {isSafeAvatarUrl(session.user.avatarUrl) ? (
                       <img
                         src={session.user.avatarUrl}
@@ -2952,14 +3011,14 @@ export default function HomePage() {
                       session.user.username.slice(0, 1).toUpperCase()
                     )}
                   </span>
-                  <span className="text-xs font-medium text-zinc-800">
+                  <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">
                     Account Settings
-                    <span className="ml-1.5 text-[10px] text-zinc-400">
+                    <span className="ml-1.5 text-[10px] text-zinc-400 dark:text-zinc-500">
                       @{session.user.username}
                     </span>
                   </span>
                 </span>
-                <Settings className="h-3.5 w-3.5 text-zinc-400" />
+                <Settings className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
               </button>
 
               {session.user.role === 'HOST_ADMIN' && (
@@ -2967,20 +3026,20 @@ export default function HomePage() {
                   <Link
                     href="/admin"
                     onClick={() => setMenuOpen(false)}
-                    className="flex items-center justify-between rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950"
+                    className="flex items-center justify-between rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                   >
                     <span className="flex items-center gap-2">
-                      <Activity className="h-3.5 w-3.5 text-zinc-500" />
+                      <Activity className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                       System Telemetry
                     </span>
                   </Link>
                   <Link
                     href="/admin/invites"
                     onClick={() => setMenuOpen(false)}
-                    className="flex items-center justify-between rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950"
+                    className="flex items-center justify-between rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                   >
                     <span className="flex items-center gap-2">
-                      <QrCode className="h-3.5 w-3.5 text-zinc-500" />
+                      <QrCode className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                       QR Invites
                     </span>
                   </Link>
@@ -2993,9 +3052,9 @@ export default function HomePage() {
                   setMenuOpen(false);
                   handleSignOut();
                 }}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
               >
-                <LogOut className="h-3.5 w-3.5 text-zinc-500" />
+                <LogOut className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
                 Sign out
               </button>
             </div>
@@ -3017,14 +3076,14 @@ export default function HomePage() {
             title="Toggle group inspector (People, Chat, Places, Ask)"
             className={`lo-press relative flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium shadow-[0_8px_24px_rgba(9,9,11,0.08)] backdrop-blur-xl transition ${
               rightOpen
-                ? 'bg-zinc-950 text-white hover:bg-zinc-800'
-                : 'border border-zinc-200/80 bg-white/92 text-zinc-800 hover:bg-white hover:text-zinc-950'
+                ? 'bg-zinc-950 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200'
+                : 'border border-zinc-200/80 bg-white/95 text-zinc-800 hover:bg-white hover:text-zinc-950 dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-white'
             }`}
           >
             <PanelRight className="h-4 w-4" />
             <span>Inspector</span>
             {!rightOpen && unreadChatCount + pendingIncomingCount > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1.5 text-[10px] font-bold text-white">
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1.5 text-[10px] font-bold text-white dark:bg-zinc-100 dark:text-zinc-950">
                 {unreadChatCount + pendingIncomingCount > 9
                   ? '9+'
                   : unreadChatCount + pendingIncomingCount}
@@ -3034,10 +3093,10 @@ export default function HomePage() {
         </div>
 
         {rightOpen && (
-          <div className="lo-float-in pointer-events-auto flex max-h-[min(44dvh,calc(var(--lo-app-height,100dvh)-9.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px)))] w-full flex-col overflow-hidden rounded-xl border border-zinc-200/80 bg-white/92 shadow-[0_16px_44px_rgba(9,9,11,0.1)] backdrop-blur-xl md:max-h-[calc(var(--lo-app-height,100dvh)-8.75rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))]">
+          <div className="lo-float-in pointer-events-auto flex max-h-[min(44dvh,calc(var(--lo-app-height,100dvh)-9.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px)))] w-full flex-col overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-[0_16px_44px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 md:max-h-[calc(var(--lo-app-height,100dvh)-8.75rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))]">
             {/* Segmented Pill Tabs */}
-            <div className="border-b border-zinc-100 p-2">
-              <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold">
+            <div className="border-b border-zinc-100 p-2 dark:border-zinc-800">
+              <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold dark:bg-zinc-800">
                 {(
                   [
                     ['people', `People (${locations.length})`],
@@ -3056,10 +3115,11 @@ export default function HomePage() {
                         setInspectorTab(tab);
                       }
                     }}
-                    className={`lo-press rounded-md py-1.5 transition ${inspectorTab === tab
-                      ? 'bg-zinc-950 text-white shadow-sm'
-                      : 'text-zinc-600 hover:text-zinc-950'
-                      }`}
+                    className={`lo-press rounded-md py-1.5 transition ${
+                      inspectorTab === tab
+                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                    }`}
                   >
                     {label}
                   </button>
@@ -3080,14 +3140,14 @@ export default function HomePage() {
                   return (
                     <div
                       key={loc.userId}
-                      className="flex items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2.5 transition hover:border-zinc-200 hover:bg-white"
+                      className="flex items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2.5 transition hover:border-zinc-200 hover:bg-white dark:border-zinc-800 dark:bg-zinc-800/60 dark:hover:border-zinc-700 dark:hover:bg-zinc-800"
                     >
                       <button
                         type="button"
                         onClick={() => setSelectedUserId(loc.userId)}
                         className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                       >
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white dark:bg-zinc-700">
                           {isSafeAvatarUrl(loc.avatarUrl) ? (
                             <img
                               src={loc.avatarUrl}
@@ -3099,20 +3159,21 @@ export default function HomePage() {
                           )}
                         </span>
                         <div className="min-w-0">
-                          <div className="truncate text-xs font-semibold text-zinc-950">
+                          <div className="truncate text-xs font-semibold text-zinc-950 dark:text-zinc-50">
                             {loc.username}
                           </div>
-                          <div className="truncate font-mono text-[10px] text-zinc-400">
+                          <div className="truncate font-mono text-[10px] text-zinc-400 dark:text-zinc-500">
                             {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
                           </div>
                         </div>
                       </button>
                       <div className="flex shrink-0 items-center gap-1.5">
                         <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${loc.isFuzzed
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-zinc-950 text-white'
-                            }`}
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            loc.isFuzzed
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
+                              : 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                          }`}
                         >
                           {loc.privacyMode}
                         </span>
@@ -3122,7 +3183,7 @@ export default function HomePage() {
                           rel="noopener noreferrer"
                           title={`Open ${loc.username} in ${externalMaps.appLabel}`}
                           aria-label={`Open ${loc.username} in default maps`}
-                          className="lo-press flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950"
+                          className="lo-press flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-white"
                         >
                           <Navigation className="h-3.5 w-3.5" />
                         </a>
@@ -3131,7 +3192,7 @@ export default function HomePage() {
                   );
                 })}
                 {locations.length === 0 && (
-                  <div className="py-8 text-center text-xs text-zinc-400">
+                  <div className="py-8 text-center text-xs text-zinc-400 dark:text-zinc-500">
                     No active pins in this group yet.
                   </div>
                 )}
@@ -3141,17 +3202,17 @@ export default function HomePage() {
             {/* Chat Tab */}
             {inspectorTab === 'chat' && (
               <div key="tab-chat" className="lo-tab-enter flex min-h-[260px] flex-1 flex-col overflow-hidden">
-                <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-1.5 text-[11px] text-zinc-500">
+                <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-1.5 text-[11px] text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
                   <button
                     type="button"
                     onClick={handleToggleChatAlerts}
-                    className="lo-press flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-zinc-700 transition hover:bg-zinc-100"
+                    className="lo-press flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                     title={chatAlertsEnabled ? 'Mute chat sound and desktop alerts' : 'Unmute chat alerts'}
                   >
                     {chatAlertsEnabled ? (
-                      <Bell className="h-3 w-3 text-zinc-950" />
+                      <Bell className="h-3 w-3 text-zinc-950 dark:text-zinc-100" />
                     ) : (
-                      <BellOff className="h-3 w-3 text-zinc-400" />
+                      <BellOff className="h-3 w-3 text-zinc-400 dark:text-zinc-500" />
                     )}
                     {chatAlertsEnabled ? 'Alerts on' : 'Muted'}
                   </button>
@@ -3159,16 +3220,20 @@ export default function HomePage() {
                     <button
                       type="button"
                       onClick={() => void handleEnableBrowserNotifications()}
-                      className="lo-press rounded-md bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-zinc-800"
+                      className="lo-press rounded-md bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                     >
                       Enable desktop alerts
                     </button>
                   )}
                   {browserNotifyPermission === 'granted' && (
-                    <span className="text-[10px] text-zinc-400">Desktop alerts ready</span>
+                    <span className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                      Desktop alerts ready
+                    </span>
                   )}
                   {browserNotifyPermission === 'denied' && (
-                    <span className="text-[10px] text-zinc-400">Desktop blocked</span>
+                    <span className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                      Desktop blocked
+                    </span>
                   )}
                 </div>
 
@@ -3180,14 +3245,15 @@ export default function HomePage() {
                         key={m.id}
                         className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}
                       >
-                        <div className="mb-0.5 text-[10px] text-zinc-400">
+                        <div className="mb-0.5 text-[10px] text-zinc-400 dark:text-zinc-500">
                           {m.senderUsername} · {new Date(m.createdAt).toLocaleTimeString()}
                         </div>
                         <div
-                          className={`max-w-[85%] rounded-lg px-3 py-2 text-xs ${mine
-                            ? 'bg-zinc-950 text-white'
-                            : 'border border-zinc-200/80 bg-zinc-50 text-zinc-900'
-                            }`}
+                          className={`max-w-[85%] rounded-lg px-3 py-2 text-xs ${
+                            mine
+                              ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                              : 'border border-zinc-200/80 bg-zinc-50 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100'
+                          }`}
                         >
                           {m.content}
                         </div>
@@ -3195,7 +3261,7 @@ export default function HomePage() {
                     );
                   })}
                   {messages.length === 0 && (
-                    <div className="py-8 text-center text-xs text-zinc-400">
+                    <div className="py-8 text-center text-xs text-zinc-400 dark:text-zinc-500">
                       No messages yet.
                     </div>
                   )}
@@ -3204,7 +3270,7 @@ export default function HomePage() {
 
                 <form
                   onSubmit={handleSendChat}
-                  className="flex gap-1.5 border-t border-zinc-100 p-2.5"
+                  className="flex gap-1.5 border-t border-zinc-100 p-2.5 dark:border-zinc-800"
                 >
                   <input
                     type="text"
@@ -3212,12 +3278,12 @@ export default function HomePage() {
                     onChange={(e) => setChatInput(e.target.value)}
                     disabled={!activeGroup}
                     placeholder={activeGroup ? 'Message group...' : 'Select a group'}
-                    className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none disabled:opacity-50"
+                    className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                   />
                   <button
                     type="submit"
                     disabled={!activeGroup || !chatInput.trim()}
-                    className="lo-press flex shrink-0 items-center justify-center rounded-lg bg-zinc-950 px-3.5 py-2 text-white hover:bg-zinc-800 disabled:opacity-50"
+                    className="lo-press flex shrink-0 items-center justify-center rounded-lg bg-zinc-950 px-3.5 py-2 text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                   >
                     <Send className="h-3.5 w-3.5" />
                   </button>
@@ -3230,11 +3296,11 @@ export default function HomePage() {
               <div key="tab-places" className="lo-tab-enter flex-1 space-y-3 overflow-y-auto p-3">
                 <form
                   onSubmit={handleCreatePlace}
-                  className="space-y-2 rounded-lg border border-zinc-200/70 bg-zinc-50/80 p-2.5"
+                  className="space-y-2 rounded-lg border border-zinc-200/70 bg-zinc-50/80 p-2.5 dark:border-zinc-700 dark:bg-zinc-800/70"
                 >
-                  <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-600">
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-600 dark:text-zinc-300">
                     <span className="flex items-center gap-1 font-medium">
-                      <MapPin className="h-3 w-3 text-zinc-950" />
+                      <MapPin className="h-3 w-3 text-zinc-950 dark:text-zinc-100" />
                       {draftPlace
                         ? `Pin at ${draftPlace.latitude.toFixed(4)}, ${draftPlace.longitude.toFixed(4)}`
                         : 'Click or tap map to place pin'}
@@ -3246,20 +3312,20 @@ export default function HomePage() {
                           setPlaceLat('');
                           setPlaceLon('');
                         }}
-                        className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-950"
+                        className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100"
                       >
                         Clear
                       </button>
                     )}
                   </div>
                   <div>
-                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                       Share With
                     </label>
                     <select
                       value={placeScopeGroupId}
                       onChange={(e) => setPlaceScopeGroupId(e.target.value)}
-                      className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                      className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-900 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
                     >
                       <option value="private">Private (Only me)</option>
                       {groups
@@ -3277,7 +3343,7 @@ export default function HomePage() {
                       value={placeName}
                       onChange={(e) => setPlaceName(e.target.value)}
                       placeholder="Home, School, Office..."
-                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
                     />
                     <input
                       type="number"
@@ -3286,7 +3352,7 @@ export default function HomePage() {
                       value={placeRadius}
                       onChange={(e) => setPlaceRadius(Number(e.target.value))}
                       title="Radius (m)"
-                      className="w-16 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                      className="w-16 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
                     />
                   </div>
                   <div className="flex gap-1.5">
@@ -3295,27 +3361,31 @@ export default function HomePage() {
                       value={placeLat}
                       onChange={(e) => setPlaceLat(e.target.value)}
                       placeholder="Lat (click map)"
-                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
                     />
                     <input
                       type="text"
                       value={placeLon}
                       onChange={(e) => setPlaceLon(e.target.value)}
                       placeholder="Lon (click map)"
-                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 focus:border-zinc-400 focus:outline-none"
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
                     />
                     <button
                       type="submit"
                       disabled={placeBusy}
-                      className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75"
+                      className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-75 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                     >
                       {placeBusy && <Loader2 className="h-3 w-3 animate-spin" />}
                       <span>{placeBusy ? 'Saving...' : 'Save'}</span>
                     </button>
                   </div>
-                  {placeError && <p className="lo-feedback-in text-[11px] text-rose-600">{placeError}</p>}
+                  {placeError && (
+                    <p className="lo-feedback-in text-[11px] text-rose-600 dark:text-rose-400">
+                      {placeError}
+                    </p>
+                  )}
                   {placeFeedback && (
-                    <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                    <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
                       <Check className="h-3 w-3" />
                       {placeFeedback}
                     </p>
@@ -3330,7 +3400,7 @@ export default function HomePage() {
                     return (
                       <div
                         key={p.id}
-                        className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2 text-xs transition hover:border-zinc-200 hover:bg-white"
+                        className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/75 px-3 py-2 text-xs transition hover:border-zinc-200 hover:bg-white dark:border-zinc-800 dark:bg-zinc-800/60 dark:hover:border-zinc-700 dark:hover:bg-zinc-800"
                       >
                         <button
                           type="button"
@@ -3338,18 +3408,20 @@ export default function HomePage() {
                           className="min-w-0 flex-1 text-left"
                         >
                           <div className="flex items-center gap-1.5">
-                            <span className="truncate font-semibold text-zinc-950">{p.name}</span>
+                            <span className="truncate font-semibold text-zinc-950 dark:text-zinc-50">
+                              {p.name}
+                            </span>
                             <span
                               className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
                                 p.isPrivate
-                                  ? 'bg-indigo-50 text-indigo-700'
-                                  : 'bg-zinc-200/80 text-zinc-700'
+                                  ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300'
+                                  : 'bg-zinc-200/80 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200'
                               }`}
                             >
                               {p.isPrivate ? 'Private' : p.groupName ?? activeGroup?.name ?? 'Group'}
                             </span>
                           </div>
-                          <div className="font-mono text-[10px] text-zinc-400">
+                          <div className="font-mono text-[10px] text-zinc-400 dark:text-zinc-500">
                             {p.latitude.toFixed(4)}, {p.longitude.toFixed(4)} ·{' '}
                             {Math.round(p.radiusMeters)}m
                           </div>
@@ -3360,10 +3432,10 @@ export default function HomePage() {
                             disabled={deletingPlaceId === p.id}
                             onClick={() => void handleDeletePlace(p.id)}
                             title="Delete place"
-                            className="ml-2 rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60"
+                            className="ml-2 rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60 dark:text-zinc-500 dark:hover:bg-rose-950/60 dark:hover:text-rose-400"
                           >
                             {deletingPlaceId === p.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-600" />
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-600 dark:text-rose-400" />
                             ) : (
                               <Trash2 className="h-3.5 w-3.5" />
                             )}
@@ -3373,29 +3445,33 @@ export default function HomePage() {
                     );
                   })}
                   {places.length === 0 && (
-                    <p className="py-4 text-center text-xs text-zinc-400">
+                    <p className="py-4 text-center text-xs text-zinc-400 dark:text-zinc-500">
                       No geofenced places yet.
                     </p>
                   )}
                 </div>
 
                 {placeTransitions.length > 0 && (
-                  <div className="border-t border-zinc-100 pt-2.5">
-                    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                  <div className="border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+                    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                       Activity
                     </div>
                     <div className="space-y-1 text-[11px]">
                       {placeTransitions.map((evt, idx) => (
                         <div
                           key={evt.id ?? `${evt.placeId}-${evt.userId}-${evt.recordedAt}-${idx}`}
-                          className="flex items-center justify-between text-zinc-600"
+                          className="flex items-center justify-between text-zinc-600 dark:text-zinc-400"
                         >
                           <span className="truncate">
-                            <span className="font-semibold text-zinc-950">{evt.username}</span>{' '}
+                            <span className="font-semibold text-zinc-950 dark:text-zinc-100">
+                              {evt.username}
+                            </span>{' '}
                             {evt.transition === 'enter' ? 'arrived at' : 'left'}{' '}
-                            <span className="font-medium text-zinc-950">{evt.placeName}</span>
+                            <span className="font-medium text-zinc-950 dark:text-zinc-100">
+                              {evt.placeName}
+                            </span>
                           </span>
-                          <span className="ml-2 shrink-0 text-[10px] text-zinc-400">
+                          <span className="ml-2 shrink-0 text-[10px] text-zinc-400 dark:text-zinc-500">
                             {new Date(evt.recordedAt).toLocaleTimeString()}
                           </span>
                         </div>
@@ -3414,7 +3490,7 @@ export default function HomePage() {
                     <select
                       value={checkinTargetUserId}
                       onChange={(e) => setCheckinTargetUserId(e.target.value)}
-                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                     >
                       {activeGroup.members
                         .filter((m) => m.userId !== session.user.id)
@@ -3427,7 +3503,7 @@ export default function HomePage() {
                     <select
                       value={checkinDuration}
                       onChange={(e) => setCheckinDuration(Number(e.target.value))}
-                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
                     >
                       <option value={15}>15m</option>
                       <option value={30}>30m</option>
@@ -3436,7 +3512,7 @@ export default function HomePage() {
                     <button
                       type="submit"
                       disabled={checkinBusy || !checkinTargetUserId}
-                      className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-70"
+                      className="lo-press flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-70 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                     >
                       {checkinBusy && !checkinRespondingId && (
                         <Loader2 className="h-3 w-3 animate-spin" />
@@ -3445,14 +3521,18 @@ export default function HomePage() {
                     </button>
                   </form>
                 ) : (
-                  <p className="text-xs text-zinc-400">
+                  <p className="text-xs text-zinc-400 dark:text-zinc-500">
                     Invite another member to request check-ins.
                   </p>
                 )}
 
-                {checkinError && <p className="lo-feedback-in text-[11px] text-rose-600">{checkinError}</p>}
+                {checkinError && (
+                  <p className="lo-feedback-in text-[11px] text-rose-600 dark:text-rose-400">
+                    {checkinError}
+                  </p>
+                )}
                 {checkinFeedback && (
-                  <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                  <p className="lo-feedback-in flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
                     <Check className="h-3 w-3" />
                     {checkinFeedback}
                   </p>
@@ -3465,15 +3545,15 @@ export default function HomePage() {
                     return (
                       <div
                         key={req.id}
-                        className="rounded-lg border border-zinc-100 bg-zinc-50/75 p-2.5 text-xs"
+                        className="rounded-lg border border-zinc-100 bg-zinc-50/75 p-2.5 text-xs dark:border-zinc-800 dark:bg-zinc-800/60"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium text-zinc-950">
+                          <span className="font-medium text-zinc-950 dark:text-zinc-100">
                             {isIncoming
                               ? `${req.requesterUsername} asked (${req.suggestedDurationMinutes}m)`
                               : `Asked ${req.targetUsername} (${req.suggestedDurationMinutes}m)`}
                           </span>
-                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase text-zinc-500">
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
                             {req.status}
                           </span>
                         </div>
@@ -3483,7 +3563,7 @@ export default function HomePage() {
                               type="button"
                               disabled={checkinBusy}
                               onClick={() => void handleRespondCheckIn(req.id, 'accept')}
-                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg bg-zinc-950 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
+                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg bg-zinc-950 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                             >
                               {respondingThis ? (
                                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -3496,7 +3576,7 @@ export default function HomePage() {
                               type="button"
                               disabled={checkinBusy}
                               onClick={() => void handleRespondCheckIn(req.id, 'decline')}
-                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg border border-zinc-200 bg-white py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-60"
+                              className="lo-press flex flex-1 items-center justify-center gap-1 rounded-lg border border-zinc-200 bg-white py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-700"
                             >
                               {respondingThis ? (
                                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -3511,7 +3591,7 @@ export default function HomePage() {
                     );
                   })}
                   {locationRequests.length === 0 && (
-                    <p className="py-4 text-center text-xs text-zinc-400">
+                    <p className="py-4 text-center text-xs text-zinc-400 dark:text-zinc-500">
                       No check-in requests yet.
                     </p>
                   )}
@@ -3524,14 +3604,14 @@ export default function HomePage() {
 
       {/* Bottom-Left Floating Profile Pill & Map Credits */}
       <div className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] z-20 hidden items-end gap-2 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))] sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:flex">
-        <div className="lo-float-in pointer-events-auto flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white/92 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl">
+        <div className="lo-float-in pointer-events-auto flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white/95 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
           <button
             type="button"
             onClick={() => setAccountSettingsOpen(true)}
             title="Account settings & profile photo"
             className="lo-press flex items-center gap-2.5 rounded-lg pr-1 text-left transition hover:opacity-85"
           >
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-950 text-xs font-bold text-white dark:bg-zinc-800">
               {isSafeAvatarUrl(session.user.avatarUrl) ? (
                 <img
                   src={session.user.avatarUrl}
@@ -3543,8 +3623,10 @@ export default function HomePage() {
               )}
             </span>
             <div className="leading-tight">
-              <div className="text-xs font-semibold text-zinc-950">{session.user.username}</div>
-              <div className="text-[10px] text-zinc-500">
+              <div className="text-xs font-semibold text-zinc-950 dark:text-zinc-50">
+                {session.user.username}
+              </div>
+              <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
                 {session.user.role === 'HOST_ADMIN' ? 'Host Admin · Settings' : 'Account Settings'}
               </div>
             </div>
@@ -3553,7 +3635,7 @@ export default function HomePage() {
             type="button"
             onClick={() => setAccountSettingsOpen(true)}
             title="Account settings"
-            className="lo-press rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950"
+            className="lo-press rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           >
             <Settings className="h-3.5 w-3.5" />
           </button>
@@ -3561,7 +3643,7 @@ export default function HomePage() {
             type="button"
             onClick={handleSignOut}
             title="Sign out"
-            className="lo-press rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950"
+            className="lo-press rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           >
             <LogOut className="h-3.5 w-3.5" />
           </button>
@@ -3569,15 +3651,15 @@ export default function HomePage() {
 
         <div className="pointer-events-auto relative">
           {creditsOpen && (
-            <div className="lo-float-in mb-2 w-60 rounded-xl border border-zinc-200/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(9,9,11,0.12)] backdrop-blur-xl">
-              <div className="mb-1 font-semibold text-zinc-950">Map Credits</div>
+            <div className="lo-float-in mb-2 w-60 rounded-xl border border-zinc-200/80 bg-white/95 p-3 text-[11px] leading-relaxed text-zinc-600 shadow-[0_12px_32px_rgba(9,9,11,0.12)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-300">
+              <div className="mb-1 font-semibold text-zinc-950 dark:text-zinc-50">Map Credits</div>
               <p>
                 Icons:{' '}
                 <a
                   href="https://github.com/mapbox/maki"
                   target="_blank"
                   rel="noreferrer"
-                  className="font-medium text-zinc-950 underline decoration-zinc-300 underline-offset-2"
+                  className="font-medium text-zinc-950 underline decoration-zinc-300 underline-offset-2 dark:text-zinc-100 dark:decoration-zinc-600"
                 >
                   Mapbox Maki
                 </a>{' '}
@@ -3589,7 +3671,7 @@ export default function HomePage() {
                   href="https://github.com/tokotype/PlusJakartaSans"
                   target="_blank"
                   rel="noreferrer"
-                  className="font-medium text-zinc-950 underline decoration-zinc-300 underline-offset-2"
+                  className="font-medium text-zinc-950 underline decoration-zinc-300 underline-offset-2 dark:text-zinc-100 dark:decoration-zinc-600"
                 >
                   Plus Jakarta Sans
                 </a>{' '}
@@ -3601,7 +3683,7 @@ export default function HomePage() {
           <button
             type="button"
             onClick={() => setCreditsOpen((v) => !v)}
-            className="lo-press rounded-lg border border-zinc-200/80 bg-white/90 px-2.5 py-1.5 text-[10px] font-medium text-zinc-500 shadow-sm backdrop-blur-xl transition hover:bg-white hover:text-zinc-950"
+            className="lo-press rounded-lg border border-zinc-200/80 bg-white/90 px-2.5 py-1.5 text-[10px] font-medium text-zinc-500 shadow-sm backdrop-blur-xl transition hover:bg-white hover:text-zinc-950 dark:border-zinc-800 dark:bg-zinc-900/90 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
           >
             © Maki · OSM
           </button>
@@ -3610,7 +3692,7 @@ export default function HomePage() {
 
       {/* Bottom-Center Floating Map View Mode Switcher */}
       <div className="pointer-events-auto absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-1/2 z-20 -translate-x-1/2 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))]">
-        <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/92 p-1 text-[11px] font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl sm:text-xs">
+        <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/95 p-1 text-[11px] font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-xs">
           {(
             [
               ['live', 'Live', MapPin],
@@ -3622,10 +3704,11 @@ export default function HomePage() {
               key={mode}
               type="button"
               onClick={() => setMapViewMode(mode)}
-              className={`lo-press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition sm:px-3.5 ${mapViewMode === mode
-                ? 'bg-zinc-950 text-white shadow-sm'
-                : 'text-zinc-600 hover:text-zinc-950'
-                }`}
+              className={`lo-press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition sm:px-3.5 ${
+                mapViewMode === mode
+                  ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                  : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+              }`}
             >
               <Icon className="h-3.5 w-3.5" />
               {label}

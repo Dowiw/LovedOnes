@@ -69,19 +69,19 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
   }
 
   return (
-    <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-6 shadow-sm backdrop-blur-xl">
+    <div className="rounded-xl border border-zinc-200/80 bg-white/95 p-6 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-zinc-950">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100">
             <QrCode className="h-4 w-4" />
           </span>
-          <h3 className="text-sm font-semibold text-zinc-950">Create Group Invite</h3>
+          <h3 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Create Group Invite</h3>
         </div>
         {onClose && (
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-950"
+            className="rounded-full p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-950 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           >
             <X className="h-4 w-4" />
           </button>
@@ -89,12 +89,12 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
       </div>
 
       <form onSubmit={handleCreate} className="grid gap-3 sm:grid-cols-4">
-        <label className="block text-xs font-medium text-zinc-600">
+        <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
           Group
           <select
             value={selectedGroupId}
             onChange={(e) => setGroupId(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+            className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
           >
             {groups.length === 0 && <option value="">No groups available</option>}
             {groups.map((g) => (
@@ -105,12 +105,12 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
           </select>
         </label>
 
-        <label className="block text-xs font-medium text-zinc-600">
+        <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
           Role
           <select
             value={assignedRole}
             onChange={(e) => setAssignedRole(e.target.value as GroupRole)}
-            className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+            className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
           >
             <option value="MEMBER">MEMBER</option>
             <option value="ADMIN">ADMIN</option>
@@ -118,7 +118,7 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
           </select>
         </label>
 
-        <label className="block text-xs font-medium text-zinc-600">
+        <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
           Max Uses
           <input
             type="number"
@@ -126,11 +126,11 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
             max={1000}
             value={maxUses}
             onChange={(e) => setMaxUses(Number(e.target.value) || 1)}
-            className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+            className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
           />
         </label>
 
-        <label className="block text-xs font-medium text-zinc-600">
+        <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
           Expires (hours)
           <input
             type="number"
@@ -138,7 +138,7 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
             max={8760}
             value={expiresInHours}
             onChange={(e) => setExpiresInHours(Number(e.target.value) || 24)}
-            className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
+            className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950/70 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-950"
           />
         </label>
 
@@ -146,7 +146,7 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
           <button
             type="submit"
             disabled={loading || groups.length === 0}
-            className="lo-press rounded-lg bg-zinc-950 px-5 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+            className="lo-press rounded-lg bg-zinc-950 px-5 py-2 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
           >
             {loading ? 'Generating...' : 'Generate Invite'}
           </button>
@@ -154,43 +154,43 @@ export function QrInvitePanel({ accessToken, groups, onClose, onCreated }: QrInv
       </form>
 
       {error && (
-        <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+        <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-800/60 dark:bg-rose-950/50 dark:text-rose-300">
           {error}
         </div>
       )}
 
       {invite && qrDataUrl && (
-        <div className="mt-5 grid gap-5 rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-4 md:grid-cols-[220px_1fr]">
-          <div className="flex flex-col items-center justify-center rounded-lg border border-zinc-200 bg-white p-3 shadow-sm">
+        <div className="mt-5 grid gap-5 rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-950/50 md:grid-cols-[220px_1fr]">
+          <div className="flex flex-col items-center justify-center rounded-lg border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-700">
             <img src={qrDataUrl} alt="Onboarding QR code" className="h-48 w-48" />
           </div>
           <div className="space-y-3">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 Web Invite Link
               </div>
               <div className="mt-1.5 flex items-center gap-2">
                 <input
                   readOnly
                   value={invite.joinUrl}
-                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-xs text-zinc-800"
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
                 />
                 <button
                   type="button"
                   onClick={handleCopy}
-                  className="lo-press flex shrink-0 items-center gap-1.5 rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-800"
+                  className="lo-press flex shrink-0 items-center gap-1.5 rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                 >
-                  {copied ? <Check className="h-3.5 w-3.5 text-white" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                   {copied ? 'Copied' : 'Copy'}
                 </button>
               </div>
             </div>
 
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 QR Payload
               </div>
-              <pre className="mt-1.5 overflow-x-auto rounded-lg border border-zinc-200 bg-white p-3 font-mono text-[11px] text-zinc-700">
+              <pre className="mt-1.5 overflow-x-auto rounded-lg border border-zinc-200 bg-white p-3 font-mono text-[11px] text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
                 {JSON.stringify(
                   {
                     v: invite.v,

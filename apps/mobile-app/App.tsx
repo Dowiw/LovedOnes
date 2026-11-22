@@ -5,18 +5,23 @@ import './src/services/backgroundLocation';
 import { MobileMapScreen } from './src/screens/MobileMapScreen';
 import { QrOnboardingScreen } from './src/screens/QrOnboardingScreen';
 import { getOnboardingPalette } from './src/services/onboardingTheme';
+import { resolveMobileMapTheme } from './src/services/pmtilesStyle';
 import { SafeAreaProvider, useSafeAreaInsets } from './src/services/safeArea';
 import {
   extractInviteCandidateFromUrl,
+  getMapThemePreference,
   getStoredConfig,
+  type MobileMapThemePreference,
   MobileStoredConfig,
 } from './src/services/secureConfig';
 
 interface AppRootContentProps {
   loading: boolean;
   config: MobileStoredConfig | null;
+  themePreference: MobileMapThemePreference;
   pendingInviteUrl: string | null;
   persistentRemovedToast: string | null;
+  onThemePreferenceChange: (pref: MobileMapThemePreference) => void;
   onClearPendingInvite: () => void;
   onAuthenticated: (nextConfig: MobileStoredConfig) => void;
   onSignedOut: (removedReason?: string) => void;
@@ -25,14 +30,17 @@ interface AppRootContentProps {
 function AppRootContent({
   loading,
   config,
+  themePreference,
   pendingInviteUrl,
   persistentRemovedToast,
+  onThemePreferenceChange,
   onClearPendingInvite,
   onAuthenticated,
   onSignedOut,
 }: AppRootContentProps) {
   const colorScheme = useColorScheme();
-  const palette = getOnboardingPalette(colorScheme);
+  const resolvedTheme = resolveMobileMapTheme(themePreference, colorScheme);
+  const palette = getOnboardingPalette(resolvedTheme);
   const insets = useSafeAreaInsets();
 
   if (loading) {
@@ -50,33 +58,40 @@ function AppRootContent({
   }
 
   const isAuthenticated = Boolean(config?.accessToken && config.serverUrl);
+  const authenticatedCanvas = resolvedTheme === 'dark' ? '#0c141d' : '#cfe3ee';
 
   return (
     <View
       pointerEvents="box-none"
       style={[
         styles.root,
-        { backgroundColor: isAuthenticated ? '#ffffff' : palette.canvas },
+        { backgroundColor: isAuthenticated ? authenticatedCanvas : palette.canvas },
       ]}
     >
-      <StatusBar style={isAuthenticated ? 'dark' : palette.statusBarStyle} />
+      <StatusBar style={palette.statusBarStyle} />
       {/* Keep every UI component, orb, and overlay strictly above the bottom navigation bar */}
       <View
         style={[
           styles.safeViewport,
           {
             marginBottom: insets.bottom,
-            backgroundColor: isAuthenticated ? '#09090b' : palette.canvas,
+            backgroundColor: isAuthenticated ? authenticatedCanvas : palette.canvas,
           },
         ]}
       >
         {isAuthenticated && config ? (
-          <MobileMapScreen config={config} onSignedOut={onSignedOut} />
+          <MobileMapScreen
+            config={config}
+            initialThemePreference={themePreference}
+            onThemePreferenceChange={onThemePreferenceChange}
+            onSignedOut={onSignedOut}
+          />
         ) : (
           <QrOnboardingScreen
             initialServerUrl={config?.serverUrl ?? null}
             pendingInviteUrl={pendingInviteUrl}
             persistentToast={persistentRemovedToast}
+            themePreference={themePreference}
             onConsumePendingInvite={onClearPendingInvite}
             onAuthenticated={onAuthenticated}
           />
@@ -89,14 +104,17 @@ function AppRootContent({
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState<MobileStoredConfig | null>(null);
+  const [themePreference, setThemePreference] = useState<MobileMapThemePreference>('system');
   const [pendingInviteUrl, setPendingInviteUrl] = useState<string | null>(null);
   const [persistentRemovedToast, setPersistentRemovedToast] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    void getStoredConfig()
-      .then((cfg) => {
-        if (active) setConfig(cfg);
+    void Promise.all([getStoredConfig(), getMapThemePreference()])
+      .then(([cfg, pref]) => {
+        if (!active) return;
+        setConfig(cfg);
+        setThemePreference(pref);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -129,8 +147,10 @@ export default function App() {
       <AppRootContent
         loading={loading}
         config={config}
+        themePreference={themePreference}
         pendingInviteUrl={pendingInviteUrl}
         persistentRemovedToast={persistentRemovedToast}
+        onThemePreferenceChange={setThemePreference}
         onClearPendingInvite={() => setPendingInviteUrl(null)}
         onAuthenticated={(nextConfig) => {
           setPersistentRemovedToast(null);
