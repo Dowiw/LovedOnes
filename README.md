@@ -1,6 +1,16 @@
-# LovedOnes
-
-[![CI](https://github.com/Dowiw/LovedOnes/actions/workflows/ci.yml/badge.svg)](https://github.com/Dowiw/LovedOnes/actions/workflows/ci.yml)
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web-dashboard/public/icons/icon-dark-192.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/web-dashboard/public/icons/icon-192.png" />
+    <img src="apps/web-dashboard/public/icons/icon-192.png" alt="LovedOnes icon" width="96" height="96" />
+  </picture>
+  <h1>LovedOnes</h1>
+  <p>
+    <a href="https://github.com/Dowiw/LovedOnes/actions/workflows/ci.yml">
+      <img src="https://github.com/Dowiw/LovedOnes/actions/workflows/ci.yml/badge.svg" alt="CI" />
+    </a>
+  </p>
+</div>
 
 Share your live location and chat with family or close friends on a server you own — no third-party tracking, no subscriptions, and no selling your location history.
 
