@@ -20,7 +20,8 @@ RUN pnpm --filter @loved-ones/shared build \
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=builder /app ./
+RUN apk add --no-cache su-exec
+COPY --from=builder --chown=node:node /app ./
 COPY infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 4002

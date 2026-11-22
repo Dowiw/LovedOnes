@@ -1540,3 +1540,33 @@ export async function pruneLocationHistory(
   );
   return res.rowCount ?? 0;
 }
+
+/**
+ * Removes expired or revoked guest share links past the grace window (cascading to
+ * their guests) plus stale guest ping rows older than `guestActiveWindowMs`.
+ */
+export async function pruneExpiredShareLinks(
+  pool: pg.Pool,
+  options?: { graceHours?: number; guestActiveWindowMs?: number },
+): Promise<{ deletedLinks: number; deletedGuests: number }> {
+  const graceHours = Math.max(0, Math.floor(options?.graceHours ?? 24));
+  const guestActiveWindowMs = Math.max(60_000, Math.floor(options?.guestActiveWindowMs ?? 5 * 60 * 1000));
+  const guestCutoff = new Date(Date.now() - guestActiveWindowMs);
+
+  const linksRes = await pool.query(
+    `DELETE FROM location_share_links
+     WHERE expires_at < NOW() - make_interval(hours => $1)
+        OR (revoked_at IS NOT NULL AND revoked_at < NOW() - make_interval(hours => $1))`,
+    [graceHours],
+  );
+  const guestsRes = await pool.query(
+    `DELETE FROM location_share_guests
+     WHERE updated_at < $1`,
+    [guestCutoff],
+  );
+
+  return {
+    deletedLinks: linksRes.rowCount ?? 0,
+    deletedGuests: guestsRes.rowCount ?? 0,
+  };
+}

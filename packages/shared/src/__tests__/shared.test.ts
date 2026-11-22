@@ -40,6 +40,7 @@ import {
 } from '../index.js';
 import { createServiceLogger, LOGS_RING_KEY, pruneLogArtifacts } from '../logger.js';
 import {
+  createEventThrottle,
   createRateLimiter,
   createTokenService,
   extractBearerToken,
@@ -808,5 +809,35 @@ describe('@loved-ones/shared', () => {
     expect(statuses).toEqual([200, 200, 429]);
     expect(headers['X-RateLimit-Limit']).toBe('2');
     expect(headers['Retry-After']).toBeTruthy();
+  });
+
+  it('throttles per-socket events within a window and resets after expiry or clearKey', () => {
+    let fakeNow = 10_000;
+    const throttle = createEventThrottle({
+      max: 2,
+      windowMs: 5_000,
+      now: () => fakeNow,
+    });
+
+    expect(throttle.consume('sock-1').allowed).toBe(true);
+    expect(throttle.consume('sock-1').allowed).toBe(true);
+    const blocked = throttle.consume('sock-1');
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.retryAfterMs).toBeGreaterThanOrEqual(1000);
+
+    // Independent socket key is unaffected
+    expect(throttle.consume('sock-2').allowed).toBe(true);
+
+    // Advancing past window resets budget
+    fakeNow += 5_001;
+    expect(throttle.consume('sock-1').allowed).toBe(true);
+
+    // clearKey removes state cleanly
+    throttle.clearKey('sock-1');
+    expect(throttle.consume('sock-1').remaining).toBe(1);
+
+    const disabledThrottle = createEventThrottle({ max: 1, windowMs: 1000, disabled: true });
+    expect(disabledThrottle.consume('sock-1').allowed).toBe(true);
+    expect(disabledThrottle.consume('sock-1').allowed).toBe(true);
   });
 });

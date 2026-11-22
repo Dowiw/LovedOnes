@@ -5,6 +5,17 @@
 }
 
 :80 {
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(self), camera=(self), microphone=(), payment=(), usb=()"
+		-Server
+	}
+
+	@httpsProto header X-Forwarded-Proto https
+	header @httpsProto Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
 	@tilesOptions {
 		path /tiles/*
 		method OPTIONS

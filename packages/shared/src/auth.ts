@@ -551,6 +551,51 @@ export function createRateLimiter(options: RateLimiterOptions) {
   };
 }
 
+export interface EventThrottleOptions {
+  max: number;
+  windowMs: number;
+  disabled?: boolean;
+  now?: () => number;
+}
+
+/**
+ * Lightweight fixed-window per-key event throttle for WebSocket / Socket.io handlers.
+ */
+export function createEventThrottle(options: EventThrottleOptions) {
+  const buckets = new Map<string, { count: number; resetAt: number }>();
+  const nowFn = options.now ?? (() => Date.now());
+
+  return {
+    consume(key: string): { allowed: boolean; remaining: number; retryAfterMs: number } {
+      if (options.disabled) {
+        return { allowed: true, remaining: options.max, retryAfterMs: 0 };
+      }
+      const now = nowFn();
+      if (buckets.size > 5000) {
+        for (const [k, entry] of buckets.entries()) {
+          if (entry.resetAt <= now) buckets.delete(k);
+        }
+      }
+      const existing = buckets.get(key);
+      if (!existing || existing.resetAt <= now) {
+        const resetAt = now + options.windowMs;
+        buckets.set(key, { count: 1, resetAt });
+        return { allowed: true, remaining: Math.max(0, options.max - 1), retryAfterMs: 0 };
+      }
+      existing.count += 1;
+      const allowed = existing.count <= options.max;
+      return {
+        allowed,
+        remaining: Math.max(0, options.max - existing.count),
+        retryAfterMs: allowed ? 0 : Math.max(1000, existing.resetAt - now),
+      };
+    },
+    clearKey(key: string): void {
+      buckets.delete(key);
+    },
+  };
+}
+
 /**
  * Registers SIGTERM/SIGINT handlers to cleanly close Fastify, drain active connections,
  * and flush logs/pools before process exit.
