@@ -17,6 +17,7 @@ import {
   attachAuthAndTelemetry,
   AuthenticatedRequest,
   createFastifyCorsDelegator,
+  createRateLimiter,
   createTokenService,
   DomainError,
   extractBearerToken,
@@ -58,6 +59,13 @@ export interface RealtimeServiceOptions {
   logDir?: string;
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
+  trustCloudflareHeaders?: boolean;
+  rateLimit?: {
+    disabled?: boolean;
+    windowMs?: number;
+    publicShareReadMax?: number;
+    publicSharePingMax?: number;
+  };
 }
 
 export async function createRealtimeServer(options: RealtimeServiceOptions = {}): Promise<{
@@ -446,55 +454,99 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     },
   );
 
-  app.get('/api/realtime/public/share/:token', async (request, reply) => {
-    const { token } = request.params as { token: string };
-    reply.header('Cache-Control', 'no-store');
-    return shareLinks.getPublicShareSnapshot(token);
+  const rateLimitDisabled =
+    options.rateLimit?.disabled ?? process.env.RATE_LIMIT_ENABLED === 'false';
+  const publicShareWindowMs =
+    options.rateLimit?.windowMs ??
+    (Number.parseInt(process.env.RATE_LIMIT_SHARE_WINDOW_MS ?? '', 10) || 60 * 1000);
+  const publicShareReadMax =
+    options.rateLimit?.publicShareReadMax ??
+    (Number.parseInt(process.env.RATE_LIMIT_SHARE_READ_MAX ?? '', 10) || 60);
+  const publicSharePingMax =
+    options.rateLimit?.publicSharePingMax ??
+    (Number.parseInt(process.env.RATE_LIMIT_SHARE_PING_MAX ?? '', 10) || 30);
+  const trustCloudflareHeaders =
+    options.trustCloudflareHeaders ??
+    process.env.TRUST_CLOUDFLARE_HEADERS?.trim().toLowerCase() === 'true';
+
+  const publicShareReadRateLimit = createRateLimiter({
+    prefix: 'share-read',
+    max: publicShareReadMax,
+    windowMs: publicShareWindowMs,
+    redis,
+    disabled: rateLimitDisabled,
+    trustCloudflareHeaders,
+  });
+  const publicSharePingRateLimit = createRateLimiter({
+    prefix: 'share-ping',
+    max: publicSharePingMax,
+    windowMs: publicShareWindowMs,
+    redis,
+    disabled: rateLimitDisabled,
+    trustCloudflareHeaders,
   });
 
-  app.post('/api/realtime/public/share/:token/ping', async (request, reply) => {
-    const { token } = request.params as { token: string };
-    reply.header('Cache-Control', 'no-store');
-    const result = await shareLinks.upsertGuestPing(token, request.body);
-    const guestName =
-      typeof (request.body as { displayName?: unknown } | undefined)?.displayName === 'string'
-        ? (request.body as { displayName: string }).displayName.trim()
-        : 'Guest';
-    loggerHandle.logger.info(
-      {
-        action: 'share_link.guest_ping',
-        guestId: result.guestId,
-        guestName,
-        creatorUserId: result.snapshot.creator.userId,
-        creatorUsername: result.snapshot.creator.username,
-        activeGuests: result.snapshot.guests.length,
-      },
-      `Guest "${guestName}" updated live location on ${result.snapshot.creator.username}'s share link (${result.snapshot.guests.length} active guest(s))`,
-    );
-    return result;
-  });
+  app.get(
+    '/api/realtime/public/share/:token',
+    { preHandler: [publicShareReadRateLimit] },
+    async (request, reply) => {
+      const { token } = request.params as { token: string };
+      reply.header('Cache-Control', 'no-store');
+      return shareLinks.getPublicShareSnapshot(token);
+    },
+  );
 
-  app.delete('/api/realtime/public/share/:token/ping', async (request, reply) => {
-    const { token } = request.params as { token: string };
-    reply.header('Cache-Control', 'no-store');
-    const result = await shareLinks.stopGuestPing(token, request.body);
-    const guestId =
-      typeof (request.body as { guestId?: unknown } | undefined)?.guestId === 'string'
-        ? (request.body as { guestId: string }).guestId
-        : undefined;
-    loggerHandle.logger.info(
-      {
-        action: 'share_link.guest_stopped',
-        guestId,
-        stopped: result.stopped,
-        creatorUserId: result.snapshot.creator.userId,
-        creatorUsername: result.snapshot.creator.username,
-        activeGuests: result.snapshot.guests.length,
-      },
-      `Guest stopped sharing location on ${result.snapshot.creator.username}'s share link (${result.snapshot.guests.length} active guest(s) remaining)`,
-    );
-    return result;
-  });
+  app.post(
+    '/api/realtime/public/share/:token/ping',
+    { preHandler: [publicSharePingRateLimit] },
+    async (request, reply) => {
+      const { token } = request.params as { token: string };
+      reply.header('Cache-Control', 'no-store');
+      const result = await shareLinks.upsertGuestPing(token, request.body);
+      const guestName =
+        typeof (request.body as { displayName?: unknown } | undefined)?.displayName === 'string'
+          ? (request.body as { displayName: string }).displayName.trim()
+          : 'Guest';
+      loggerHandle.logger.info(
+        {
+          action: 'share_link.guest_ping',
+          guestId: result.guestId,
+          guestName,
+          creatorUserId: result.snapshot.creator.userId,
+          creatorUsername: result.snapshot.creator.username,
+          activeGuests: result.snapshot.guests.length,
+        },
+        `Guest "${guestName}" updated live location on ${result.snapshot.creator.username}'s share link (${result.snapshot.guests.length} active guest(s))`,
+      );
+      return result;
+    },
+  );
+
+  app.delete(
+    '/api/realtime/public/share/:token/ping',
+    { preHandler: [publicSharePingRateLimit] },
+    async (request, reply) => {
+      const { token } = request.params as { token: string };
+      reply.header('Cache-Control', 'no-store');
+      const result = await shareLinks.stopGuestPing(token, request.body);
+      const guestId =
+        typeof (request.body as { guestId?: unknown } | undefined)?.guestId === 'string'
+          ? (request.body as { guestId: string }).guestId
+          : undefined;
+      loggerHandle.logger.info(
+        {
+          action: 'share_link.guest_stopped',
+          guestId,
+          stopped: result.stopped,
+          creatorUserId: result.snapshot.creator.userId,
+          creatorUsername: result.snapshot.creator.username,
+          activeGuests: result.snapshot.guests.length,
+        },
+        `Guest stopped sharing location on ${result.snapshot.creator.username}'s share link (${result.snapshot.guests.length} active guest(s) remaining)`,
+      );
+      return result;
+    },
+  );
 
   app.post(
     '/api/realtime/locations',
