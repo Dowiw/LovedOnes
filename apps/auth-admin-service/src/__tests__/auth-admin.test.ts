@@ -351,6 +351,13 @@ describe('@loved-ones/auth-admin-service integration', () => {
     expect(loginNewRes.json().user.avatarUrl).toBe(avatarPng);
 
     // 11b. Backup recovery email verification + forgot password reset flow
+    const recoveryStatusRes = await app.inject({
+      method: 'GET',
+      url: '/api/auth/forgot-password/status',
+    });
+    expect(recoveryStatusRes.statusCode).toBe(200);
+    expect(recoveryStatusRes.json()).toEqual({ emailRecoveryAvailable: true });
+
     const sendRecoveryRes = await app.inject({
       method: 'POST',
       url: '/api/auth/recovery-email/send-code',

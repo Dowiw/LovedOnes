@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apiUpdateProfile, formatBytes, getLogsWsUrl, getServiceBaseUrls } from '../lib/api';
+import {
+  apiFetchForgotPasswordStatus,
+  apiUpdateProfile,
+  formatBytes,
+  getLogsWsUrl,
+  getServiceBaseUrls,
+} from '../lib/api';
 
 describe('@loved-ones/web-dashboard helpers', () => {
   afterEach(() => {
@@ -78,5 +84,18 @@ describe('@loved-ones/web-dashboard helpers', () => {
     const res = await apiUpdateProfile('expired-access', { username: 'KB2' });
     expect(res.user.username).toBe('KB2');
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('fetches forgot-password SMTP availability from the auth endpoint', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === '/api/auth/forgot-password/status') {
+        return new Response(JSON.stringify({ emailRecoveryAvailable: false }), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await apiFetchForgotPasswordStatus();
+    expect(status).toEqual({ emailRecoveryAvailable: false });
   });
 });

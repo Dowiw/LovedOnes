@@ -71,6 +71,7 @@ import {
   apiDeletePlace,
   apiFetchAccessiblePlaces,
   apiFetchAppVersion,
+  apiFetchForgotPasswordStatus,
   apiFetchGroupLocations,
   apiFetchGroupMessages,
   apiFetchGroups,
@@ -176,6 +177,8 @@ export default function HomePage() {
 
   const [forgotMode, setForgotMode] = useState(false);
   const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request');
+  const [emailRecoveryAvailable, setEmailRecoveryAvailable] = useState<boolean | null>(null);
+  const [checkingForgotStatus, setCheckingForgotStatus] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotCode, setForgotCode] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
@@ -1562,6 +1565,24 @@ export default function HomePage() {
     }
   }
 
+  async function openForgotPasswordMode() {
+    setForgotEmail(email.trim());
+    setForgotMode(true);
+    setForgotStep('request');
+    setAuthError(null);
+    setAuthNotice(null);
+    setCheckingForgotStatus(true);
+    try {
+      const status = await apiFetchForgotPasswordStatus();
+      setEmailRecoveryAvailable(status.emailRecoveryAvailable);
+    } catch {
+      // Fall back to request form if server does not expose the status endpoint
+      setEmailRecoveryAvailable((prev) => prev ?? true);
+    } finally {
+      setCheckingForgotStatus(false);
+    }
+  }
+
   async function handleForgotPasswordRequest(e: React.FormEvent) {
     e.preventDefault();
     setAuthError(null);
@@ -1572,7 +1593,12 @@ export default function HomePage() {
       setForgotStep('reset');
       setAuthNotice(res.message);
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Failed to request reset code');
+      const msg = err instanceof Error ? err.message : 'Failed to request reset code';
+      if (msg.toLowerCase().includes('not configured') && msg.toLowerCase().includes('admin')) {
+        setEmailRecoveryAvailable(false);
+      } else {
+        setAuthError(msg);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -1680,12 +1706,29 @@ export default function HomePage() {
                 <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50">
                   Recover forgotten password
                 </h2>
-                <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                  Enter your account email or verified backup email to receive a 6-digit reset code.
-                </p>
+                {emailRecoveryAvailable !== false && (
+                  <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                    Enter your account email or verified backup email to receive a 6-digit reset code.
+                  </p>
+                )}
               </div>
 
-              {forgotStep === 'request' ? (
+              {checkingForgotStatus && emailRecoveryAvailable === null ? (
+                <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-3 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Checking password recovery options...</span>
+                </div>
+              ) : emailRecoveryAvailable === false ? (
+                <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-xs leading-relaxed text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/80 dark:text-zinc-200">
+                  <p className="font-semibold text-zinc-950 dark:text-zinc-50">
+                    Email password reset is unavailable
+                  </p>
+                  <p className="text-zinc-600 dark:text-zinc-300">
+                    SMTP email delivery is not configured on this server. Please contact your Host
+                    Admin to help recover your account.
+                  </p>
+                </div>
+              ) : forgotStep === 'request' ? (
                 <form onSubmit={handleForgotPasswordRequest} className="space-y-3.5">
                   <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
                     Account or Verified Backup Email
@@ -1931,13 +1974,7 @@ export default function HomePage() {
                   <div className="text-right">
                     <button
                       type="button"
-                      onClick={() => {
-                        setForgotEmail(email.trim());
-                        setForgotMode(true);
-                        setForgotStep('request');
-                        setAuthError(null);
-                        setAuthNotice(null);
-                      }}
+                      onClick={() => void openForgotPasswordMode()}
                       className="text-xs font-medium text-zinc-600 hover:text-zinc-950 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
                     >
                       Forgot password?
