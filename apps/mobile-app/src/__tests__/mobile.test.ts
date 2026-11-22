@@ -14,19 +14,34 @@ import {
   resolveMobileMapTheme,
 } from '../services/pmtilesStyle';
 import {
+  BACKGROUND_GEOFENCE_RECOVERY_TASK,
+  BACKGROUND_LOCATION_TASK,
+  buildRecoveryGeofenceRegion,
+  GEOFENCING_EVENT_EXIT,
+  type GeofenceRecoveryAdapter,
+  handleGeofenceRecoveryEvent,
+  RECOVERY_GEOFENCE_IDENTIFIER,
+  shouldRefreshRecoveryAnchor,
+  syncRecoveryGeofenceAnchor,
+} from '../services/geofenceRecovery';
+import {
   clearPendingRegistration,
   clearSessionConfig,
   createMemoryKeyValueStore,
   extractInviteCandidateFromUrl,
+  getBackgroundTrackingEnabled,
   getMapThemePreference,
   getPendingRegistration,
   getPingedServers,
+  getRecoveryGeofenceAnchor,
   getStoredConfig,
   isPendingRecordActive,
   parseAndBindQrInvite,
   saveMapThemePreference,
   savePendingRegistration,
+  saveRecoveryGeofenceAnchor,
   saveStoredConfig,
+  setBackgroundTrackingEnabled,
 } from '../services/secureConfig';
 import {
   createMobileShareLink,
@@ -689,5 +704,121 @@ describe('@loved-ones/mobile-app', () => {
     expect(lightPalette.statusBarStyle).toBe('dark');
     expect(lightPalette.surface).toBe('#ffffff');
     expect(lightPalette.ink).toBe('#18181b');
+  });
+
+  it('arms, shifts, and recovers background tracking on iOS geofence-exit wake-ups', async () => {
+    const store = createMemoryKeyValueStore();
+    await saveStoredConfig(
+      { serverUrl: 'https://track.example.com', accessToken: 'jwt-1' },
+      store,
+    );
+    await setBackgroundTrackingEnabled(true, store);
+    expect(await getBackgroundTrackingEnabled(store)).toBe(true);
+
+    let geofenceStarted = false;
+    let continuousStarted = false;
+    let permissionLevel: 'always' | 'foreground' | 'denied' = 'always';
+    let lastRegions: unknown[] = [];
+    const ingested: Array<{ lat: number; lon: number }> = [];
+
+    let currentPos = {
+      coords: { latitude: 52.5225, longitude: 13.405, altitude: 34, accuracy: 12, speed: 1.5 },
+      timestamp: Date.parse('2026-11-22T12:00:00.000Z'),
+    };
+
+    const startGeofencingSpy = vi.fn(async (_task: string, regions: unknown[]) => {
+      geofenceStarted = true;
+      lastRegions = regions;
+    });
+    const stopGeofencingSpy = vi.fn(async () => {
+      geofenceStarted = false;
+      lastRegions = [];
+    });
+    const startContinuousSpy = vi.fn(async () => {
+      continuousStarted = true;
+    });
+
+    const adapter: GeofenceRecoveryAdapter = {
+      hasStartedGeofencingAsync: async (t) => t === BACKGROUND_GEOFENCE_RECOVERY_TASK && geofenceStarted,
+      startGeofencingAsync: startGeofencingSpy,
+      stopGeofencingAsync: stopGeofencingSpy,
+      hasStartedLocationUpdatesAsync: async (t) => t === BACKGROUND_LOCATION_TASK && continuousStarted,
+      startContinuousLocationUpdatesAsync: startContinuousSpy,
+      getCurrentPositionAsync: async () => currentPos,
+      getLastKnownPositionAsync: async () => currentPos,
+      getBackgroundPermissionLevel: async () => permissionLevel,
+      isTrackingEnabled: () => getBackgroundTrackingEnabled(store),
+      hasActiveSession: async () => {
+        const cfg = await getStoredConfig(store);
+        return Boolean(cfg.serverUrl && cfg.accessToken);
+      },
+      getAnchor: () => getRecoveryGeofenceAnchor(store),
+      saveAnchor: (anchor) => saveRecoveryGeofenceAnchor(anchor, store),
+      ingestPosition: async (pos) => {
+        ingested.push({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      },
+    };
+
+    // 1. Builds exit-only anchor region with clamped bounds and hysteresis
+    const region = buildRecoveryGeofenceRegion(52.52, 13.405, 80);
+    expect(region.identifier).toBe(RECOVERY_GEOFENCE_IDENTIFIER);
+    expect(region.radius).toBe(150);
+    expect(region.notifyOnEnter).toBe(false);
+    expect(region.notifyOnExit).toBe(true);
+    expect(shouldRefreshRecoveryAnchor(null, 0, 0)).toBe(false);
+
+    // 2. Arms initial anchor and ignores tiny movements (< 125m)
+    expect(await syncRecoveryGeofenceAnchor(52.52, 13.405, adapter)).toBe(true);
+    expect(startGeofencingSpy).toHaveBeenCalledTimes(1);
+    expect(lastRegions).toHaveLength(1);
+    expect(await syncRecoveryGeofenceAnchor(52.5202, 13.4051, adapter)).toBe(false);
+    expect(startGeofencingSpy).toHaveBeenCalledTimes(1);
+
+    // 3. Re-centers anchor when device moves >= 125m
+    expect(await syncRecoveryGeofenceAnchor(52.5218, 13.405, adapter)).toBe(true);
+    expect(startGeofencingSpy).toHaveBeenCalledTimes(2);
+
+    // 4. Ignores non-exit or errored geofence events
+    const ignored = await handleGeofenceRecoveryEvent({ eventType: 1 }, null, adapter);
+    expect(ignored.recovered).toBe(false);
+
+    // 5. Simulates OS termination where continuous updates stopped, then user exits fence
+    continuousStarted = false;
+    const recovered = await handleGeofenceRecoveryEvent(
+      { eventType: GEOFENCING_EVENT_EXIT, region: { identifier: RECOVERY_GEOFENCE_IDENTIFIER } },
+      null,
+      adapter,
+    );
+    expect(recovered).toEqual({
+      recovered: true,
+      continuousRestarted: true,
+      reanchored: true,
+    });
+    expect(continuousStarted).toBe(true);
+    expect(ingested).toEqual([{ lat: 52.5225, lon: 13.405 }]);
+    const savedAnchor = await getRecoveryGeofenceAnchor(store);
+    expect(savedAnchor?.latitude).toBe(52.5225);
+
+    // 6. Paused tracking or sign-out tears down geofence and refuses background re-arm
+    await setBackgroundTrackingEnabled(false, store);
+    const pausedOutcome = await handleGeofenceRecoveryEvent(
+      { eventType: GEOFENCING_EVENT_EXIT },
+      null,
+      adapter,
+    );
+    expect(pausedOutcome.recovered).toBe(false);
+    expect(stopGeofencingSpy).toHaveBeenCalled();
+    expect(await getRecoveryGeofenceAnchor(store)).toBeNull();
+
+    // 7. clearSessionConfig wipes persisted tracking state and anchor
+    await setBackgroundTrackingEnabled(true, store);
+    await saveRecoveryGeofenceAnchor(
+      { latitude: 52.52, longitude: 13.4, radiusMeters: 250, updatedAt: '2026-11-22T12:00:00.000Z' },
+      store,
+    );
+    permissionLevel = 'always';
+    await clearSessionConfig(store);
+    expect(await getBackgroundTrackingEnabled(store)).toBe(false);
+    expect(await getRecoveryGeofenceAnchor(store)).toBeNull();
   });
 });

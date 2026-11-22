@@ -68,6 +68,7 @@ import {
   isBackgroundTrackingActive,
   startBackgroundTracking,
   stopBackgroundTracking,
+  syncRecoveryGeofenceForPosition,
 } from '../services/backgroundLocation';
 import { groupChatMessagesForDisplay } from '../services/chatFormatting';
 import { formatUserError } from '../services/errorFormatter';
@@ -111,6 +112,7 @@ import {
 import { useSafeAreaInsets } from '../services/safeArea';
 import {
   clearSessionConfig,
+  getBackgroundTrackingEnabled,
   getMapThemePreference,
   type MobileMapThemePreference,
   MobileStoredConfig,
@@ -522,16 +524,28 @@ export function MobileMapScreen({
   }, []);
 
   useEffect(() => {
-    void getLocationPermissionStatus()
-      .then((perm) => {
+    void Promise.all([
+      getLocationPermissionStatus(),
+      getBackgroundTrackingEnabled().catch(() => false),
+      isBackgroundTrackingActive().catch(() => false),
+    ])
+      .then(async ([perm, trackingEnabled, active]) => {
         setPermissionInfo(perm);
         if (perm.level === 'denied' && !promptedFirstTimeRef.current) {
           promptedFirstTimeRef.current = true;
           setLocationPromptOpen(true);
         }
+        if (perm.level === 'always' && trackingEnabled) {
+          const started = await startBackgroundTracking().catch(() => null);
+          if (started) {
+            setPermissionInfo(started.permission);
+            setTracking(true);
+            return;
+          }
+        }
+        setTracking(active);
       })
       .catch(() => {});
-    void isBackgroundTrackingActive().then(setTracking).catch(() => {});
     void getCachedRegionPmtilesInfo()
       .then((info) => {
         setCacheInfo(info);
@@ -941,6 +955,7 @@ export function MobileMapScreen({
       },
     ]);
     const result = await flushOfflineLocations(serverUrl, accessToken);
+    void syncRecoveryGeofenceForPosition(pos.coords.latitude, pos.coords.longitude);
     await refreshQueueCount();
     return result;
   }
