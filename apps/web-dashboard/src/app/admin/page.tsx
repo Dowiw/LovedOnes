@@ -31,6 +31,10 @@ import {
   type SystemTelemetry,
   type SystemUpdateStatus,
 } from '@loved-ones/shared';
+import {
+  AdminNoticesBanner,
+  ResourceAllocationPanels,
+} from '@/components/AdminResourcePanels';
 import { LiveLogTerminal } from '@/components/LiveLogTerminal';
 import { NavBar } from '@/components/NavBar';
 import { QrInvitePanel } from '@/components/QrInviteModal';
@@ -303,6 +307,14 @@ export default function AdminDashboardPage() {
               storage limit.
             </span>
           </div>
+        )}
+
+        {telemetry?.notices && telemetry.notices.length > 0 && (
+          <AdminNoticesBanner
+            accessToken={session.accessToken}
+            notices={telemetry.notices}
+            onUpdated={() => void refreshData(session.accessToken)}
+          />
         )}
 
         {showInviteModal && (
@@ -702,6 +714,12 @@ export default function AdminDashboardPage() {
           </div>
         </section>
 
+        <ResourceAllocationPanels
+          accessToken={session.accessToken}
+          telemetry={telemetry}
+          onUpdated={() => void refreshData(session.accessToken)}
+        />
+
         <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
           <div className="border-b border-zinc-100 px-5 py-3.5 text-sm font-semibold text-zinc-950 dark:border-zinc-800 dark:text-zinc-50">
             Account Resource Usage
@@ -756,7 +774,12 @@ export default function AdminDashboardPage() {
                         {formatBytes(u.redisMemoryBytes)}
                       </td>
                       <td className="px-5 py-3 font-mono text-zinc-700 dark:text-zinc-200">
-                        {formatBytes(u.locationBytes)}
+                        <div>{formatBytes(u.totalDbBytes || u.locationBytes)}</div>
+                        <div className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                          {formatBytes(u.locationBytes)} pts · {formatBytes(u.estimatedIndexBytes)} idx
+                          {u.messageBytes > 0 ? ` · ${formatBytes(u.messageBytes)} msg` : ''}
+                          {u.avatarBytes > 0 ? ` · ${formatBytes(u.avatarBytes)} img` : ''}
+                        </div>
                       </td>
                       <td className="px-5 py-3 font-mono text-zinc-600 dark:text-zinc-300">
                         {u.locationPoints}

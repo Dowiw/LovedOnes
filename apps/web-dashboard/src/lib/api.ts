@@ -16,10 +16,13 @@ import type {
   PublicLocationShareSnapshot,
   QrInvitePayload,
   RegistrationRequestItem,
+  ResourceLimitsSettings,
+  ResourcePruneResult,
   SystemRole,
   SystemTelemetry,
   SystemUpdateStatus,
   UpdateLogRetentionInput,
+  UpdateResourceLimitsInput,
 } from '@loved-ones/shared';
 
 export interface AuthUser {
@@ -1100,4 +1103,57 @@ export async function apiStopPublicSharePing(
     throw new Error(`Failed to stop sharing (${res.status})`);
   }
   return (await res.json()) as { stopped: boolean; snapshot: PublicLocationShareSnapshot };
+}
+
+export async function apiUpdateResourceLimits(
+  accessToken: string,
+  input: UpdateResourceLimitsInput,
+): Promise<{ settings: ResourceLimitsSettings }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ settings: ResourceLimitsSettings }>(
+    `${authBase}/api/admin/resource-limits`,
+    accessToken,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function apiPruneResourceTables(
+  accessToken: string,
+  options: { vacuum?: boolean } = {},
+): Promise<ResourcePruneResult> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<ResourcePruneResult>(
+    `${authBase}/api/admin/resource-limits/prune`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify({ vacuum: Boolean(options.vacuum) }),
+    },
+  );
+}
+
+export async function apiDismissAdminNotice(
+  accessToken: string,
+  noticeId: string,
+): Promise<{ ok: boolean; noticeId: string }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ ok: boolean; noticeId: string }>(
+    `${authBase}/api/admin/notices/${encodeURIComponent(noticeId)}`,
+    accessToken,
+    { method: 'DELETE' },
+  );
+}
+
+export async function apiDismissAllAdminNotices(
+  accessToken: string,
+): Promise<{ ok: boolean; cleared: number }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ ok: boolean; cleared: number }>(
+    `${authBase}/api/admin/notices`,
+    accessToken,
+    { method: 'DELETE' },
+  );
 }

@@ -5,6 +5,8 @@ import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import type {
   BoundingBox,
+  DatabaseBreakdown,
+  DatabaseTableBreakdown,
   GroupPlace,
   GroupRole,
   LocationPoint,
@@ -376,44 +378,219 @@ export interface UserDbFootprintRow {
   role: SystemRole;
   locationBytes: number;
   locationPoints: number;
+  estimatedIndexBytes?: number;
+  messageBytes?: number;
+  messageCount?: number;
+  avatarBytes?: number;
+  placeEventCount?: number;
+  totalDbBytes?: number;
 }
 
 export interface DatabaseTelemetryResult {
   databaseBytes: number;
   users: UserDbFootprintRow[];
+  breakdown?: DatabaseBreakdown;
 }
 
+const TABLE_CLASSIFICATION: Record<
+  string,
+  { label: string; category: 'system' | 'manageable'; deletable: boolean }
+> = {
+  location_history: { label: 'Location Pings', category: 'manageable', deletable: true },
+  messages: { label: 'Chat Messages', category: 'manageable', deletable: true },
+  group_place_events: { label: 'Geofence Events', category: 'manageable', deletable: true },
+  location_requests: { label: 'Check-In Requests', category: 'manageable', deletable: true },
+  registration_requests: { label: 'Registration Queue', category: 'manageable', deletable: true },
+  location_share_links: { label: 'Share Links', category: 'manageable', deletable: true },
+  location_share_guests: { label: 'Share Link Guests', category: 'manageable', deletable: true },
+  users: { label: 'Accounts & Profiles', category: 'system', deletable: false },
+  groups: { label: 'Groups', category: 'system', deletable: false },
+  group_memberships: { label: 'Group Memberships', category: 'system', deletable: false },
+  group_invites: { label: 'Group Invites', category: 'system', deletable: false },
+  group_places: { label: 'Geofenced Places', category: 'system', deletable: false },
+  group_place_states: { label: 'Geofence States', category: 'system', deletable: false },
+  push_vapid_config: { label: 'VAPID Keys (System)', category: 'system', deletable: false },
+  push_subscriptions: { label: 'Web Push Subscriptions', category: 'system', deletable: false },
+  spatial_ref_sys: { label: 'PostGIS Spatial Reference', category: 'system', deletable: false },
+};
+
 export async function getDatabaseTelemetry(pool: pg.Pool): Promise<DatabaseTelemetryResult> {
-  const [sizeRes, userRes] = await Promise.all([
+  const [sizeRes, userRes, tableRes] = await Promise.all([
     pool.query<{ db_size: string }>('SELECT pg_database_size(current_database())::text AS db_size'),
     pool.query<{
       id: string;
       username: string;
       email: string;
       role: SystemRole;
+      avatar_bytes: string;
       location_bytes: string;
       location_points: string;
+      message_bytes: string;
+      message_count: string;
+      place_event_count: string;
     }>(
-      `SELECT u.id, u.username, u.email, u.role,
-         COALESCE(SUM(pg_column_size(lh.*)), 0)::text AS location_bytes,
-         COUNT(lh.id)::text AS location_points
+      `WITH loc AS (
+         SELECT user_id,
+                COALESCE(SUM(pg_column_size(location_history.*)), 0)::bigint AS location_bytes,
+                COUNT(*)::bigint AS location_points
+         FROM location_history
+         GROUP BY user_id
+       ),
+       msg AS (
+         SELECT sender_id AS user_id,
+                COALESCE(SUM(pg_column_size(messages.*)), 0)::bigint AS message_bytes,
+                COUNT(*)::bigint AS message_count
+         FROM messages
+         GROUP BY sender_id
+       ),
+       pe AS (
+         SELECT user_id, COUNT(*)::bigint AS place_event_count
+         FROM group_place_events
+         GROUP BY user_id
+       )
+       SELECT u.id,
+              u.username,
+              u.email,
+              u.role,
+              octet_length(COALESCE(u.avatar_url, ''))::text AS avatar_bytes,
+              COALESCE(loc.location_bytes, 0)::text AS location_bytes,
+              COALESCE(loc.location_points, 0)::text AS location_points,
+              COALESCE(msg.message_bytes, 0)::text AS message_bytes,
+              COALESCE(msg.message_count, 0)::text AS message_count,
+              COALESCE(pe.place_event_count, 0)::text AS place_event_count
        FROM users u
-       LEFT JOIN location_history lh ON lh.user_id = u.id
-       GROUP BY u.id, u.username, u.email, u.role`,
+       LEFT JOIN loc ON loc.user_id = u.id
+       LEFT JOIN msg ON msg.user_id = u.id
+       LEFT JOIN pe ON pe.user_id = u.id`,
+    ),
+    pool.query<{
+      table_name: string;
+      row_bytes: string;
+      index_bytes: string;
+      total_bytes: string;
+      live_rows: string;
+      dead_rows: string;
+    }>(
+      `SELECT c.relname AS table_name,
+              pg_relation_size(c.oid)::text AS row_bytes,
+              pg_indexes_size(c.oid)::text AS index_bytes,
+              pg_total_relation_size(c.oid)::text AS total_bytes,
+              COALESCE(s.n_live_tup, 0)::text AS live_rows,
+              COALESCE(s.n_dead_tup, 0)::text AS dead_rows
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+       WHERE n.nspname = 'public'
+         AND c.relkind IN ('r', 'p')
+       ORDER BY pg_total_relation_size(c.oid) DESC`,
     ),
   ]);
 
   const databaseBytes = Number.parseInt(sizeRes.rows[0]?.db_size ?? '0', 10) || 0;
+
+  const tables: DatabaseTableBreakdown[] = [];
+  let sumTableBytes = 0;
+  let systemBytes = 0;
+  let manageableBytes = 0;
+  let deadTupleBytesEstimate = 0;
+  let locationHistoryIndexBytes = 0;
+
+  for (const row of tableRes.rows) {
+    const rowBytes = Number.parseInt(row.row_bytes, 10) || 0;
+    const indexBytes = Number.parseInt(row.index_bytes, 10) || 0;
+    const totalBytes = Number.parseInt(row.total_bytes, 10) || 0;
+    const toastBytes = Math.max(0, totalBytes - rowBytes - indexBytes);
+    const liveRows = Number.parseInt(row.live_rows, 10) || 0;
+    const deadRows = Number.parseInt(row.dead_rows, 10) || 0;
+    const meta = TABLE_CLASSIFICATION[row.table_name] ?? {
+      label: row.table_name,
+      category: 'system' as const,
+      deletable: false,
+    };
+
+    sumTableBytes += totalBytes;
+    if (meta.category === 'system') {
+      systemBytes += totalBytes;
+    } else {
+      manageableBytes += totalBytes;
+    }
+    if (liveRows + deadRows > 0 && deadRows > 0) {
+      deadTupleBytesEstimate += Math.round(rowBytes * (deadRows / (liveRows + deadRows)));
+    }
+    if (row.table_name === 'location_history') {
+      locationHistoryIndexBytes = indexBytes;
+    }
+
+    tables.push({
+      tableName: row.table_name,
+      label: meta.label,
+      category: meta.category,
+      deletable: meta.deletable,
+      rowBytes,
+      indexBytes,
+      toastBytes,
+      totalBytes,
+      liveRows,
+      deadRows,
+    });
+  }
+
+  const engineOverheadBytes = Math.max(0, databaseBytes - sumTableBytes);
+  if (engineOverheadBytes > 0) {
+    systemBytes += engineOverheadBytes;
+    tables.push({
+      tableName: 'pg_system_overhead',
+      label: 'PostgreSQL Catalogs, WAL & Engine',
+      category: 'system',
+      deletable: false,
+      rowBytes: engineOverheadBytes,
+      indexBytes: 0,
+      toastBytes: 0,
+      totalBytes: engineOverheadBytes,
+      liveRows: 0,
+      deadRows: 0,
+    });
+  }
+
+  const totalLocationPoints = userRes.rows.reduce(
+    (sum, r) => sum + (Number.parseInt(r.location_points, 10) || 0),
+    0,
+  );
+
   return {
     databaseBytes,
-    users: userRes.rows.map((row) => ({
-      userId: row.id,
-      username: row.username,
-      email: row.email,
-      role: row.role,
-      locationBytes: Number.parseInt(row.location_bytes, 10) || 0,
-      locationPoints: Number.parseInt(row.location_points, 10) || 0,
-    })),
+    breakdown: {
+      systemBytes,
+      manageableBytes,
+      deadTupleBytesEstimate,
+      tables,
+    },
+    users: userRes.rows.map((row) => {
+      const locationBytes = Number.parseInt(row.location_bytes, 10) || 0;
+      const locationPoints = Number.parseInt(row.location_points, 10) || 0;
+      const messageBytes = Number.parseInt(row.message_bytes, 10) || 0;
+      const messageCount = Number.parseInt(row.message_count, 10) || 0;
+      const avatarBytes = Number.parseInt(row.avatar_bytes, 10) || 0;
+      const placeEventCount = Number.parseInt(row.place_event_count, 10) || 0;
+      const estimatedIndexBytes =
+        totalLocationPoints > 0 && locationPoints > 0
+          ? Math.round((locationPoints / totalLocationPoints) * locationHistoryIndexBytes)
+          : 0;
+      return {
+        userId: row.id,
+        username: row.username,
+        email: row.email,
+        role: row.role,
+        locationBytes,
+        locationPoints,
+        estimatedIndexBytes,
+        messageBytes,
+        messageCount,
+        avatarBytes,
+        placeEventCount,
+        totalDbBytes: locationBytes + estimatedIndexBytes + messageBytes + avatarBytes,
+      };
+    }),
   };
 }
 
@@ -1521,6 +1698,61 @@ export async function deleteShareGuestRecord(
   return (res.rowCount ?? 0) > 0;
 }
 
+export interface TrimmedLocationBatch {
+  userId: string;
+  username: string | null;
+  deletedPoints: number;
+  rangeStart: string;
+  rangeEnd: string;
+  scope: 'user_points' | 'user_storage' | 'global_database' | 'retention';
+}
+
+/**
+ * Deletes location history rows older than `retentionDays` and returns per-user
+ * summaries with deleted counts and timestamp bounds.
+ */
+export async function pruneLocationHistoryWithDetails(
+  pool: pg.Pool,
+  retentionDays: number,
+): Promise<TrimmedLocationBatch[]> {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    return [];
+  }
+  const days = Math.floor(retentionDays);
+  const res = await pool.query<{
+    user_id: string;
+    username: string | null;
+    cnt: number;
+    min_ts: Date;
+    max_ts: Date;
+  }>(
+    `WITH deleted AS (
+       DELETE FROM location_history
+       WHERE recorded_at < NOW() - make_interval(days => $1)
+       RETURNING user_id, recorded_at
+     )
+     SELECT d.user_id,
+            u.username,
+            COUNT(*)::int AS cnt,
+            MIN(d.recorded_at) AS min_ts,
+            MAX(d.recorded_at) AS max_ts
+     FROM deleted d
+     LEFT JOIN users u ON u.id = d.user_id
+     GROUP BY d.user_id, u.username`,
+    [days],
+  );
+  return res.rows
+    .filter((r) => r.cnt > 0 && r.min_ts && r.max_ts)
+    .map((r) => ({
+      userId: r.user_id,
+      username: r.username ?? null,
+      deletedPoints: r.cnt,
+      rangeStart: r.min_ts.toISOString(),
+      rangeEnd: r.max_ts.toISOString(),
+      scope: 'retention' as const,
+    }));
+}
+
 /**
  * Deletes location history rows older than `retentionDays`.
  * Values <= 0 disable pruning and return 0.
@@ -1529,16 +1761,258 @@ export async function pruneLocationHistory(
   pool: pg.Pool,
   retentionDays: number,
 ): Promise<number> {
-  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
-    return 0;
-  }
-  const days = Math.floor(retentionDays);
-  const res = await pool.query(
-    `DELETE FROM location_history
-     WHERE recorded_at < NOW() - make_interval(days => $1)`,
-    [days],
+  const details = await pruneLocationHistoryWithDetails(pool, retentionDays);
+  return details.reduce((sum, item) => sum + item.deletedPoints, 0);
+}
+
+/**
+ * Enforces Option A FIFO auto-trimming when per-user point/storage quotas or
+ * the global database size ceiling are exceeded, returning exact deleted counts
+ * and timestamp ranges per affected Account.
+ */
+export async function enforceLocationQuotas(
+  pool: pg.Pool,
+  options: {
+    userId: string;
+    perUserMaxPoints?: number;
+    perUserMaxLocationBytes?: number;
+    maxDatabaseBytes?: number;
+    allowGlobalTrim?: boolean;
+  },
+): Promise<{ trims: TrimmedLocationBatch[]; globalTrimmed: boolean }> {
+  const trims: TrimmedLocationBatch[] = [];
+  let globalTrimmed = false;
+
+  const userNameRes = await pool.query<{ username: string }>(
+    'SELECT username FROM users WHERE id = $1::uuid LIMIT 1',
+    [options.userId],
   );
-  return res.rowCount ?? 0;
+  const targetUsername = userNameRes.rows[0]?.username ?? null;
+
+  const maxPoints = Math.max(0, Math.floor(options.perUserMaxPoints ?? 0));
+  if (maxPoints > 0) {
+    const countRes = await pool.query<{ cnt: number }>(
+      'SELECT COUNT(*)::int AS cnt FROM location_history WHERE user_id = $1::uuid',
+      [options.userId],
+    );
+    const currentCount = countRes.rows[0]?.cnt ?? 0;
+    const excess = currentCount - maxPoints;
+    if (excess > 0) {
+      const delRes = await pool.query<{ cnt: number; min_ts: Date | null; max_ts: Date | null }>(
+        `WITH victim AS (
+           SELECT id FROM location_history
+           WHERE user_id = $1::uuid
+           ORDER BY recorded_at ASC
+           LIMIT $2
+         ),
+         deleted AS (
+           DELETE FROM location_history lh
+           USING victim v
+           WHERE lh.id = v.id
+           RETURNING lh.recorded_at
+         )
+         SELECT COUNT(*)::int AS cnt, MIN(recorded_at) AS min_ts, MAX(recorded_at) AS max_ts
+         FROM deleted`,
+        [options.userId, excess],
+      );
+      const row = delRes.rows[0];
+      if (row && row.cnt > 0 && row.min_ts && row.max_ts) {
+        trims.push({
+          userId: options.userId,
+          username: targetUsername,
+          deletedPoints: row.cnt,
+          rangeStart: row.min_ts.toISOString(),
+          rangeEnd: row.max_ts.toISOString(),
+          scope: 'user_points',
+        });
+      }
+    }
+  }
+
+  const maxUserBytes = Math.max(0, Math.floor(options.perUserMaxLocationBytes ?? 0));
+  if (maxUserBytes > 0) {
+    const usageRes = await pool.query<{ cnt: number; bytes: string }>(
+      `SELECT COUNT(*)::int AS cnt,
+              COALESCE(SUM(pg_column_size(location_history.*)), 0)::text AS bytes
+       FROM location_history
+       WHERE user_id = $1::uuid`,
+      [options.userId],
+    );
+    const cnt = usageRes.rows[0]?.cnt ?? 0;
+    const usedBytes = Number.parseInt(usageRes.rows[0]?.bytes ?? '0', 10) || 0;
+    if (cnt > 0 && usedBytes > maxUserBytes) {
+      const avgBytesPerRow = Math.max(64, usedBytes / cnt);
+      const rowsToDelete = Math.min(cnt, Math.max(1, Math.ceil((usedBytes - maxUserBytes) / avgBytesPerRow)));
+      const delRes = await pool.query<{ cnt: number; min_ts: Date | null; max_ts: Date | null }>(
+        `WITH victim AS (
+           SELECT id FROM location_history
+           WHERE user_id = $1::uuid
+           ORDER BY recorded_at ASC
+           LIMIT $2
+         ),
+         deleted AS (
+           DELETE FROM location_history lh
+           USING victim v
+           WHERE lh.id = v.id
+           RETURNING lh.recorded_at
+         )
+         SELECT COUNT(*)::int AS cnt, MIN(recorded_at) AS min_ts, MAX(recorded_at) AS max_ts
+         FROM deleted`,
+        [options.userId, rowsToDelete],
+      );
+      const row = delRes.rows[0];
+      if (row && row.cnt > 0 && row.min_ts && row.max_ts) {
+        trims.push({
+          userId: options.userId,
+          username: targetUsername,
+          deletedPoints: row.cnt,
+          rangeStart: row.min_ts.toISOString(),
+          rangeEnd: row.max_ts.toISOString(),
+          scope: 'user_storage',
+        });
+      }
+    }
+  }
+
+  const maxDbBytes = Math.max(0, Math.floor(options.maxDatabaseBytes ?? 0));
+  if (maxDbBytes > 0 && options.allowGlobalTrim !== false) {
+    const dbRes = await pool.query<{ db_size: string; live_points: string }>(
+      `SELECT pg_database_size(current_database())::text AS db_size,
+              (SELECT COUNT(*)::text FROM location_history) AS live_points`,
+    );
+    const dbBytes = Number.parseInt(dbRes.rows[0]?.db_size ?? '0', 10) || 0;
+    const livePoints = Number.parseInt(dbRes.rows[0]?.live_points ?? '0', 10) || 0;
+    if (dbBytes > maxDbBytes && livePoints > 0) {
+      const overage = dbBytes - maxDbBytes;
+      const batchSize = Math.min(livePoints, 2000, Math.max(25, Math.ceil(overage / 160)));
+      const delRes = await pool.query<{
+        user_id: string;
+        username: string | null;
+        cnt: number;
+        min_ts: Date;
+        max_ts: Date;
+      }>(
+        `WITH victim AS (
+           SELECT id FROM location_history
+           ORDER BY recorded_at ASC
+           LIMIT $1
+         ),
+         deleted AS (
+           DELETE FROM location_history lh
+           USING victim v
+           WHERE lh.id = v.id
+           RETURNING lh.user_id, lh.recorded_at
+         )
+         SELECT d.user_id,
+                u.username,
+                COUNT(*)::int AS cnt,
+                MIN(d.recorded_at) AS min_ts,
+                MAX(d.recorded_at) AS max_ts
+         FROM deleted d
+         LEFT JOIN users u ON u.id = d.user_id
+         GROUP BY d.user_id, u.username`,
+        [batchSize],
+      );
+      for (const row of delRes.rows) {
+        if (row.cnt > 0 && row.min_ts && row.max_ts) {
+          globalTrimmed = true;
+          trims.push({
+            userId: row.user_id,
+            username: row.username ?? null,
+            deletedPoints: row.cnt,
+            rangeStart: row.min_ts.toISOString(),
+            rangeEnd: row.max_ts.toISOString(),
+            scope: 'global_database',
+          });
+        }
+      }
+    }
+  }
+
+  return { trims, globalTrimmed };
+}
+
+export async function pruneResourceTables(
+  pool: pg.Pool,
+  options: {
+    locationRetentionDays?: number;
+    messageRetentionDays?: number;
+    placeEventRetentionDays?: number;
+    resolvedRequestRetentionDays?: number;
+    vacuum?: boolean;
+  },
+): Promise<{
+  locationTrims: TrimmedLocationBatch[];
+  deletedLocations: number;
+  deletedMessages: number;
+  deletedPlaceEvents: number;
+  deletedLocationRequests: number;
+  deletedRegistrationRequests: number;
+  vacuumed: boolean;
+}> {
+  const locationTrims = await pruneLocationHistoryWithDetails(
+    pool,
+    options.locationRetentionDays ?? 0,
+  );
+  const deletedLocations = locationTrims.reduce((sum, t) => sum + t.deletedPoints, 0);
+
+  let deletedMessages = 0;
+  if ((options.messageRetentionDays ?? 0) > 0) {
+    const res = await pool.query(
+      `DELETE FROM messages WHERE created_at < NOW() - make_interval(days => $1)`,
+      [Math.floor(options.messageRetentionDays!)],
+    );
+    deletedMessages = res.rowCount ?? 0;
+  }
+
+  let deletedPlaceEvents = 0;
+  if ((options.placeEventRetentionDays ?? 0) > 0) {
+    const res = await pool.query(
+      `DELETE FROM group_place_events WHERE created_at < NOW() - make_interval(days => $1)`,
+      [Math.floor(options.placeEventRetentionDays!)],
+    );
+    deletedPlaceEvents = res.rowCount ?? 0;
+  }
+
+  let deletedLocationRequests = 0;
+  let deletedRegistrationRequests = 0;
+  if ((options.resolvedRequestRetentionDays ?? 0) > 0) {
+    const reqDays = Math.floor(options.resolvedRequestRetentionDays!);
+    const [locReqRes, regReqRes] = await Promise.all([
+      pool.query(
+        `DELETE FROM location_requests
+         WHERE status <> 'pending'
+           AND created_at < NOW() - make_interval(days => $1)`,
+        [reqDays],
+      ),
+      pool.query(
+        `DELETE FROM registration_requests
+         WHERE status IN ('DENIED', 'EXPIRED')
+           AND created_at < NOW() - make_interval(days => $1)`,
+        [reqDays],
+      ),
+    ]);
+    deletedLocationRequests = locReqRes.rowCount ?? 0;
+    deletedRegistrationRequests = regReqRes.rowCount ?? 0;
+  }
+
+  let vacuumed = false;
+  if (options.vacuum) {
+    await pool.query(
+      'VACUUM (ANALYZE) location_history, messages, group_place_events, location_requests, registration_requests',
+    );
+    vacuumed = true;
+  }
+
+  return {
+    locationTrims,
+    deletedLocations,
+    deletedMessages,
+    deletedPlaceEvents,
+    deletedLocationRequests,
+    deletedRegistrationRequests,
+    vacuumed,
+  };
 }
 
 /**

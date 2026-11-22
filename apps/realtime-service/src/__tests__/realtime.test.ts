@@ -502,6 +502,64 @@ describe('@loved-ones/realtime-service integration', () => {
       const placeDeletedLog = parsedLogs.find((l) => l.action === 'place.deleted');
       expect(placeDeletedLog?.placeName).toBe('Studio');
       expect(String(placeDeletedLog?.msg)).toContain('Alice deleted place "Studio" from group "Road Trip"');
+
+      // 9. Option A FIFO auto-trim quota enforcement + persistent admin notice until dismissed
+      const setQuotaRes = await authApp.inject({
+        method: 'PATCH',
+        url: '/api/admin/resource-limits',
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+        payload: { perUserMaxPoints: 3, autoTrimOnQuota: true },
+      });
+      expect(setQuotaRes.statusCode).toBe(200);
+
+      const extraPingRes = await realtimeApp.inject({
+        method: 'POST',
+        url: '/api/realtime/locations',
+        headers: { Authorization: `Bearer ${bob.accessToken}` },
+        payload: {
+          points: [
+            { latitude: 52.521, longitude: 13.406, recordedAt: '2026-11-19T12:15:00.000Z' },
+          ],
+        },
+      });
+      expect(extraPingRes.statusCode).toBe(200);
+
+      const telWithNoticeRes = await authApp.inject({
+        method: 'GET',
+        url: '/api/admin/telemetry',
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+      });
+      expect(telWithNoticeRes.statusCode).toBe(200);
+      const notices = telWithNoticeRes.json().notices as Array<{
+        id: string;
+        kind: string;
+        userId: string;
+        deletedPoints: number;
+        rangeStart: string;
+        rangeEnd: string;
+        message: string;
+      }>;
+      const bobNotice = notices.find((n) => n.kind === 'quota_trim' && n.userId === bob.user.id);
+      expect(bobNotice).toBeDefined();
+      expect(bobNotice!.deletedPoints).toBeGreaterThanOrEqual(3);
+      expect(bobNotice!.rangeStart).toBeTruthy();
+      expect(bobNotice!.rangeEnd).toBeTruthy();
+      expect(bobNotice!.message).toContain('Bob');
+
+      // Dismiss notice via X button endpoint
+      const dismissRes = await authApp.inject({
+        method: 'DELETE',
+        url: `/api/admin/notices/${bobNotice!.id}`,
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+      });
+      expect(dismissRes.statusCode).toBe(200);
+
+      const telAfterDismiss = await authApp.inject({
+        method: 'GET',
+        url: '/api/admin/telemetry',
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+      });
+      expect(telAfterDismiss.json().notices).toHaveLength(0);
     } finally {
       aliceSocket.disconnect();
       bobSocket.disconnect();

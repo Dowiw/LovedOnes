@@ -380,6 +380,7 @@ function createInMemoryRealtimeHarness() {
   return {
     mod,
     store,
+    broadcaster,
     locationBroadcasts,
     locationRemovals,
     chatBroadcasts,
@@ -975,5 +976,30 @@ describe('RealtimeModule domain interface', () => {
     expect(harness.locationBroadcasts).toHaveLength(1);
     expect(harness.locationBroadcasts[0]?.privacyMode).toBe('FUZZED');
     expect(harness.locationBroadcasts[0]?.isFuzzed).toBe(true);
+  });
+
+  it('invokes onLocationIngested hook only when new points are inserted', async () => {
+    const harness = createInMemoryRealtimeHarness();
+    const calls: Array<{ userId: string; inserted: number }> = [];
+    const mod = new RealtimeModule({
+      store: harness.store,
+      broadcaster: harness.broadcaster,
+      onLocationIngested: async (userId, inserted) => {
+        calls.push({ userId, inserted });
+      },
+    });
+
+    const first = await mod.ingestLocationBatch(alice, {
+      points: [{ latitude: 52.52, longitude: 13.405, recordedAt: '2026-11-21T12:00:00.000Z' }],
+    });
+    expect(first).toBe(1);
+    expect(calls).toEqual([{ userId: alice.id, inserted: 1 }]);
+
+    // Duplicate timestamp inserts 0 -> hook not re-triggered
+    const dup = await mod.ingestLocationBatch(alice, {
+      points: [{ latitude: 52.52, longitude: 13.405, recordedAt: '2026-11-21T12:00:00.000Z' }],
+    });
+    expect(dup).toBe(0);
+    expect(calls).toHaveLength(1);
   });
 });

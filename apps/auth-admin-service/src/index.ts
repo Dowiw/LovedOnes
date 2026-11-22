@@ -9,7 +9,7 @@ import pg from 'pg';
 import {
   createPool,
   pruneExpiredShareLinks,
-  pruneLocationHistory,
+  pruneResourceTables,
   resolveAuditContext,
   runMigrations,
 } from '@loved-ones/db';
@@ -18,6 +18,7 @@ import {
   evaluateClientVersion,
   MOBILE_DEFAULT_DOWNLOAD_URL,
   UpdateLogRetentionSchema,
+  UpdateResourceLimitsSchema,
 } from '@loved-ones/shared';
 import {
   attachAuthAndTelemetry,
@@ -40,8 +41,14 @@ import {
   ServiceLoggerHandle,
 } from '@loved-ones/shared/logger';
 import {
+  dismissAdminNotice,
+  dismissAllAdminNotices,
+  loadResourceLimitsSettings,
+  recordAdminNotice,
   recordUserTelemetry,
   REMOVED_USER_PREFIX,
+  saveResourceLimitsSettings,
+  startServiceHeartbeat,
 } from '@loved-ones/shared/telemetry';
 import {
   PostgresAuthGroupStore,
@@ -160,18 +167,33 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     publicServerUrl,
   });
   const registrationRequests = new RegistrationRequestModule(pool);
+  const locationRetentionDays =
+    options.locationRetentionDays ??
+    (Number.parseInt(process.env.LOCATION_RETENTION_DAYS ?? '0', 10) || 0);
+  const resourceLimitsDefaults =
+    locationRetentionDays > 0 ? { locationRetentionDays } : {};
+
+  const mapRegions = new MapRegionsModule({
+    ...(options.mapRegions ?? {}),
+    getMaxMapStorageMb: async () => {
+      const limits = await loadResourceLimitsSettings(redis, resourceLimitsDefaults);
+      return limits.maxMapStorageMb;
+    },
+    onLog: (level, msg, meta) => {
+      loggerHandle.logger[level](meta ?? {}, msg);
+    },
+  });
+
   const telemetryQuery = new TelemetryQueryModule({
     store: new PostgresRedisTelemetryStore(pool, redis, logDir),
     logDir,
     maxLogStorageMb,
     getLogRetention: () => loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb }),
+    getResourceLimits: () => loadResourceLimitsSettings(redis, resourceLimitsDefaults),
+    getMapStorageSummary: () => mapRegions.getMapStorageSummary(),
   });
 
-  const locationRetentionDays =
-    options.locationRetentionDays ??
-    (Number.parseInt(process.env.LOCATION_RETENTION_DAYS ?? '0', 10) || 0);
-
-  // Periodic automatic cleanup of expired log files, Redis buffers, expired share links, and optional location retention
+  // Periodic automatic cleanup of expired log files, Redis buffers, expired share links, and retention policies
   const runShareLinkCleanup = () => {
     void pruneExpiredShareLinks(pool)
       .then((res) => {
@@ -188,10 +210,53 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
       })
       .catch(() => {});
   };
+  const runScheduledResourceCleanup = () => {
+    void loadResourceLimitsSettings(redis, resourceLimitsDefaults)
+      .then((limits) =>
+        pruneResourceTables(pool, {
+          locationRetentionDays: limits.locationRetentionDays,
+          messageRetentionDays: limits.messageRetentionDays,
+          placeEventRetentionDays: limits.placeEventRetentionDays,
+          resolvedRequestRetentionDays: limits.resolvedRequestRetentionDays,
+        }),
+      )
+      .then(async (res) => {
+        for (const trim of res.locationTrims) {
+          await recordAdminNotice(redis, {
+            kind: 'quota_trim',
+            userId: trim.userId,
+            username: trim.username,
+            deletedPoints: trim.deletedPoints,
+            rangeStart: trim.rangeStart,
+            rangeEnd: trim.rangeEnd,
+            scope: 'retention',
+          }).catch(() => {});
+        }
+        if (
+          res.deletedLocations > 0 ||
+          res.deletedMessages > 0 ||
+          res.deletedPlaceEvents > 0 ||
+          res.deletedLocationRequests > 0 ||
+          res.deletedRegistrationRequests > 0
+        ) {
+          loggerHandle.logger.info(
+            {
+              action: 'resource.retention_pruned',
+              deletedLocations: res.deletedLocations,
+              deletedMessages: res.deletedMessages,
+              deletedPlaceEvents: res.deletedPlaceEvents,
+              deletedLocationRequests: res.deletedLocationRequests,
+              deletedRegistrationRequests: res.deletedRegistrationRequests,
+            },
+            `Scheduled retention pruned ${res.deletedLocations} ping(s), ${res.deletedMessages} message(s), ${res.deletedPlaceEvents} geofence event(s), and ${res.deletedLocationRequests + res.deletedRegistrationRequests} old request(s)`,
+          );
+        }
+      })
+      .catch(() => {});
+  };
+
   runShareLinkCleanup();
-  if (locationRetentionDays > 0) {
-    void pruneLocationHistory(pool, locationRetentionDays).catch(() => {});
-  }
+  runScheduledResourceCleanup();
   const pruneInterval = setInterval(() => {
     void loadLogRetentionSettings(redis, { maxStorageMb: maxLogStorageMb })
       .then((settings) => {
@@ -204,17 +269,9 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
       })
       .catch(() => {});
     runShareLinkCleanup();
-    if (locationRetentionDays > 0) {
-      void pruneLocationHistory(pool, locationRetentionDays).catch(() => {});
-    }
+    runScheduledResourceCleanup();
   }, 60 * 60 * 1000);
   pruneInterval.unref();
-  const mapRegions = new MapRegionsModule({
-    ...(options.mapRegions ?? {}),
-    onLog: (level, msg, meta) => {
-      loggerHandle.logger[level](meta ?? {}, msg);
-    },
-  });
   const systemUpdater = new SystemUpdateModule({
     driver: options.systemUpdater?.driver,
     updaterUrl: options.systemUpdater?.updaterUrl ?? process.env.SYSTEM_UPDATER_URL,
@@ -1050,6 +1107,144 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   );
 
   app.get(
+    '/api/admin/resource-limits',
+    { preHandler: [requireHostAdmin] },
+    async () => {
+      const settings = await loadResourceLimitsSettings(redis, resourceLimitsDefaults);
+      return { settings };
+    },
+  );
+
+  app.patch(
+    '/api/admin/resource-limits',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const parsed = UpdateResourceLimitsSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        throw new DomainError(400, 'Invalid resource limits settings', parsed.error.flatten());
+      }
+      const settings = await saveResourceLimitsSettings(
+        redis,
+        parsed.data,
+        resourceLimitsDefaults,
+      );
+      loggerHandle.logger.info(
+        {
+          action: 'resource.limits_updated',
+          userId: actor.id,
+          username: actor.username,
+          maxDatabaseMb: settings.maxDatabaseMb,
+          perUserMaxLocationMb: settings.perUserMaxLocationMb,
+          perUserMaxPoints: settings.perUserMaxPoints,
+          locationRetentionDays: settings.locationRetentionDays,
+          messageRetentionDays: settings.messageRetentionDays,
+          placeEventRetentionDays: settings.placeEventRetentionDays,
+          resolvedRequestRetentionDays: settings.resolvedRequestRetentionDays,
+          maxMapStorageMb: settings.maxMapStorageMb,
+          autoTrimOnQuota: settings.autoTrimOnQuota,
+        },
+        `${actor.username} updated resource allocation limits (DB cap ${settings.maxDatabaseMb || 'unlimited'} MB, per-user ${settings.perUserMaxPoints || 'unlimited'} pts / ${settings.perUserMaxLocationMb || 'unlimited'} MB, map cap ${settings.maxMapStorageMb || 'unlimited'} MB)`,
+      );
+      return { settings };
+    },
+  );
+
+  app.post(
+    '/api/admin/resource-limits/prune',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const body = (request.body ?? {}) as { vacuum?: unknown };
+      const vacuum = body?.vacuum === true;
+      const settings = await loadResourceLimitsSettings(redis, resourceLimitsDefaults);
+      const result = await pruneResourceTables(pool, {
+        locationRetentionDays: settings.locationRetentionDays,
+        messageRetentionDays: settings.messageRetentionDays,
+        placeEventRetentionDays: settings.placeEventRetentionDays,
+        resolvedRequestRetentionDays: settings.resolvedRequestRetentionDays,
+        vacuum,
+      });
+      for (const trim of result.locationTrims) {
+        await recordAdminNotice(redis, {
+          kind: 'quota_trim',
+          userId: trim.userId,
+          username: trim.username,
+          deletedPoints: trim.deletedPoints,
+          rangeStart: trim.rangeStart,
+          rangeEnd: trim.rangeEnd,
+          scope: 'retention',
+        }).catch(() => {});
+      }
+      loggerHandle.logger.info(
+        {
+          action: 'resource.pruned',
+          userId: actor.id,
+          username: actor.username,
+          deletedLocations: result.deletedLocations,
+          deletedMessages: result.deletedMessages,
+          deletedPlaceEvents: result.deletedPlaceEvents,
+          deletedLocationRequests: result.deletedLocationRequests,
+          deletedRegistrationRequests: result.deletedRegistrationRequests,
+          vacuumed: result.vacuumed,
+        },
+        `${actor.username} ran database cleanup (deleted ${result.deletedLocations} pings, ${result.deletedMessages} messages, ${result.deletedPlaceEvents} geofence events${result.vacuumed ? ', vacuumed tables' : ''})`,
+      );
+      return {
+        settings,
+        deletedLocations: result.deletedLocations,
+        deletedMessages: result.deletedMessages,
+        deletedPlaceEvents: result.deletedPlaceEvents,
+        deletedLocationRequests: result.deletedLocationRequests,
+        deletedRegistrationRequests: result.deletedRegistrationRequests,
+        vacuumed: result.vacuumed,
+      };
+    },
+  );
+
+  app.delete(
+    '/api/admin/notices/:noticeId',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const { noticeId } = request.params as { noticeId: string };
+      const dismissed = await dismissAdminNotice(redis, noticeId);
+      if (!dismissed) {
+        throw new DomainError(404, 'Admin notice not found');
+      }
+      loggerHandle.logger.info(
+        {
+          action: 'admin.notice_dismissed',
+          userId: actor.id,
+          username: actor.username,
+          noticeId,
+        },
+        `${actor.username} dismissed admin notice ${noticeId}`,
+      );
+      return { ok: true, noticeId };
+    },
+  );
+
+  app.delete(
+    '/api/admin/notices',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const cleared = await dismissAllAdminNotices(redis);
+      loggerHandle.logger.info(
+        {
+          action: 'admin.notices_cleared',
+          userId: actor.id,
+          username: actor.username,
+          cleared,
+        },
+        `${actor.username} cleared ${cleared} admin notice(s)`,
+      );
+      return { ok: true, cleared };
+    },
+  );
+
+  app.get(
     '/api/admin/system/update',
     { preHandler: [requireHostAdmin] },
     async (request: AuthenticatedRequest) => {
@@ -1235,8 +1430,19 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     });
   });
 
+  const heartbeat = startServiceHeartbeat({
+    service: 'auth-admin-service',
+    redis,
+    version: resolvedServerVersion,
+    mounts: [
+      { mountLabel: 'logs', path: logDir },
+      { mountLabel: 'tiles', path: mapRegions.tilesDir },
+    ],
+  });
+
   app.addHook('onClose', async () => {
     clearInterval(pruneInterval);
+    await heartbeat.stop();
     await mapRegions.close();
     await loggerHandle.close();
     await redis.quit().catch(() => redis.disconnect());
