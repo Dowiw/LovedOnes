@@ -29,6 +29,7 @@ import {
   averageNearbyTrailPings,
   buildExternalMapsUrls,
   buildGeodesicCircleRing,
+  buildTrailGeoJsonFeatures,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
   DEFAULT_FUZZED_HALO_COLOR,
@@ -48,9 +49,11 @@ import {
   type LocationShareLinkItem,
   type MapDownloadJob,
   type MapRegion,
+  type MatchedUserTrail,
   type MemberPresenceUpdate,
   type PlaceTransitionEvent,
   type PrivacyMode,
+  type TrailDisplayMode,
 } from '@loved-ones/shared';
 import { ColorPickerSheet } from '../components/ColorPickerSheet';
 import {
@@ -206,6 +209,8 @@ export function MobileMapScreen({
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [activeTrailUserId, setActiveTrailUserId] = useState<string | null>(null);
   const [memberTrailPoints, setMemberTrailPoints] = useState<LocationBroadcast[]>([]);
+  const [memberMatchedTrails, setMemberMatchedTrails] = useState<MatchedUserTrail[]>([]);
+  const [trailDisplayMode, setTrailDisplayMode] = useState<TrailDisplayMode>('roads');
   const [trailBusy, setTrailBusy] = useState(false);
   const [trailMessage, setTrailMessage] = useState<string | null>(null);
 
@@ -928,6 +933,7 @@ export function MobileMapScreen({
     setSelectedMemberId(null);
     setActiveTrailUserId(null);
     setMemberTrailPoints([]);
+    setMemberMatchedTrails([]);
     setTrailMessage(null);
 
     if (!serverUrl || !accessToken) return;
@@ -1127,6 +1133,7 @@ export function MobileMapScreen({
     if (activeTrailUserId === member.userId) {
       setActiveTrailUserId(null);
       setMemberTrailPoints([]);
+      setMemberMatchedTrails([]);
       setTrailMessage(null);
       return;
     }
@@ -1152,9 +1159,13 @@ export function MobileMapScreen({
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
-      const data = (await res.json()) as { trails?: LocationBroadcast[] };
+      const data = (await res.json()) as {
+        trails?: LocationBroadcast[];
+        matchedTrails?: MatchedUserTrail[];
+      };
       const points = data.trails ?? [];
       setMemberTrailPoints(points);
+      setMemberMatchedTrails(data.matchedTrails ?? []);
       if (points.length === 0) {
         setTrailMessage('No recorded trail pings for this member in the last 24 hours.');
       } else {
@@ -1167,6 +1178,7 @@ export function MobileMapScreen({
     } catch (err) {
       setActiveTrailUserId(null);
       setMemberTrailPoints([]);
+      setMemberMatchedTrails([]);
       setTrailMessage(formatUserError(err, 'Unable to load trail right now.'));
     } finally {
       setTrailBusy(false);
@@ -1182,6 +1194,7 @@ export function MobileMapScreen({
     if (activeTrailUserId && activeTrailUserId !== loc.userId) {
       setActiveTrailUserId(null);
       setMemberTrailPoints([]);
+      setMemberMatchedTrails([]);
       setTrailMessage(null);
     }
     cameraRef.current?.flyTo({
@@ -1941,42 +1954,23 @@ export function MobileMapScreen({
   }, [activeTrailUserId, memberTrailPoints]);
 
   const memberTrailGeoJson = useMemo(() => {
-    const features: Array<{
-      type: 'Feature';
-      geometry:
-        | { type: 'LineString'; coordinates: [number, number][] }
-        | { type: 'Point'; coordinates: [number, number] };
-      properties: Record<string, unknown>;
-    }> = [];
-
-    if (compactedTrail) {
-      if (compactedTrail.pathCoordinates.length >= 2) {
-        features.push({
-          type: 'Feature',
-          geometry: {
-            type: 'LineString',
-            coordinates: compactedTrail.pathCoordinates,
-          },
-          properties: { kind: 'path' },
-        });
-      }
-      for (const stop of compactedTrail.stops) {
-        features.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: [stop.longitude, stop.latitude],
-          },
-          properties: { kind: 'stop', pingCount: stop.pingCount },
-        });
-      }
+    if (!activeTrailUserId || memberTrailPoints.length === 0) {
+      return {
+        type: 'FeatureCollection' as const,
+        features: [],
+      };
     }
-
+    const { features } = buildTrailGeoJsonFeatures({
+      trails: memberTrailPoints,
+      matchedTrails: memberMatchedTrails,
+      mode: trailDisplayMode,
+      filterUserId: activeTrailUserId,
+    });
     return {
       type: 'FeatureCollection' as const,
       features,
     };
-  }, [compactedTrail]);
+  }, [activeTrailUserId, memberTrailPoints, memberMatchedTrails, trailDisplayMode]);
 
   const showCompassBtn = Math.abs(mapBearing) > 2;
 
@@ -2080,12 +2074,45 @@ export function MobileMapScreen({
           <Layer
             id="member-trail-line"
             type="line"
-            filter={['==', ['geometry-type'], 'LineString']}
+            filter={['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'road']]}
+            layout={{
+              'line-cap': 'round',
+              'line-join': 'round',
+            }}
             paint={{
-              'line-color': '#18181b',
-              'line-width': 3,
-              'line-opacity': 0.8,
+              'line-color': resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+              'line-width': 3.5,
+              'line-opacity': 0.9,
+            }}
+          />
+          <Layer
+            id="member-trail-direct-line"
+            type="line"
+            filter={['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'direct']]}
+            layout={{
+              'line-cap': 'round',
+              'line-join': 'round',
+            }}
+            paint={{
+              'line-color': resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+              'line-width': 2.5,
+              'line-opacity': 0.78,
               'line-dasharray': [2, 1.5],
+            }}
+          />
+          <Layer
+            id="member-trail-spur-line"
+            type="line"
+            filter={['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'spur']]}
+            layout={{
+              'line-cap': 'round',
+              'line-join': 'round',
+            }}
+            paint={{
+              'line-color': resolvedMapTheme === 'dark' ? '#a1a1aa' : '#52525b',
+              'line-width': 1.75,
+              'line-opacity': 0.6,
+              'line-dasharray': [1.2, 1.5],
             }}
           />
           <Layer
@@ -2094,8 +2121,8 @@ export function MobileMapScreen({
             filter={['==', ['geometry-type'], 'Point']}
             paint={{
               'circle-radius': 4.5,
-              'circle-color': '#ffffff',
-              'circle-stroke-color': '#18181b',
+              'circle-color': resolvedMapTheme === 'dark' ? '#09090b' : '#ffffff',
+              'circle-stroke-color': resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
               'circle-stroke-width': 2,
             }}
           />
@@ -2627,6 +2654,32 @@ export function MobileMapScreen({
                       <Text style={styles.openMapsBtnText}>Maps</Text>
                     </TouchableOpacity>
                   </View>
+
+                  {activeTrailUserId === selectedMember.userId &&
+                    memberTrailPoints.length > 0 &&
+                    !selectedMember.isFuzzed && (
+                      <View style={styles.trailModePillRow}>
+                        {(['roads', 'raw'] as const).map((mode) => (
+                          <TouchableOpacity
+                            key={mode}
+                            style={[
+                              styles.trailModePill,
+                              trailDisplayMode === mode && styles.trailModePillActive,
+                            ]}
+                            onPress={() => setTrailDisplayMode(mode)}
+                          >
+                            <Text
+                              style={[
+                                styles.trailModePillText,
+                                trailDisplayMode === mode && styles.trailModePillTextActive,
+                              ]}
+                            >
+                              {mode === 'roads' ? 'Roads' : 'Raw'}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
 
                   {trailMessage && <Text style={styles.settingsHint}>{trailMessage}</Text>}
                 </View>
@@ -4635,6 +4688,30 @@ export function createMobileStyles(
     },
     detailTrailBtnText: { color: ui.ink, fontSize: 12, fontWeight: '700' },
     detailTrailBtnTextActive: { color: ui.ctaText },
+    trailModePillRow: {
+      flexDirection: 'row',
+      alignSelf: 'flex-start',
+      gap: 4,
+      backgroundColor: ui.surfaceChip,
+      borderRadius: 9,
+      padding: 3,
+    },
+    trailModePill: {
+      borderRadius: 7,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    trailModePillActive: {
+      backgroundColor: ui.ctaBg,
+    },
+    trailModePillText: {
+      color: ui.inkMuted,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    trailModePillTextActive: {
+      color: ui.ctaText,
+    },
     detailFocusBtn: {
       borderRadius: 10,
       backgroundColor: ui.surfaceChip,

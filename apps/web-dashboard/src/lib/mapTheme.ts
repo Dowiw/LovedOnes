@@ -108,6 +108,8 @@ const LIGHT_MAP_PAINT_OVERRIDES: MapLayerPaintOverride[] = [
   { layerId: 'places-cities', property: 'text-color', value: '#18181b' },
   { layerId: 'places-cities', property: 'text-halo-color', value: 'rgba(255, 255, 255, 0.96)' },
   { layerId: 'lovedones-trails-line', property: 'line-color', value: '#18181b' },
+  { layerId: 'lovedones-trails-direct-line', property: 'line-color', value: '#18181b' },
+  { layerId: 'lovedones-trails-spur-line', property: 'line-color', value: '#52525b' },
   { layerId: 'lovedones-trails-pts', property: 'circle-color', value: '#ffffff' },
   { layerId: 'lovedones-trails-pts', property: 'circle-stroke-color', value: '#18181b' },
 ];
@@ -160,6 +162,8 @@ const DARK_MAP_PAINT_OVERRIDES: MapLayerPaintOverride[] = [
   { layerId: 'places-cities', property: 'text-color', value: '#f4f4f5' },
   { layerId: 'places-cities', property: 'text-halo-color', value: 'rgba(17, 19, 24, 0.96)' },
   { layerId: 'lovedones-trails-line', property: 'line-color', value: '#f4f4f5' },
+  { layerId: 'lovedones-trails-direct-line', property: 'line-color', value: '#f4f4f5' },
+  { layerId: 'lovedones-trails-spur-line', property: 'line-color', value: '#a1a1aa' },
   { layerId: 'lovedones-trails-pts', property: 'circle-color', value: '#09090b' },
   { layerId: 'lovedones-trails-pts', property: 'circle-stroke-color', value: '#f4f4f5' },
 ];

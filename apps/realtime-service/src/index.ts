@@ -58,6 +58,7 @@ import {
   WebPushTransport,
 } from './adapters/web-push-adapter.js';
 import { PushNotificationsModule } from './domain/push-notifications-module.js';
+import { RoadTrailMatcher } from './domain/road-trail-matcher.js';
 import { ShareLinksModule } from './domain/share-links-module.js';
 import { matchesIfNoneMatch, RealtimeModule } from './domain/realtime-module.js';
 
@@ -66,6 +67,7 @@ export interface RealtimeServiceOptions {
   redisUrl?: string;
   jwtSecret?: string;
   logDir?: string;
+  tilesDir?: string;
   disableFileLog?: boolean;
   disableRedisLog?: boolean;
   trustCloudflareHeaders?: boolean;
@@ -227,11 +229,15 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     return undefined;
   };
 
+  const roadMatcher = new RoadTrailMatcher({
+    tilesDir: options.tilesDir ?? process.env.TILES_DIR,
+  });
   let lastGlobalTrimAt = 0;
 
   const realtime = new RealtimeModule({
     store: new PostgresRealtimeStore(pool, redis),
     broadcaster: new SocketIoBroadcaster(io),
+    roadMatcher,
     onLocationIngested: async (userId) => {
       const limits = await loadResourceLimitsSettings(redis);
       if (!limits.autoTrimOnQuota) return;
@@ -304,6 +310,9 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     },
   });
 
+  let isClosing = false;
+  const pendingDisconnectTimers = new Set<ReturnType<typeof setTimeout>>();
+
   logSubClient.on('message', (channel, message) => {
     if (channel === LOGS_STREAM_CHANNEL) {
       io.to('admin:logs').emit('logs:line', message);
@@ -314,9 +323,12 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         const parsed = AccountRemovedEventSchema.parse(JSON.parse(message));
         const room = `user:${parsed.userId}`;
         io.to(room).emit('account:removed', parsed);
-        setTimeout(() => {
-          io.in(room).disconnectSockets(true);
+        const timer = setTimeout(() => {
+          pendingDisconnectTimers.delete(timer);
+          if (isClosing) return;
+          io.in(room).local.disconnectSockets(true);
         }, 180);
+        pendingDisconnectTimers.add(timer);
       } catch {
         // Ignore malformed account removal pub/sub payloads
       }
@@ -719,12 +731,11 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest) => {
       const { groupId } = request.params as { groupId: string };
-      const trails = await realtime.getGroupTrails(
+      return realtime.getGroupTrailsWithMatches(
         request.authUser!,
         groupId,
         request.query,
       );
-      return { trails };
     },
   );
 
@@ -1271,7 +1282,13 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   });
 
   app.addHook('onClose', async () => {
-    io.disconnectSockets(true);
+    isClosing = true;
+    for (const timer of pendingDisconnectTimers) {
+      clearTimeout(timer);
+    }
+    pendingDisconnectTimers.clear();
+    io.local.disconnectSockets(true);
+    await roadMatcher.close().catch(() => {});
     await heartbeat.stop();
     await loggerHandle.close();
     await logSubClient.unsubscribe().catch(() => {});

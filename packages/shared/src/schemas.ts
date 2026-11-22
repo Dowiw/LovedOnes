@@ -1158,6 +1158,34 @@ export interface PublicLocationShareCreatorPin {
   recordedAt: string | null;
 }
 
+export const TrailSegmentKindSchema = z.enum(['road', 'direct', 'spur']);
+export type TrailSegmentKindValue = z.infer<typeof TrailSegmentKindSchema>;
+
+export const TrailPathSegmentSchema = z.object({
+  kind: TrailSegmentKindSchema,
+  coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
+  roadKind: z.string().optional(),
+});
+
+export const AveragedTrailStopSchema = z.object({
+  userId: z.string(),
+  username: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  pingCount: z.number().int().min(1),
+  firstRecordedAt: z.string(),
+  lastRecordedAt: z.string(),
+  isFuzzed: z.boolean(),
+});
+
+export const MatchedUserTrailSchema = z.object({
+  userId: z.string(),
+  username: z.string(),
+  stops: z.array(AveragedTrailStopSchema),
+  segments: z.array(TrailPathSegmentSchema),
+  hasRoadMatches: z.boolean(),
+});
+
 export interface PublicLocationShareSnapshot {
   token: string;
   label: string | null;

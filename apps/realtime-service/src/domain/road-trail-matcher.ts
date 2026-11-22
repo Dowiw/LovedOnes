@@ -1,0 +1,1222 @@
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib';
+import { VectorTile } from '@mapbox/vector-tile';
+import Pbf from 'pbf';
+import { Compression, Header, PMTiles, Source } from 'pmtiles';
+import {
+  AveragedTrailStop,
+  averageNearbyTrailPings,
+  BoundingBox,
+  DEFAULT_TRAIL_MAX_DISTANCE_METERS,
+  DEFAULT_TRAIL_MAX_TIME_GAP_MS,
+  DEFAULT_TRAIL_SPUR_THRESHOLD_METERS,
+  haversineMeters,
+  MatchedUserTrail,
+  mergeTrailCoordinates,
+  splitVisitsIntoTrips,
+  TrailPathSegment,
+  TrailPingLike,
+  TrailStopVisit,
+} from '@loved-ones/shared';
+
+const METERS_PER_DEGREE_LAT = 111_320;
+const MAX_SNAP_DISTANCE_METERS = 150;
+const MAX_CANDIDATES_PER_STOP = 4;
+const MAX_TILES_PER_TRIP = 36;
+const MAX_ASTAR_EXPANDED_NODES = 12_000;
+const TARGET_ROAD_ZOOM = 14;
+const NODE_MERGE_DISTANCE_METERS = 2.5;
+const SEGMENT_GRID_CELL_METERS = 80;
+const ARCHIVE_REFRESH_INTERVAL_MS = 15_000;
+const EXCLUDED_ROAD_KINDS = new Set(['rail', 'ferry']);
+
+export interface RoadEdgeFeature {
+  coords: [number, number][];
+  kind: string;
+}
+
+export interface RoadTileProvider {
+  getRevisionKey(): Promise<string>;
+  getRoadFeaturesForBbox(bbox: BoundingBox): Promise<RoadEdgeFeature[]>;
+}
+
+class NodeFileSource implements Source {
+  private fdPromise: Promise<fs.promises.FileHandle> | null = null;
+
+  constructor(private readonly filePath: string) {}
+
+  getKey(): string {
+    return this.filePath;
+  }
+
+  private getHandle(): Promise<fs.promises.FileHandle> {
+    if (!this.fdPromise) {
+      this.fdPromise = fs.promises.open(this.filePath, 'r');
+    }
+    return this.fdPromise;
+  }
+
+  async getBytes(offset: number, length: number): Promise<{ data: ArrayBuffer }> {
+    const handle = await this.getHandle();
+    const buf = Buffer.allocUnsafe(length);
+    const { bytesRead } = await handle.read(buf, 0, length, offset);
+    return {
+      data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + bytesRead),
+    };
+  }
+
+  async close(): Promise<void> {
+    if (this.fdPromise) {
+      const handle = await this.fdPromise.catch(() => null);
+      this.fdPromise = null;
+      await handle?.close().catch(() => {});
+    }
+  }
+}
+
+async function nodeDecompress(buf: ArrayBuffer, compression: Compression): Promise<ArrayBuffer> {
+  if (compression === Compression.None || compression === Compression.Unknown) {
+    return buf;
+  }
+  const input = Buffer.from(buf);
+  let out: Buffer;
+  if (compression === Compression.Gzip) {
+    out = zlib.gunzipSync(input);
+  } else if (compression === Compression.Brotli) {
+    out = zlib.brotliDecompressSync(input);
+  } else if (compression === Compression.Zstd && typeof zlib.zstdDecompressSync === 'function') {
+    out = zlib.zstdDecompressSync(input);
+  } else {
+    throw new Error(`Unsupported PMTiles compression algorithm: ${compression}`);
+  }
+  return Uint8Array.from(out).buffer;
+}
+
+function lonLatToTileXY(lon: number, lat: number, z: number): { x: number; y: number } {
+  const n = 2 ** z;
+  const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, lat));
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((lon + 180) / 360) * n)));
+  const latRad = (clampedLat * Math.PI) / 180;
+  const y = Math.max(
+    0,
+    Math.min(
+      n - 1,
+      Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n),
+    ),
+  );
+  return { x, y };
+}
+
+function bboxesOverlap(a: BoundingBox, b: BoundingBox): boolean {
+  return a.minLon <= b.maxLon && a.maxLon >= b.minLon && a.minLat <= b.maxLat && a.maxLat >= b.minLat;
+}
+
+function clipSegmentToTileBounds(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  extent: number,
+): [number, number, number, number] | null {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  let t0 = 0;
+  let t1 = 1;
+  const checks: Array<[number, number]> = [
+    [-dx, x0],
+    [dx, extent - x0],
+    [-dy, y0],
+    [dy, extent - y0],
+  ];
+  for (const [p, q] of checks) {
+    if (Math.abs(p) < 1e-12) {
+      if (q < 0) return null;
+    } else {
+      const r = q / p;
+      if (p < 0) {
+        if (r > t1) return null;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return null;
+        if (r < t1) t1 = r;
+      }
+    }
+  }
+  return [x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy];
+}
+
+function mvtPointToLonLat(
+  px: number,
+  py: number,
+  extent: number,
+  z: number,
+  tileX: number,
+  tileY: number,
+): [number, number] {
+  const n = 2 ** z;
+  const lon = ((tileX + px / extent) / n) * 360 - 180;
+  const y2 = Math.PI * (1 - (2 * (tileY + py / extent)) / n);
+  const lat = (Math.atan(Math.sinh(y2)) * 180) / Math.PI;
+  return [lon, lat];
+}
+
+function decodeRoadsFromMvtTile(
+  bytes: ArrayBuffer,
+  z: number,
+  x: number,
+  y: number,
+): RoadEdgeFeature[] {
+  const tile = new VectorTile(new Pbf(new Uint8Array(bytes)));
+  const roadsLayer = tile.layers.roads;
+  if (!roadsLayer) return [];
+
+  const features: RoadEdgeFeature[] = [];
+  for (let i = 0; i < roadsLayer.length; i += 1) {
+    const feat = roadsLayer.feature(i);
+    if (feat.type !== 2) continue;
+    const rawKind = feat.properties?.kind;
+    const kind = typeof rawKind === 'string' ? rawKind : 'minor_road';
+    if (EXCLUDED_ROAD_KINDS.has(kind)) continue;
+
+    const extent = feat.extent || roadsLayer.extent || 4096;
+    const lines = feat.loadGeometry();
+    for (const line of lines) {
+      if (line.length < 2) continue;
+      let currentCoords: [number, number][] = [];
+      let prevClippedEnd: [number, number] | null = null;
+
+      for (let j = 0; j < line.length - 1; j += 1) {
+        const a = line[j];
+        const b = line[j + 1];
+        const clipped = clipSegmentToTileBounds(a.x, a.y, b.x, b.y, extent);
+        if (!clipped) {
+          if (currentCoords.length >= 2) {
+            features.push({ coords: currentCoords, kind });
+          }
+          currentCoords = [];
+          prevClippedEnd = null;
+          continue;
+        }
+        const [cx0, cy0, cx1, cy1] = clipped;
+        const p0 = mvtPointToLonLat(cx0, cy0, extent, z, x, y);
+        const p1 = mvtPointToLonLat(cx1, cy1, extent, z, x, y);
+        const continued =
+          prevClippedEnd !== null &&
+          Math.abs(prevClippedEnd[0] - cx0) < 1e-6 &&
+          Math.abs(prevClippedEnd[1] - cy0) < 1e-6;
+        if (!continued) {
+          if (currentCoords.length >= 2) {
+            features.push({ coords: currentCoords, kind });
+          }
+          currentCoords = [p0, p1];
+        } else {
+          currentCoords.push(p1);
+        }
+        prevClippedEnd = [cx1, cy1];
+      }
+
+      if (currentCoords.length >= 2) {
+        features.push({ coords: currentCoords, kind });
+      }
+    }
+  }
+  return features;
+}
+
+interface ArchiveHandle {
+  filePath: string;
+  mtimeMs: number;
+  size: number;
+  header: Header;
+  bbox: BoundingBox;
+  source: NodeFileSource;
+  pmtiles: PMTiles;
+}
+
+/**
+ * Reads road geometries directly from the local regional `.pmtiles` vector archives
+ * in `TILES_DIR`, caching archive headers and decoded MVT road tiles in memory.
+ */
+export class PmtilesRoadTileProvider implements RoadTileProvider {
+  private readonly tilesDir: string;
+  private readonly tileCache = new Map<string, RoadEdgeFeature[]>();
+  private readonly maxCachedTiles: number;
+  private archives: ArchiveHandle[] = [];
+  private lastScanAt = 0;
+  private revisionKey = 'empty';
+  private scanPromise: Promise<void> | null = null;
+
+  constructor(options: { tilesDir?: string; maxCachedTiles?: number } = {}) {
+    this.tilesDir = path.resolve(
+      options.tilesDir ?? process.env.TILES_DIR ?? path.resolve(process.cwd(), '../../infra/tiles'),
+    );
+    this.maxCachedTiles = options.maxCachedTiles ?? 256;
+  }
+
+  private async ensureArchives(): Promise<ArchiveHandle[]> {
+    const now = Date.now();
+    if (now - this.lastScanAt < ARCHIVE_REFRESH_INTERVAL_MS && this.archives.length > 0) {
+      return this.archives;
+    }
+    if (this.scanPromise) {
+      await this.scanPromise;
+      return this.archives;
+    }
+    this.scanPromise = this.scanArchives().finally(() => {
+      this.scanPromise = null;
+    });
+    await this.scanPromise;
+    return this.archives;
+  }
+
+  private async scanArchives(): Promise<void> {
+    this.lastScanAt = Date.now();
+    const candidates: string[] = [];
+    const primary = path.join(this.tilesDir, 'region.pmtiles');
+    if (fs.existsSync(primary)) {
+      candidates.push(primary);
+    }
+    const regionsDir = path.join(this.tilesDir, 'regions');
+    try {
+      const entries = await fs.promises.readdir(regionsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith('.pmtiles')) {
+          candidates.push(path.join(regionsDir, entry.name));
+        }
+      }
+    } catch {
+      // regions directory may not exist yet
+    }
+
+    const existingByKey = new Map<string, ArchiveHandle>();
+    for (const arch of this.archives) {
+      existingByKey.set(`${arch.filePath}:${arch.mtimeMs}:${arch.size}`, arch);
+    }
+
+    const nextArchives: ArchiveHandle[] = [];
+    const keptKeys = new Set<string>();
+    const revParts: string[] = [];
+
+    for (const filePath of candidates.sort()) {
+      try {
+        const st = await fs.promises.stat(filePath);
+        if (!st.isFile() || st.size < 512) continue;
+        const key = `${filePath}:${st.mtimeMs}:${st.size}`;
+        const reused = existingByKey.get(key);
+        if (reused) {
+          nextArchives.push(reused);
+          keptKeys.add(key);
+          revParts.push(key);
+          continue;
+        }
+        const source = new NodeFileSource(filePath);
+        const pmtiles = new PMTiles(source, undefined, nodeDecompress);
+        const header = await pmtiles.getHeader();
+        if (header.numTileEntries === 0 || header.maxZoom < header.minZoom) {
+          await source.close();
+          continue;
+        }
+        const bbox: BoundingBox = {
+          minLon: header.minLon,
+          minLat: header.minLat,
+          maxLon: header.maxLon,
+          maxLat: header.maxLat,
+        };
+        nextArchives.push({
+          filePath,
+          mtimeMs: st.mtimeMs,
+          size: st.size,
+          header,
+          bbox,
+          source,
+          pmtiles,
+        });
+        revParts.push(key);
+      } catch {
+        // Skip placeholder or unreadable archives
+      }
+    }
+
+    for (const [key, oldArch] of existingByKey.entries()) {
+      if (!keptKeys.has(key)) {
+        await oldArch.source.close().catch(() => {});
+      }
+    }
+
+    this.archives = nextArchives;
+    this.revisionKey = revParts.length > 0 ? revParts.join('|') : 'empty';
+  }
+
+  async getRevisionKey(): Promise<string> {
+    await this.ensureArchives();
+    return this.revisionKey;
+  }
+
+  private getCachedTile(key: string): RoadEdgeFeature[] | undefined {
+    const hit = this.tileCache.get(key);
+    if (!hit) return undefined;
+    this.tileCache.delete(key);
+    this.tileCache.set(key, hit);
+    return hit;
+  }
+
+  private setCachedTile(key: string, features: RoadEdgeFeature[]): void {
+    if (this.tileCache.has(key)) {
+      this.tileCache.delete(key);
+    } else if (this.tileCache.size >= this.maxCachedTiles) {
+      const oldestKey = this.tileCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.tileCache.delete(oldestKey);
+      }
+    }
+    this.tileCache.set(key, features);
+  }
+
+  async getRoadFeaturesForBbox(bbox: BoundingBox): Promise<RoadEdgeFeature[]> {
+    const archives = await this.ensureArchives();
+    const matching = archives.filter((a) => bboxesOverlap(a.bbox, bbox));
+    if (matching.length === 0) return [];
+
+    const results: RoadEdgeFeature[] = [];
+    for (const arch of matching) {
+      let z = Math.min(arch.header.maxZoom, TARGET_ROAD_ZOOM);
+      z = Math.max(arch.header.minZoom, z);
+
+      let minTile = lonLatToTileXY(bbox.minLon, bbox.maxLat, z);
+      let maxTile = lonLatToTileXY(bbox.maxLon, bbox.minLat, z);
+      let count = (maxTile.x - minTile.x + 1) * (maxTile.y - minTile.y + 1);
+      while (count > MAX_TILES_PER_TRIP && z > arch.header.minZoom) {
+        z -= 1;
+        minTile = lonLatToTileXY(bbox.minLon, bbox.maxLat, z);
+        maxTile = lonLatToTileXY(bbox.maxLon, bbox.minLat, z);
+        count = (maxTile.x - minTile.x + 1) * (maxTile.y - minTile.y + 1);
+      }
+      if (count > MAX_TILES_PER_TRIP) continue;
+
+      for (let x = minTile.x; x <= maxTile.x; x += 1) {
+        for (let y = minTile.y; y <= maxTile.y; y += 1) {
+          const cacheKey = `${arch.filePath}:${arch.mtimeMs}:${z}/${x}/${y}`;
+          let decoded = this.getCachedTile(cacheKey);
+          if (!decoded) {
+            try {
+              const resp = await arch.pmtiles.getZxy(z, x, y);
+              decoded = resp?.data ? decodeRoadsFromMvtTile(resp.data, z, x, y) : [];
+            } catch {
+              decoded = [];
+            }
+            this.setCachedTile(cacheKey, decoded);
+          }
+          for (const feat of decoded) {
+            results.push(feat);
+          }
+        }
+      }
+    }
+
+    return results;
+  }
+
+  async close(): Promise<void> {
+    for (const arch of this.archives) {
+      await arch.source.close().catch(() => {});
+    }
+    this.archives = [];
+    this.tileCache.clear();
+  }
+}
+
+interface GraphNode {
+  id: number;
+  lat: number;
+  lon: number;
+}
+
+interface GraphSegment {
+  id: number;
+  aNode: number;
+  bNode: number;
+  lengthMeters: number;
+  kind: string;
+}
+
+interface GraphAdjacency {
+  to: number;
+  segmentId: number;
+  lengthMeters: number;
+  kind: string;
+}
+
+interface RoadGraph {
+  nodes: GraphNode[];
+  segments: GraphSegment[];
+  adj: GraphAdjacency[][];
+  segGrid: Map<string, number[]>;
+  cellLatDeg: number;
+  cellLonDeg: number;
+}
+
+function buildRoadGraph(features: readonly RoadEdgeFeature[], refLat: number): RoadGraph {
+  const cosLat = Math.max(0.15, Math.cos((Math.min(85, Math.abs(refLat)) * Math.PI) / 180));
+  const nodeCellLat = NODE_MERGE_DISTANCE_METERS / METERS_PER_DEGREE_LAT;
+  const nodeCellLon = nodeCellLat / cosLat;
+  const nodeGrid = new Map<string, number[]>();
+  const nodes: GraphNode[] = [];
+
+  const getOrCreateNode = (lon: number, lat: number): number => {
+    const cx = Math.floor(lat / nodeCellLat);
+    const cy = Math.floor(lon / nodeCellLon);
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const bucket = nodeGrid.get(`${cx + dx}:${cy + dy}`);
+        if (!bucket) continue;
+        for (const nid of bucket) {
+          const existing = nodes[nid];
+          if (haversineMeters(lat, lon, existing.lat, existing.lon) <= NODE_MERGE_DISTANCE_METERS) {
+            return nid;
+          }
+        }
+      }
+    }
+    const id = nodes.length;
+    nodes.push({ id, lat, lon });
+    const key = `${cx}:${cy}`;
+    const bucket = nodeGrid.get(key);
+    if (bucket) bucket.push(id);
+    else nodeGrid.set(key, [id]);
+    return id;
+  };
+
+  const segments: GraphSegment[] = [];
+  const adj: GraphAdjacency[][] = [];
+  const edgeDedup = new Set<string>();
+
+  const segCellLat = SEGMENT_GRID_CELL_METERS / METERS_PER_DEGREE_LAT;
+  const segCellLon = segCellLat / cosLat;
+  const segGrid = new Map<string, number[]>();
+
+  const addSegToGrid = (segId: number, a: GraphNode, b: GraphNode) => {
+    const minCx = Math.floor(Math.min(a.lat, b.lat) / segCellLat);
+    const maxCx = Math.floor(Math.max(a.lat, b.lat) / segCellLat);
+    const minCy = Math.floor(Math.min(a.lon, b.lon) / segCellLon);
+    const maxCy = Math.floor(Math.max(a.lon, b.lon) / segCellLon);
+    for (let cx = minCx; cx <= maxCx; cx += 1) {
+      for (let cy = minCy; cy <= maxCy; cy += 1) {
+        const key = `${cx}:${cy}`;
+        const list = segGrid.get(key);
+        if (list) list.push(segId);
+        else segGrid.set(key, [segId]);
+      }
+    }
+  };
+
+  for (const feat of features) {
+    for (let i = 0; i < feat.coords.length - 1; i += 1) {
+      const [lonA, latA] = feat.coords[i];
+      const [lonB, latB] = feat.coords[i + 1];
+      if (!Number.isFinite(lonA) || !Number.isFinite(latA) || !Number.isFinite(lonB) || !Number.isFinite(latB)) {
+        continue;
+      }
+      const aNode = getOrCreateNode(lonA, latA);
+      const bNode = getOrCreateNode(lonB, latB);
+      if (aNode === bNode) continue;
+
+      const lo = Math.min(aNode, bNode);
+      const hi = Math.max(aNode, bNode);
+      const dedupKey = `${lo}:${hi}:${feat.kind}`;
+      if (edgeDedup.has(dedupKey)) continue;
+      edgeDedup.add(dedupKey);
+
+      const nodeA = nodes[aNode];
+      const nodeB = nodes[bNode];
+      const lengthMeters = haversineMeters(nodeA.lat, nodeA.lon, nodeB.lat, nodeB.lon);
+      if (lengthMeters < 0.2) continue;
+
+      while (adj.length < nodes.length) adj.push([]);
+      const segId = segments.length;
+      segments.push({ id: segId, aNode, bNode, lengthMeters, kind: feat.kind });
+      adj[aNode].push({ to: bNode, segmentId: segId, lengthMeters, kind: feat.kind });
+      adj[bNode].push({ to: aNode, segmentId: segId, lengthMeters, kind: feat.kind });
+      addSegToGrid(segId, nodeA, nodeB);
+    }
+  }
+
+  return {
+    nodes,
+    segments,
+    adj,
+    segGrid,
+    cellLatDeg: segCellLat,
+    cellLonDeg: segCellLon,
+  };
+}
+
+interface SnapCandidate {
+  segmentId: number;
+  kind: string;
+  t: number;
+  lat: number;
+  lon: number;
+  distMeters: number;
+}
+
+function projectPointOntoSegment(
+  lat: number,
+  lon: number,
+  a: GraphNode,
+  b: GraphNode,
+): { t: number; lat: number; lon: number; distMeters: number } {
+  const cosLat = Math.max(0.15, Math.cos((lat * Math.PI) / 180));
+  const ax = (a.lon - lon) * METERS_PER_DEGREE_LAT * cosLat;
+  const ay = (a.lat - lat) * METERS_PER_DEGREE_LAT;
+  const bx = (b.lon - lon) * METERS_PER_DEGREE_LAT * cosLat;
+  const by = (b.lat - lat) * METERS_PER_DEGREE_LAT;
+
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq > 1e-9 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lenSq)) : 0;
+
+  const projLat = a.lat + t * (b.lat - a.lat);
+  const projLon = a.lon + t * (b.lon - a.lon);
+  return {
+    t,
+    lat: projLat,
+    lon: projLon,
+    distMeters: haversineMeters(lat, lon, projLat, projLon),
+  };
+}
+
+function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCandidate[] {
+  if (graph.segments.length === 0) return [];
+  const radiusLatCells = Math.ceil(MAX_SNAP_DISTANCE_METERS / SEGMENT_GRID_CELL_METERS) + 1;
+  const cx = Math.floor(lat / graph.cellLatDeg);
+  const cy = Math.floor(lon / graph.cellLonDeg);
+
+  const seenSegs = new Set<number>();
+  const rawCandidates: SnapCandidate[] = [];
+
+  for (let dx = -radiusLatCells; dx <= radiusLatCells; dx += 1) {
+    for (let dy = -radiusLatCells; dy <= radiusLatCells; dy += 1) {
+      const segIds = graph.segGrid.get(`${cx + dx}:${cy + dy}`);
+      if (!segIds) continue;
+      for (const segId of segIds) {
+        if (seenSegs.has(segId)) continue;
+        seenSegs.add(segId);
+        const seg = graph.segments[segId];
+        const proj = projectPointOntoSegment(lat, lon, graph.nodes[seg.aNode], graph.nodes[seg.bNode]);
+        if (proj.distMeters <= MAX_SNAP_DISTANCE_METERS) {
+          rawCandidates.push({
+            segmentId: segId,
+            kind: seg.kind,
+            t: proj.t,
+            lat: proj.lat,
+            lon: proj.lon,
+            distMeters: proj.distMeters,
+          });
+        }
+      }
+    }
+  }
+
+  rawCandidates.sort((a, b) => a.distMeters - b.distMeters);
+  return rawCandidates.slice(0, MAX_CANDIDATES_PER_STOP);
+}
+
+/**
+ * Weights road edges by Protomaps `kind` and implied trip speed so walking trips
+ * naturally use footpaths/side streets while faster vehicular trips prefer roads.
+ */
+function roadCostFactor(kind: string, speedMps: number | null): number {
+  if (speedMps !== null && speedMps <= 2.5) {
+    if (kind === 'path') return 1.0;
+    if (kind === 'highway') return 2.2;
+    if (kind === 'major_road' || kind === 'medium_road') return 1.15;
+    return 1.05;
+  }
+  if (speedMps !== null && speedMps > 4.5) {
+    if (kind === 'highway') return 0.95;
+    if (kind === 'major_road' || kind === 'medium_road') return 1.0;
+    if (kind === 'path') return 3.5;
+    return 1.15;
+  }
+  if (kind === 'highway') return 1.2;
+  if (kind === 'path') return 1.35;
+  return 1.0;
+}
+
+interface AStarHeapNode {
+  nodeId: number;
+  f: number;
+}
+
+function pushAStar(heap: AStarHeapNode[], item: AStarHeapNode): void {
+  heap.push(item);
+  let idx = heap.length - 1;
+  while (idx > 0) {
+    const parent = (idx - 1) >> 1;
+    if (heap[parent].f <= item.f) break;
+    heap[idx] = heap[parent];
+    idx = parent;
+  }
+  heap[idx] = item;
+}
+
+function popAStar(heap: AStarHeapNode[]): AStarHeapNode | undefined {
+  if (heap.length === 0) return undefined;
+  const top = heap[0];
+  const last = heap.pop()!;
+  if (heap.length > 0) {
+    let idx = 0;
+    const len = heap.length;
+    while (true) {
+      const left = idx * 2 + 1;
+      const right = left + 1;
+      let smallest = idx;
+      if (left < len && heap[left].f < heap[smallest].f) smallest = left;
+      if (right < len && heap[right].f < heap[smallest].f) smallest = right;
+      if (smallest === idx) break;
+      heap[idx] = heap[smallest];
+      idx = smallest;
+    }
+    heap[idx] = last;
+  }
+  return top;
+}
+
+interface RoutedLegResult {
+  cost: number;
+  distanceMeters: number;
+  coordinates: [number, number][];
+  dominantRoadKind: string;
+}
+
+function routeBetweenCandidates(
+  graph: RoadGraph,
+  start: SnapCandidate,
+  goal: SnapCandidate,
+  speedMps: number | null,
+  maxDetourMeters: number,
+): RoutedLegResult | null {
+  if (start.segmentId === goal.segmentId) {
+    const dist = haversineMeters(start.lat, start.lon, goal.lat, goal.lon);
+    return {
+      cost: dist * roadCostFactor(start.kind, speedMps),
+      distanceMeters: dist,
+      coordinates: [
+        [Number(start.lon.toFixed(6)), Number(start.lat.toFixed(6))],
+        [Number(goal.lon.toFixed(6)), Number(goal.lat.toFixed(6))],
+      ],
+      dominantRoadKind: start.kind,
+    };
+  }
+
+  const startSeg = graph.segments[start.segmentId];
+  const goalSeg = graph.segments[goal.segmentId];
+  const VIRTUAL_GOAL = -2;
+  const VIRTUAL_START = -1;
+
+  const gScore = new Map<number, number>();
+  const distScore = new Map<number, number>();
+  const parentNode = new Map<number, number>();
+  const parentKind = new Map<number, string>();
+  const closed = new Set<number>();
+  const heap: AStarHeapNode[] = [];
+  const maxAllowedCost = maxDetourMeters * 2.5;
+
+  const hToGoal = (lat: number, lon: number) =>
+    haversineMeters(lat, lon, goal.lat, goal.lon) * 0.95;
+
+  const seedStartEndpoint = (nodeId: number, distFromSnap: number) => {
+    const node = graph.nodes[nodeId];
+    const edgeCost = distFromSnap * roadCostFactor(startSeg.kind, speedMps);
+    const prev = gScore.get(nodeId);
+    if (prev === undefined || edgeCost < prev) {
+      gScore.set(nodeId, edgeCost);
+      distScore.set(nodeId, distFromSnap);
+      parentNode.set(nodeId, VIRTUAL_START);
+      parentKind.set(nodeId, startSeg.kind);
+      pushAStar(heap, { nodeId, f: edgeCost + hToGoal(node.lat, node.lon) });
+    }
+  };
+
+  seedStartEndpoint(startSeg.aNode, start.t * startSeg.lengthMeters);
+  seedStartEndpoint(startSeg.bNode, (1 - start.t) * startSeg.lengthMeters);
+
+  let expanded = 0;
+  while (heap.length > 0 && expanded < MAX_ASTAR_EXPANDED_NODES) {
+    const cur = popAStar(heap)!;
+    if (cur.nodeId === VIRTUAL_GOAL) {
+      break;
+    }
+    if (closed.has(cur.nodeId)) continue;
+    closed.add(cur.nodeId);
+    expanded += 1;
+
+    const curCost = gScore.get(cur.nodeId) ?? Infinity;
+    const curDist = distScore.get(cur.nodeId) ?? Infinity;
+    if (curCost > maxAllowedCost) continue;
+
+    // If we reached an endpoint of goalSeg, try connecting directly to the goal projection
+    if (cur.nodeId === goalSeg.aNode || cur.nodeId === goalSeg.bNode) {
+      const remDist =
+        cur.nodeId === goalSeg.aNode
+          ? goal.t * goalSeg.lengthMeters
+          : (1 - goal.t) * goalSeg.lengthMeters;
+      const nextCost = curCost + remDist * roadCostFactor(goalSeg.kind, speedMps);
+      const nextDist = curDist + remDist;
+      const prevGoalCost = gScore.get(VIRTUAL_GOAL);
+      if (nextDist <= maxDetourMeters && (prevGoalCost === undefined || nextCost < prevGoalCost)) {
+        gScore.set(VIRTUAL_GOAL, nextCost);
+        distScore.set(VIRTUAL_GOAL, nextDist);
+        parentNode.set(VIRTUAL_GOAL, cur.nodeId);
+        parentKind.set(VIRTUAL_GOAL, goalSeg.kind);
+        pushAStar(heap, { nodeId: VIRTUAL_GOAL, f: nextCost });
+      }
+    }
+
+    const edges = graph.adj[cur.nodeId] ?? [];
+    for (const edge of edges) {
+      if (closed.has(edge.to)) continue;
+      const nextDist = curDist + edge.lengthMeters;
+      if (nextDist > maxDetourMeters) continue;
+      const nextCost = curCost + edge.lengthMeters * roadCostFactor(edge.kind, speedMps);
+      if (nextCost > maxAllowedCost) continue;
+      const prevCost = gScore.get(edge.to);
+      if (prevCost === undefined || nextCost < prevCost) {
+        gScore.set(edge.to, nextCost);
+        distScore.set(edge.to, nextDist);
+        parentNode.set(edge.to, cur.nodeId);
+        parentKind.set(edge.to, edge.kind);
+        const targetNode = graph.nodes[edge.to];
+        pushAStar(heap, { nodeId: edge.to, f: nextCost + hToGoal(targetNode.lat, targetNode.lon) });
+      }
+    }
+  }
+
+  const finalCost = gScore.get(VIRTUAL_GOAL);
+  const finalDist = distScore.get(VIRTUAL_GOAL);
+  if (finalCost === undefined || finalDist === undefined) return null;
+
+  const revCoords: [number, number][] = [
+    [Number(goal.lon.toFixed(6)), Number(goal.lat.toFixed(6))],
+  ];
+  const kindCounts = new Map<string, number>();
+  let walker = parentNode.get(VIRTUAL_GOAL);
+  const goalEdgeKind = parentKind.get(VIRTUAL_GOAL);
+  if (goalEdgeKind) {
+    kindCounts.set(goalEdgeKind, (kindCounts.get(goalEdgeKind) ?? 0) + 1);
+  }
+
+  while (walker !== undefined && walker !== VIRTUAL_START) {
+    const n = graph.nodes[walker];
+    revCoords.push([Number(n.lon.toFixed(6)), Number(n.lat.toFixed(6))]);
+    const k = parentKind.get(walker);
+    if (k) kindCounts.set(k, (kindCounts.get(k) ?? 0) + 1);
+    walker = parentNode.get(walker);
+  }
+  revCoords.push([Number(start.lon.toFixed(6)), Number(start.lat.toFixed(6))]);
+  revCoords.reverse();
+
+  let dominantRoadKind = start.kind;
+  let bestCount = -1;
+  for (const [k, cnt] of kindCounts.entries()) {
+    if (cnt > bestCount) {
+      bestCount = cnt;
+      dominantRoadKind = k;
+    }
+  }
+
+  return {
+    cost: finalCost,
+    distanceMeters: finalDist,
+    coordinates: mergeTrailCoordinates([revCoords]),
+    dominantRoadKind,
+  };
+}
+
+function estimateLegSpeedMps(prev: TrailStopVisit, curr: TrailStopVisit, distMeters: number): number | null {
+  const speedSamples = [prev.maxSpeedMps, curr.maxSpeedMps].filter(
+    (s): s is number => typeof s === 'number' && Number.isFinite(s) && s >= 0,
+  );
+  if (speedSamples.length > 0) {
+    return Math.max(...speedSamples);
+  }
+  const exitMs = Date.parse(prev.lastRecordedAt);
+  const enterMs = Date.parse(curr.firstRecordedAt);
+  if (Number.isFinite(exitMs) && Number.isFinite(enterMs) && enterMs > exitMs) {
+    return distMeters / ((enterMs - exitMs) / 1000);
+  }
+  return null;
+}
+
+function padBoundingBoxMeters(points: readonly { latitude: number; longitude: number }[], padMeters: number): BoundingBox {
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLon = Infinity;
+  let maxLon = -Infinity;
+  for (const pt of points) {
+    if (pt.latitude < minLat) minLat = pt.latitude;
+    if (pt.latitude > maxLat) maxLat = pt.latitude;
+    if (pt.longitude < minLon) minLon = pt.longitude;
+    if (pt.longitude > maxLon) maxLon = pt.longitude;
+  }
+  const midLat = (minLat + maxLat) / 2;
+  const cosLat = Math.max(0.15, Math.cos((Math.min(85, Math.abs(midLat)) * Math.PI) / 180));
+  const dLat = padMeters / METERS_PER_DEGREE_LAT;
+  const dLon = dLat / cosLat;
+  return {
+    minLon: Math.max(-180, minLon - dLon),
+    minLat: Math.max(-90, minLat - dLat),
+    maxLon: Math.min(180, maxLon + dLon),
+    maxLat: Math.min(90, maxLat + dLat),
+  };
+}
+
+export interface RoadTrailMatcherOptions {
+  tileProvider?: RoadTileProvider;
+  tilesDir?: string;
+  maxTimeGapMs?: number;
+  maxDistanceMeters?: number;
+  spurThresholdMeters?: number;
+  maxCachedResults?: number;
+}
+
+/**
+ * Matches averaged trail stop sequences onto vector road/path geometries from
+ * regional `.pmtiles` archives using bounded A* + Viterbi map matching, while
+ * leaving FUZZED trails direct and bridging >15 m off-road offsets with spurs.
+ */
+export class RoadTrailMatcher {
+  private readonly tileProvider: RoadTileProvider;
+  private readonly ownsProvider: boolean;
+  private readonly maxTimeGapMs: number;
+  private readonly maxDistanceMeters: number;
+  private readonly spurThresholdMeters: number;
+  private readonly maxCachedResults: number;
+  private readonly resultCache = new Map<string, MatchedUserTrail[]>();
+
+  constructor(options: RoadTrailMatcherOptions = {}) {
+    if (options.tileProvider) {
+      this.tileProvider = options.tileProvider;
+      this.ownsProvider = false;
+    } else {
+      this.tileProvider = new PmtilesRoadTileProvider({ tilesDir: options.tilesDir });
+      this.ownsProvider = true;
+    }
+    this.maxTimeGapMs = options.maxTimeGapMs ?? DEFAULT_TRAIL_MAX_TIME_GAP_MS;
+    this.maxDistanceMeters = options.maxDistanceMeters ?? DEFAULT_TRAIL_MAX_DISTANCE_METERS;
+    this.spurThresholdMeters = options.spurThresholdMeters ?? DEFAULT_TRAIL_SPUR_THRESHOLD_METERS;
+    this.maxCachedResults = options.maxCachedResults ?? 128;
+  }
+
+  private async matchSingleTrip(visits: readonly TrailStopVisit[]): Promise<{
+    segments: TrailPathSegment[];
+    hasRoadMatches: boolean;
+  }> {
+    if (visits.length < 2) {
+      return { segments: [], hasRoadMatches: false };
+    }
+
+    // Never road-snap FUZZED (~1 km grid) trails; render straight dashed lines instead.
+    if (visits.some((v) => v.isFuzzed)) {
+      return {
+        segments: [
+          {
+            kind: 'direct',
+            coordinates: visits.map((v) => [v.longitude, v.latitude] as [number, number]),
+          },
+        ],
+        hasRoadMatches: false,
+      };
+    }
+
+    const paddedBbox = padBoundingBoxMeters(visits, 500);
+    const roadFeatures = await this.tileProvider.getRoadFeaturesForBbox(paddedBbox);
+    if (roadFeatures.length === 0) {
+      return {
+        segments: [
+          {
+            kind: 'direct',
+            coordinates: visits.map((v) => [v.longitude, v.latitude] as [number, number]),
+          },
+        ],
+        hasRoadMatches: false,
+      };
+    }
+
+    const midLat = (paddedBbox.minLat + paddedBbox.maxLat) / 2;
+    const graph = buildRoadGraph(roadFeatures, midLat);
+    const candidatesByStop = visits.map((v) => findSnapCandidates(graph, v.latitude, v.longitude));
+
+    // Viterbi DP across candidate snaps per stop, restarting smoothly across unmatched gaps.
+    const chosenCandidate: Array<SnapCandidate | null> = new Array(visits.length).fill(null);
+    const legRoutes: Array<RoutedLegResult | null> = new Array(visits.length - 1).fill(null);
+
+    let chainStart = 0;
+    while (chainStart < visits.length) {
+      if (candidatesByStop[chainStart].length === 0) {
+        chainStart += 1;
+        continue;
+      }
+
+      let chainEnd = chainStart;
+      while (chainEnd + 1 < visits.length && candidatesByStop[chainEnd + 1].length > 0) {
+        chainEnd += 1;
+      }
+
+      if (chainEnd === chainStart) {
+        chosenCandidate[chainStart] = candidatesByStop[chainStart][0];
+        chainStart += 1;
+        continue;
+      }
+
+      const dpCost: number[][] = [];
+      const dpPrev: number[][] = [];
+      const dpRoute: Array<Array<RoutedLegResult | null>> = [];
+
+      const firstCands = candidatesByStop[chainStart];
+      dpCost.push(
+        firstCands.map((c) => c.distMeters * 1.6 + (c.distMeters / 20) ** 2),
+      );
+      dpPrev.push(firstCands.map(() => -1));
+      dpRoute.push(firstCands.map(() => null));
+
+      let brokenAt: number | null = null;
+      for (let idx = chainStart + 1; idx <= chainEnd; idx += 1) {
+        const prevVisit = visits[idx - 1];
+        const currVisit = visits[idx];
+        const straightDist = haversineMeters(
+          prevVisit.latitude,
+          prevVisit.longitude,
+          currVisit.latitude,
+          currVisit.longitude,
+        );
+        const speedMps = estimateLegSpeedMps(prevVisit, currVisit, straightDist);
+        const maxDetour = Math.max(800, straightDist * 3.5 + 500);
+
+        const prevCands = candidatesByStop[idx - 1];
+        const currCands = candidatesByStop[idx];
+        const prevRow = dpCost[dpCost.length - 1];
+
+        const nextRow: number[] = [];
+        const nextPrev: number[] = [];
+        const nextRoutes: Array<RoutedLegResult | null> = [];
+        let anyConnected = false;
+
+        for (let ci = 0; ci < currCands.length; ci += 1) {
+          const currCand = currCands[ci];
+          const emission =
+            currCand.distMeters * 1.6 +
+            (currCand.distMeters / 20) ** 2 +
+            (roadCostFactor(currCand.kind, speedMps) - 1) * 15;
+          let bestTotal = Infinity;
+          let bestPrevIdx = -1;
+          let bestRoute: RoutedLegResult | null = null;
+
+          for (let pi = 0; pi < prevCands.length; pi += 1) {
+            if (!Number.isFinite(prevRow[pi])) continue;
+            const routed = routeBetweenCandidates(
+              graph,
+              prevCands[pi],
+              currCand,
+              speedMps,
+              maxDetour,
+            );
+            if (!routed) continue;
+            const detourPenalty = Math.max(0, routed.distanceMeters - straightDist) * 0.35;
+            const total = prevRow[pi] + routed.cost * 0.35 + detourPenalty + emission;
+            if (total < bestTotal) {
+              bestTotal = total;
+              bestPrevIdx = pi;
+              bestRoute = routed;
+            }
+          }
+
+          nextRow.push(bestTotal);
+          nextPrev.push(bestPrevIdx);
+          nextRoutes.push(bestRoute);
+          if (bestPrevIdx !== -1) anyConnected = true;
+        }
+
+        if (!anyConnected) {
+          brokenAt = idx;
+          break;
+        }
+        dpCost.push(nextRow);
+        dpPrev.push(nextPrev);
+        dpRoute.push(nextRoutes);
+      }
+
+      const resolvedEnd = brokenAt !== null ? brokenAt - 1 : chainEnd;
+      const lastRowIdx = resolvedEnd - chainStart;
+      let bestCandIdx = 0;
+      let bestScore = Infinity;
+      for (let ci = 0; ci < dpCost[lastRowIdx].length; ci += 1) {
+        if (dpCost[lastRowIdx][ci] < bestScore) {
+          bestScore = dpCost[lastRowIdx][ci];
+          bestCandIdx = ci;
+        }
+      }
+
+      let cursor = bestCandIdx;
+      for (let step = lastRowIdx; step >= 0; step -= 1) {
+        const stopIdx = chainStart + step;
+        chosenCandidate[stopIdx] = candidatesByStop[stopIdx][cursor];
+        if (step > 0) {
+          legRoutes[stopIdx - 1] = dpRoute[step][cursor];
+          cursor = dpPrev[step][cursor];
+        }
+      }
+
+      chainStart = resolvedEnd + 1;
+    }
+
+    const segments: TrailPathSegment[] = [];
+    const emittedSpurs = new Set<string>();
+    let pendingRoadCoords: [number, number][][] = [];
+    let pendingRoadKind: string | undefined;
+    let hasRoadMatches = false;
+
+    const flushRoad = () => {
+      if (pendingRoadCoords.length === 0) return;
+      const merged = mergeTrailCoordinates(pendingRoadCoords);
+      if (merged.length >= 2) {
+        segments.push({
+          kind: 'road',
+          coordinates: merged,
+          ...(pendingRoadKind ? { roadKind: pendingRoadKind } : {}),
+        });
+        hasRoadMatches = true;
+      }
+      pendingRoadCoords = [];
+      pendingRoadKind = undefined;
+    };
+
+    const maybeAddSpur = (visit: TrailStopVisit, snapped: SnapCandidate | null) => {
+      if (!snapped) return;
+      const offset = haversineMeters(visit.latitude, visit.longitude, snapped.lat, snapped.lon);
+      if (offset <= this.spurThresholdMeters) return;
+      const sLon = Number(snapped.lon.toFixed(6));
+      const sLat = Number(snapped.lat.toFixed(6));
+      const key = `${visit.longitude},${visit.latitude}->${sLon},${sLat}`;
+      if (emittedSpurs.has(key)) return;
+      emittedSpurs.add(key);
+      segments.push({
+        kind: 'spur',
+        coordinates: [
+          [visit.longitude, visit.latitude],
+          [sLon, sLat],
+        ],
+      });
+    };
+
+    for (let i = 0; i < visits.length - 1; i += 1) {
+      const leg = legRoutes[i];
+      if (leg && leg.coordinates.length >= 2) {
+        maybeAddSpur(visits[i], chosenCandidate[i]);
+        pendingRoadCoords.push(leg.coordinates);
+        pendingRoadKind = pendingRoadKind ?? leg.dominantRoadKind;
+        maybeAddSpur(visits[i + 1], chosenCandidate[i + 1]);
+      } else {
+        flushRoad();
+        const a = visits[i];
+        const b = visits[i + 1];
+        segments.push({
+          kind: 'direct',
+          coordinates: [
+            [a.longitude, a.latitude],
+            [b.longitude, b.latitude],
+          ],
+        });
+      }
+    }
+    flushRoad();
+
+    return { segments, hasRoadMatches };
+  }
+
+  async matchTrails(rawPings: readonly TrailPingLike[]): Promise<MatchedUserTrail[]> {
+    if (rawPings.length === 0) return [];
+
+    const rev = await this.tileProvider.getRevisionKey();
+    const sig = createHash('sha256')
+      .update(rev)
+      .update('\n')
+      .update(
+        rawPings
+          .map(
+            (p) =>
+              `${p.userId}:${p.latitude.toFixed(6)},${p.longitude.toFixed(6)}:${p.recordedAt}:${p.isFuzzed ? 1 : 0}`,
+          )
+          .join('|'),
+      )
+      .digest('hex');
+
+    const cached = this.resultCache.get(sig);
+    if (cached) {
+      this.resultCache.delete(sig);
+      this.resultCache.set(sig, cached);
+      return cached;
+    }
+
+    const compacted = averageNearbyTrailPings(rawPings);
+    const matched: MatchedUserTrail[] = [];
+
+    for (const userTrail of compacted) {
+      const visits: TrailStopVisit[] =
+        userTrail.visits && userTrail.visits.length > 0
+          ? userTrail.visits
+          : userTrail.stops.map((s: AveragedTrailStop, idx: number) => ({
+              stopIndex: idx,
+              latitude: s.latitude,
+              longitude: s.longitude,
+              firstRecordedAt: s.firstRecordedAt,
+              lastRecordedAt: s.lastRecordedAt,
+              isFuzzed: s.isFuzzed,
+              maxSpeedMps: null,
+            }));
+
+      const trips = splitVisitsIntoTrips(visits, {
+        maxTimeGapMs: this.maxTimeGapMs,
+        maxDistanceMeters: this.maxDistanceMeters,
+      });
+
+      const userSegments: TrailPathSegment[] = [];
+      let userHasRoadMatches = false;
+
+      for (const trip of trips) {
+        const res = await this.matchSingleTrip(trip);
+        for (const seg of res.segments) {
+          userSegments.push(seg);
+        }
+        if (res.hasRoadMatches) userHasRoadMatches = true;
+      }
+
+      matched.push({
+        userId: userTrail.userId,
+        username: userTrail.username,
+        stops: userTrail.stops,
+        segments: userSegments,
+        hasRoadMatches: userHasRoadMatches,
+      });
+    }
+
+    if (this.resultCache.size >= this.maxCachedResults) {
+      const oldestKey = this.resultCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.resultCache.delete(oldestKey);
+      }
+    }
+    this.resultCache.set(sig, matched);
+    return matched;
+  }
+
+  async close(): Promise<void> {
+    this.resultCache.clear();
+    if (this.ownsProvider && this.tileProvider instanceof PmtilesRoadTileProvider) {
+      await this.tileProvider.close();
+    }
+  }
+}

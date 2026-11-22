@@ -55,9 +55,11 @@ import {
   type LocationShareLinkItem,
   type MapDownloadJob,
   type MapRegion,
+  type MatchedUserTrail,
   type MemberPresenceUpdate,
   type PlaceTransitionEvent,
   type PrivacyMode,
+  type TrailDisplayMode,
 } from '@loved-ones/shared';
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
 import { BrandMark } from '@/components/BrandMark';
@@ -195,6 +197,8 @@ export default function HomePage() {
 
   const [locations, setLocations] = useState<LocationBroadcast[]>([]);
   const [trails, setTrails] = useState<LocationBroadcast[]>([]);
+  const [matchedTrails, setMatchedTrails] = useState<MatchedUserTrail[]>([]);
+  const [trailDisplayMode, setTrailDisplayMode] = useState<TrailDisplayMode>('roads');
   const [webVersionInfo, setWebVersionInfo] = useState<AppVersionInfo | null>(null);
   const [dismissedWebUpdateVersion, setDismissedWebUpdateVersion] = useState<string | null>(null);
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('live');
@@ -1223,8 +1227,14 @@ export default function HomePage() {
     const to = new Date().toISOString();
     const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     void apiFetchGroupTrails(session.accessToken, activeGroup.id, { from, to, limit: 1000 })
-      .then(setTrails)
-      .catch(() => setTrails([]));
+      .then((res) => {
+        setTrails(res.trails);
+        setMatchedTrails(res.matchedTrails);
+      })
+      .catch(() => {
+        setTrails([]);
+        setMatchedTrails([]);
+      });
   }, [session, activeGroup, mapViewMode]);
 
   // Foreground Web Geolocation watcher
@@ -1473,6 +1483,7 @@ export default function HomePage() {
     setInvitePromptDismissed(false);
     setLocations([]);
     setTrails([]);
+    setMatchedTrails([]);
     setMessages([]);
     setUnreadChatCount(0);
     setChatToast(null);
@@ -2064,6 +2075,8 @@ export default function HomePage() {
         locations={mapViewMode === 'places' ? [] : locations}
         places={places}
         trails={trails}
+        matchedTrails={matchedTrails}
+        trailMode={trailDisplayMode}
         regions={mapRegionsLoaded ? mapRegions : undefined}
         regionsRevision={regionsRevision}
         showTrails={mapViewMode === 'trails'}
@@ -3777,7 +3790,30 @@ export default function HomePage() {
       </div>
 
       {/* Bottom-Center Floating Map View Mode Switcher */}
-      <div className="pointer-events-auto absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-1/2 z-20 -translate-x-1/2 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))]">
+      <div className="pointer-events-auto absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-1/2 z-20 flex -translate-x-1/2 flex-col items-center gap-1.5 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))]">
+        {mapViewMode === 'trails' && (
+          <div className="lo-float-in flex items-center gap-0.5 rounded-lg border border-zinc-200/80 bg-white/95 p-0.5 text-[10px] font-semibold shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-[11px]">
+            {(
+              [
+                ['roads', 'Roads'],
+                ['raw', 'Raw'],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setTrailDisplayMode(mode)}
+                className={`lo-press rounded-md px-2.5 py-1 transition ${
+                  trailDisplayMode === mode
+                    ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                    : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/95 p-1 text-[11px] font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-xs">
           {(
             [

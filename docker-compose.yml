@@ -161,8 +161,10 @@ services:
       LOG_DIR: /var/log/app
       LOG_RETENTION_FILES: ${LOG_RETENTION_FILES:-10}
       LOG_RING_MAX_ENTRIES: ${LOG_RING_MAX_ENTRIES:-500}
+      TILES_DIR: /srv/tiles
     volumes:
       - ./logs:/var/log/app
+      - ./infra/tiles:/srv/tiles:ro
     networks:
       - internal_net
     healthcheck:

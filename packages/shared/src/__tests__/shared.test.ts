@@ -852,6 +852,99 @@ describe('@loved-ones/shared', () => {
     expect(disabledThrottle.consume('sock-1').allowed).toBe(true);
   });
 
+  it('splits trail visits on time/distance/privacy breaks and builds road vs raw GeoJSON features', async () => {
+    const {
+      averageNearbyTrailPings,
+      splitVisitsIntoTrips,
+      buildTrailGeoJsonFeatures,
+    } = await import('../index.js');
+
+    const compacted = averageNearbyTrailPings([
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.52,
+        longitude: 13.4,
+        recordedAt: '2026-11-20T08:00:00.000Z',
+        speed: 1.4,
+      },
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.523,
+        longitude: 13.405,
+        recordedAt: '2026-11-20T08:08:00.000Z',
+        speed: 1.5,
+      },
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.526,
+        longitude: 13.41,
+        recordedAt: '2026-11-20T09:15:00.000Z', // > 30 min gap -> trip break
+        speed: 12,
+      },
+    ]);
+
+    expect(compacted).toHaveLength(1);
+    const trips = splitVisitsIntoTrips(compacted[0].visits ?? []);
+    expect(trips).toHaveLength(2);
+    expect(trips[0]).toHaveLength(2);
+    expect(trips[1]).toHaveLength(1);
+
+    const matched = [
+      {
+        userId: 'u1',
+        username: 'Alice',
+        stops: compacted[0].stops,
+        hasRoadMatches: true,
+        segments: [
+          {
+            kind: 'road' as const,
+            coordinates: [
+              [13.4, 52.52],
+              [13.405, 52.52],
+              [13.405, 52.523],
+            ] as [number, number][],
+            roadKind: 'minor_road',
+          },
+        ],
+      },
+    ];
+
+    const roadMode = buildTrailGeoJsonFeatures({
+      trails: [],
+      matchedTrails: matched,
+      mode: 'roads',
+    });
+    expect(roadMode.hasRoadMatches).toBe(true);
+    expect(roadMode.stopsCount).toBe(3);
+    expect(roadMode.features.filter((f) => f.properties.kind === 'road')).toHaveLength(1);
+
+    const rawMode = buildTrailGeoJsonFeatures({
+      trails: [
+        {
+          userId: 'u1',
+          username: 'Alice',
+          latitude: 52.52,
+          longitude: 13.4,
+          recordedAt: '2026-11-20T08:00:00.000Z',
+        },
+        {
+          userId: 'u1',
+          username: 'Alice',
+          latitude: 52.523,
+          longitude: 13.405,
+          recordedAt: '2026-11-20T08:08:00.000Z',
+        },
+      ],
+      matchedTrails: matched,
+      mode: 'raw',
+    });
+    expect(rawMode.hasRoadMatches).toBe(false);
+    expect(rawMode.features.filter((f) => f.properties.kind === 'direct')).toHaveLength(1);
+  });
+
   it('resolves idle-at-place, stationary, offline, paused, and FUZZED member presence states', () => {
     const parsedHb = HeartbeatInputSchema.parse({ trackingState: 'idle', batteryLevel: 16 });
     expect(parsedHb.trackingState).toBe('idle');
