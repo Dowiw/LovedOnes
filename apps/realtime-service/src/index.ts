@@ -310,6 +310,9 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     },
   });
 
+  let isClosing = false;
+  const pendingDisconnectTimers = new Set<ReturnType<typeof setTimeout>>();
+
   logSubClient.on('message', (channel, message) => {
     if (channel === LOGS_STREAM_CHANNEL) {
       io.to('admin:logs').emit('logs:line', message);
@@ -320,9 +323,12 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
         const parsed = AccountRemovedEventSchema.parse(JSON.parse(message));
         const room = `user:${parsed.userId}`;
         io.to(room).emit('account:removed', parsed);
-        setTimeout(() => {
-          io.in(room).disconnectSockets(true);
+        const timer = setTimeout(() => {
+          pendingDisconnectTimers.delete(timer);
+          if (isClosing) return;
+          io.in(room).local.disconnectSockets(true);
         }, 180);
+        pendingDisconnectTimers.add(timer);
       } catch {
         // Ignore malformed account removal pub/sub payloads
       }
@@ -1276,7 +1282,12 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   });
 
   app.addHook('onClose', async () => {
-    io.disconnectSockets(true);
+    isClosing = true;
+    for (const timer of pendingDisconnectTimers) {
+      clearTimeout(timer);
+    }
+    pendingDisconnectTimers.clear();
+    io.local.disconnectSockets(true);
     await roadMatcher.close().catch(() => {});
     await heartbeat.stop();
     await loggerHandle.close();

@@ -470,7 +470,8 @@ describe('@loved-ones/realtime-service integration', () => {
       const telemetry = telemetryRes.json();
       expect(telemetry.totalActiveSockets).toBeGreaterThanOrEqual(2);
       const bobStats = telemetry.users.find((u: { userId: string }) => u.userId === bob.user.id);
-      expect(bobStats.locationPoints).toBe(5);
+      // Bob sent 5 pings, but pings 2 & 3 repeated (48.8566, 2.3522) and coalesced via stationary detection
+      expect(bobStats.locationPoints).toBe(3);
       expect(bobStats.eventsCount).toBeGreaterThanOrEqual(5);
 
       // 8. Verify recent audit logs capture chat, place creation/deletion, check-in, and geofence transitions with full context
@@ -508,7 +509,7 @@ describe('@loved-ones/realtime-service integration', () => {
         method: 'PATCH',
         url: '/api/admin/resource-limits',
         headers: { Authorization: `Bearer ${alice.accessToken}` },
-        payload: { perUserMaxPoints: 3, autoTrimOnQuota: true },
+        payload: { perUserMaxPoints: 1, autoTrimOnQuota: true },
       });
       expect(setQuotaRes.statusCode).toBe(200);
 
