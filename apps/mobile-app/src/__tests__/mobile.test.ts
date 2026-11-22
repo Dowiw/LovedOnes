@@ -518,6 +518,9 @@ describe('@loved-ones/mobile-app', () => {
     expect(earthLayer?.paint?.['fill-color']).toBe('#111318');
 
     expect(appConfig.expo.icon).toBe('./assets/icon.png');
+    expect(appConfig.expo.ios.icon).toBe('./assets/icon.png');
+    expect(appConfig.expo.splash.image).toBe('./assets/icon.png');
+    expect(appConfig.expo.notification.icon).toBe('./assets/monochrome-icon.png');
     expect(appConfig.expo.android.adaptiveIcon.foregroundImage).toBe('./assets/adaptive-icon.png');
     expect(appConfig.expo.android.adaptiveIcon.monochromeImage).toBe('./assets/monochrome-icon.png');
   });

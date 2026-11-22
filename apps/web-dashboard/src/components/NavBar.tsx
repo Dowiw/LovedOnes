@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Activity, LogOut, MapPin, QrCode } from 'lucide-react';
+import { Activity, LogOut, QrCode } from 'lucide-react';
 import { isSafeAvatarUrl } from '@loved-ones/shared';
+import { BrandMark } from '@/components/BrandMark';
 import { AuthUser } from '@/lib/api';
 
 interface NavBarProps {
@@ -20,7 +21,7 @@ export function NavBar({ user, onSignOut }: NavBarProps) {
         <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-4">
           <Link href="/" className="flex shrink-0 items-center gap-2 text-sm font-bold tracking-tight text-zinc-950">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-950 text-white">
-              <MapPin className="h-4 w-4" />
+              <BrandMark className="h-5 w-5" />
             </span>
             <span className="hidden xs:inline sm:inline">LovedOnes</span>
           </Link>

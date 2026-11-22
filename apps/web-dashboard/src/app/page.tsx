@@ -57,6 +57,7 @@ import {
   type PrivacyMode,
 } from '@loved-ones/shared';
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
+import { BrandMark } from '@/components/BrandMark';
 import { MapCanvas, type MapLabelLanguage } from '@/components/MapCanvas';
 import { QrJoinModal } from '@/components/QrJoinModal';
 import {
@@ -1626,7 +1627,7 @@ export default function HomePage() {
         <div className="lo-float-in relative w-full max-w-md rounded-xl border border-white/80 bg-white/88 p-8 shadow-[0_24px_60px_rgba(15,23,42,0.09)] backdrop-blur-xl">
           <div className="mb-6 flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white">
-              <MapPin className="h-5 w-5" />
+              <BrandMark className="h-6 w-6" />
             </span>
             <div>
               <h1 className="text-lg font-bold tracking-tight text-zinc-900">LovedOnes</h1>

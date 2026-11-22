@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { isIosSafariNeedingInstall, urlBase64ToUint8Array } from '../lib/pwaPush';
 
@@ -21,5 +23,24 @@ describe('PWA & Web Push helpers', () => {
     expect(isIosSafariNeedingInstall(iphoneUa, false)).toBe(true);
     expect(isIosSafariNeedingInstall(iphoneUa, true)).toBe(false);
     expect(isIosSafariNeedingInstall(androidUa, false)).toBe(false);
+  });
+
+  it('ships favicon.ico, light/dark PNG favicons, and SVG/apple-touch icons', () => {
+    const publicDir = path.resolve(process.cwd(), 'public');
+    for (const relPath of [
+      'favicon.ico',
+      'icons/icon.svg',
+      'icons/favicon-16x16.png',
+      'icons/favicon-32x32.png',
+      'icons/favicon-dark-16x16.png',
+      'icons/favicon-dark-32x32.png',
+      'icons/icon-192.png',
+      'icons/icon-512.png',
+      'icons/apple-touch-icon.png',
+    ]) {
+      const fullPath = path.join(publicDir, relPath);
+      expect(fs.existsSync(fullPath), `${relPath} should exist`).toBe(true);
+      expect(fs.statSync(fullPath).size, `${relPath} should be non-empty`).toBeGreaterThan(0);
+    }
   });
 });
