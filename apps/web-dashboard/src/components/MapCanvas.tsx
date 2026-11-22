@@ -15,6 +15,7 @@ import {
   isSafeAvatarUrl,
   isSafeHexColor,
   resolveMemberPresenceStatus,
+  resolveTrailPointDetails,
   type GroupPlace,
   type LocationBroadcast,
   type MapRegion,
@@ -497,6 +498,9 @@ export function MapCanvas({
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const draftPlaceMarkerRef = useRef<maplibregl.Marker | null>(null);
   const selfMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const trailPopupRef = useRef<maplibregl.Popup | null>(null);
+  const pickingPlaceRef = useRef(pickingPlace);
+  pickingPlaceRef.current = pickingPlace;
   const hasAutoFramedRef = useRef(false);
   const labelLanguageRef = useRef<MapLabelLanguage>(labelLanguage);
   labelLanguageRef.current = labelLanguage;
@@ -773,6 +777,8 @@ export function MapCanvas({
       placeMarkersRef.current.clear();
       draftPlaceMarkerRef.current?.remove();
       draftPlaceMarkerRef.current = null;
+      trailPopupRef.current?.remove();
+      trailPopupRef.current = null;
       selfMarkerRef.current?.remove();
       selfMarkerRef.current = null;
       map.remove();
@@ -1328,11 +1334,105 @@ export function MapCanvas({
         source: TRAIL_SOURCE_ID,
         filter: ['==', ['geometry-type'], 'Point'],
         paint: {
-          'circle-radius': ['case', ['>', ['coalesce', ['get', 'pingCount'], 1], 1], 5, 4],
+          'circle-radius': [
+            'case',
+            ['boolean', ['get', 'isDwell'], true],
+            ['case', ['>', ['coalesce', ['get', 'pingCount'], 1], 1], 5.5, 4.5],
+            3,
+          ],
           'circle-color': mapThemeRef.current === 'dark' ? '#09090b' : '#ffffff',
           'circle-stroke-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
-          'circle-stroke-width': 1.5,
+          'circle-stroke-width': ['case', ['boolean', ['get', 'isDwell'], true], 1.75, 1.25],
+          'circle-opacity': ['case', ['boolean', ['get', 'isDwell'], true], 1, 0.72],
         },
+      });
+
+      map.on('mouseenter', TRAIL_POINT_LAYER_ID, () => {
+        if (!pickingPlaceRef.current) {
+          map.getCanvas().style.cursor = 'pointer';
+        }
+      });
+      map.on('mouseleave', TRAIL_POINT_LAYER_ID, () => {
+        map.getCanvas().style.cursor = pickingPlaceRef.current ? 'crosshair' : '';
+      });
+      map.on('click', TRAIL_POINT_LAYER_ID, (e) => {
+        if (pickingPlaceRef.current) return;
+        const feat = e.features?.[0];
+        if (!feat || feat.geometry.type !== 'Point') return;
+        const [lon, lat] = feat.geometry.coordinates as [number, number];
+        const props = (feat.properties ?? {}) as Record<string, unknown>;
+        const details = resolveTrailPointDetails({
+          latitude: lat,
+          longitude: lon,
+          username: typeof props.username === 'string' ? props.username : undefined,
+          firstRecordedAt:
+            typeof props.firstRecordedAt === 'string' ? props.firstRecordedAt : undefined,
+          lastRecordedAt:
+            typeof props.lastRecordedAt === 'string' ? props.lastRecordedAt : undefined,
+          pingCount:
+            typeof props.pingCount === 'number'
+              ? props.pingCount
+              : Number(props.pingCount ?? 1) || 1,
+          stayDurationMs:
+            typeof props.stayDurationMs === 'number'
+              ? props.stayDurationMs
+              : Number.isFinite(Number(props.stayDurationMs))
+                ? Number(props.stayDurationMs)
+                : undefined,
+          isDwell:
+            typeof props.isDwell === 'boolean'
+              ? props.isDwell
+              : props.isDwell === 'true'
+                ? true
+                : props.isDwell === 'false'
+                  ? false
+                  : undefined,
+          isFuzzed:
+            typeof props.isFuzzed === 'boolean'
+              ? props.isFuzzed
+              : props.isFuzzed === 'true',
+          places: placesRef.current,
+        });
+
+        const fmtClock = (iso: string | null) => {
+          if (!iso) return 'Unknown time';
+          const d = new Date(iso);
+          return Number.isNaN(d.getTime())
+            ? iso
+            : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        };
+        const timeRange =
+          details.firstRecordedAt &&
+          details.lastRecordedAt &&
+          details.stayDurationMs >= 60_000
+            ? `${fmtClock(details.firstRecordedAt)} – ${fmtClock(details.lastRecordedAt)}`
+            : `Recorded ${fmtClock(details.firstRecordedAt)}`;
+        const placeLine = details.matchedPlaceName
+          ? `<div class="text-[11px] font-medium text-zinc-800 dark:text-zinc-200">At ${escapeHtml(details.matchedPlaceName)}${details.matchedPlaceIsPrivate ? ' (Private)' : ''}</div>`
+          : '';
+        const stayLine =
+          details.stayDurationMs > 0
+            ? `Stayed ${escapeHtml(details.durationLabel)}`
+            : escapeHtml(details.durationLabel);
+
+        const html = `
+          <div class="text-xs space-y-1 min-w-[175px]">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(details.username)}</span>
+              <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">${details.isDwell ? 'Stop' : 'Waypoint'}</span>
+            </div>
+            ${placeLine}
+            <div class="text-[11px] text-zinc-600 dark:text-zinc-300">${escapeHtml(timeRange)}</div>
+            <div class="text-[11px] font-medium text-zinc-900 dark:text-zinc-100">${stayLine}${details.pingCount > 1 ? ` · ${details.pingCount} pings` : ''}</div>
+            ${buildExternalMapsPopupRowHtml(lat, lon, details.matchedPlaceName ?? `${details.username} trail`)}
+          </div>
+        `;
+
+        trailPopupRef.current?.remove();
+        trailPopupRef.current = new maplibregl.Popup({ offset: 12 })
+          .setLngLat([lon, lat])
+          .setHTML(html)
+          .addTo(map);
       });
     };
 

@@ -202,7 +202,7 @@ export default function PublicSharePage() {
         setShareError(geoErr.message || 'Location permission denied');
         setSharingLive(false);
       },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
     );
 
     return () => {
@@ -230,7 +230,8 @@ export default function PublicSharePage() {
       const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
-          timeout: 12000,
+          maximumAge: 0,
+          timeout: 15000,
         });
       });
       await sendGuestCoordinate({

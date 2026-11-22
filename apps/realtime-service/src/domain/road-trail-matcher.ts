@@ -30,7 +30,8 @@ const TARGET_ROAD_ZOOM = 14;
 const NODE_MERGE_DISTANCE_METERS = 2.5;
 const SEGMENT_GRID_CELL_METERS = 80;
 const ARCHIVE_REFRESH_INTERVAL_MS = 15_000;
-const EXCLUDED_ROAD_KINDS = new Set(['rail', 'ferry']);
+const EXCLUDED_ROAD_KINDS = new Set(['ferry']);
+const MAX_COARSE_MOVING_ACCURACY_METERS = 150;
 
 export interface RoadEdgeFeature {
   coords: [number, number][];
@@ -559,6 +560,48 @@ interface SnapCandidate {
   lat: number;
   lon: number;
   distMeters: number;
+  bearingDeg: number;
+}
+
+function segmentBearingDeg(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const cosLat = Math.max(0.15, Math.cos(((aLat + bLat) * 0.5 * Math.PI) / 180));
+  const dx = (bLon - aLon) * cosLat;
+  const dy = bLat - aLat;
+  if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) return 0;
+  const deg = (Math.atan2(dx, dy) * 180) / Math.PI;
+  return ((deg % 360) + 360) % 360;
+}
+
+function directedAngleDiffDeg(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360;
+  return diff > 180 ? 360 - diff : diff;
+}
+
+function undirectedAngleDiffDeg(a: number, b: number): number {
+  const diff = Math.abs((a % 180) - (b % 180));
+  return diff > 90 ? 180 - diff : diff;
+}
+
+function initialBearingDeg(coords: readonly [number, number][]): number | null {
+  for (let i = 0; i < coords.length - 1; i += 1) {
+    const [lonA, latA] = coords[i];
+    const [lonB, latB] = coords[i + 1];
+    if (haversineMeters(latA, lonA, latB, lonB) >= 2) {
+      return segmentBearingDeg(latA, lonA, latB, lonB);
+    }
+  }
+  return null;
+}
+
+function finalBearingDeg(coords: readonly [number, number][]): number | null {
+  for (let i = coords.length - 1; i > 0; i -= 1) {
+    const [lonA, latA] = coords[i - 1];
+    const [lonB, latB] = coords[i];
+    if (haversineMeters(latA, lonA, latB, lonB) >= 2) {
+      return segmentBearingDeg(latA, lonA, latB, lonB);
+    }
+  }
+  return null;
 }
 
 function projectPointOntoSegment(
@@ -605,7 +648,9 @@ function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCan
         if (seenSegs.has(segId)) continue;
         seenSegs.add(segId);
         const seg = graph.segments[segId];
-        const proj = projectPointOntoSegment(lat, lon, graph.nodes[seg.aNode], graph.nodes[seg.bNode]);
+        const aNode = graph.nodes[seg.aNode];
+        const bNode = graph.nodes[seg.bNode];
+        const proj = projectPointOntoSegment(lat, lon, aNode, bNode);
         if (proj.distMeters <= MAX_SNAP_DISTANCE_METERS) {
           rawCandidates.push({
             segmentId: segId,
@@ -614,6 +659,7 @@ function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCan
             lat: proj.lat,
             lon: proj.lon,
             distMeters: proj.distMeters,
+            bearingDeg: segmentBearingDeg(aNode.lat, aNode.lon, bNode.lat, bNode.lon),
           });
         }
       }
@@ -625,12 +671,13 @@ function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCan
 }
 
 /**
- * Weights road edges by Protomaps `kind` and implied trip speed so walking trips
- * naturally use footpaths/side streets while faster vehicular trips prefer roads.
+ * Weights road and transit edges by Protomaps `kind` and implied trip speed so walking trips
+ * use footpaths/side streets, driving uses roads, and transit speeds can follow rail/tram tracks.
  */
 function roadCostFactor(kind: string, speedMps: number | null): number {
   if (speedMps !== null && speedMps <= 2.5) {
     if (kind === 'path') return 1.0;
+    if (kind === 'rail') return 4.5;
     if (kind === 'highway') return 2.2;
     if (kind === 'major_road' || kind === 'medium_road') return 1.15;
     return 1.05;
@@ -638,12 +685,37 @@ function roadCostFactor(kind: string, speedMps: number | null): number {
   if (speedMps !== null && speedMps > 4.5) {
     if (kind === 'highway') return 0.95;
     if (kind === 'major_road' || kind === 'medium_road') return 1.0;
+    if (kind === 'rail') return 1.02;
     if (kind === 'path') return 3.5;
     return 1.15;
   }
   if (kind === 'highway') return 1.2;
   if (kind === 'path') return 1.35;
+  if (kind === 'rail') return 1.8;
   return 1.0;
+}
+
+function emissionCost(
+  cand: SnapCandidate,
+  visit: TrailStopVisit,
+  speedMps: number | null,
+): number {
+  const sigma =
+    typeof visit.accuracyMeters === 'number' && Number.isFinite(visit.accuracyMeters)
+      ? Math.max(12, Math.min(120, visit.accuracyMeters))
+      : 22;
+  const distTerm = cand.distMeters * (22 / sigma) * 1.35 + (cand.distMeters / sigma) ** 2 * 14;
+  const roadPenalty = (roadCostFactor(cand.kind, speedMps) - 1) * 15;
+  let headingPenalty = 0;
+  if (
+    typeof visit.headingDeg === 'number' &&
+    Number.isFinite(visit.headingDeg) &&
+    (visit.maxSpeedMps === null || visit.maxSpeedMps >= 1.5)
+  ) {
+    const angleDiff = undirectedAngleDiffDeg(visit.headingDeg, cand.bearingDeg);
+    headingPenalty = (angleDiff / 90) * 12;
+  }
+  return distTerm + roadPenalty + headingPenalty;
 }
 
 interface AStarHeapNode {
@@ -913,10 +985,11 @@ export class RoadTrailMatcher {
 
   private async matchSingleTrip(visits: readonly TrailStopVisit[]): Promise<{
     segments: TrailPathSegment[];
+    visits: TrailStopVisit[];
     hasRoadMatches: boolean;
   }> {
     if (visits.length < 2) {
-      return { segments: [], hasRoadMatches: false };
+      return { segments: [], visits: [...visits], hasRoadMatches: false };
     }
 
     // Never road-snap FUZZED (~1 km grid) trails; render straight dashed lines instead.
@@ -928,6 +1001,7 @@ export class RoadTrailMatcher {
             coordinates: visits.map((v) => [v.longitude, v.latitude] as [number, number]),
           },
         ],
+        visits: [...visits],
         hasRoadMatches: false,
       };
     }
@@ -942,6 +1016,7 @@ export class RoadTrailMatcher {
             coordinates: visits.map((v) => [v.longitude, v.latitude] as [number, number]),
           },
         ],
+        visits: [...visits],
         hasRoadMatches: false,
       };
     }
@@ -950,9 +1025,12 @@ export class RoadTrailMatcher {
     const graph = buildRoadGraph(roadFeatures, midLat);
     const candidatesByStop = visits.map((v) => findSnapCandidates(graph, v.latitude, v.longitude));
 
-    // Viterbi DP across candidate snaps per stop, restarting smoothly across unmatched gaps.
+    // Viterbi DP across candidate snaps per stop, supporting turn-angle penalties and 1-step outlier skipping.
     const chosenCandidate: Array<SnapCandidate | null> = new Array(visits.length).fill(null);
-    const legRoutes: Array<RoutedLegResult | null> = new Array(visits.length - 1).fill(null);
+    const skippedVisit = new Array<boolean>(visits.length).fill(false);
+    const legRoutes: Array<{ route: RoutedLegResult; nextIdx: number } | null> = new Array(
+      visits.length,
+    ).fill(null);
 
     let chainStart = 0;
     while (chainStart < visits.length) {
@@ -973,20 +1051,26 @@ export class RoadTrailMatcher {
       }
 
       const dpCost: number[][] = [];
-      const dpPrev: number[][] = [];
+      const dpPrevCand: number[][] = [];
+      const dpPrevStepOffset: number[][] = [];
       const dpRoute: Array<Array<RoutedLegResult | null>> = [];
+      const dpBearing: Array<Array<number | null>> = [];
 
       const firstCands = candidatesByStop[chainStart];
-      dpCost.push(
-        firstCands.map((c) => c.distMeters * 1.6 + (c.distMeters / 20) ** 2),
-      );
-      dpPrev.push(firstCands.map(() => -1));
+      dpCost.push(firstCands.map((c) => emissionCost(c, visits[chainStart], visits[chainStart].maxSpeedMps)));
+      dpPrevCand.push(firstCands.map(() => -1));
+      dpPrevStepOffset.push(firstCands.map(() => 0));
       dpRoute.push(firstCands.map(() => null));
+      dpBearing.push(firstCands.map(() => null));
 
       let brokenAt: number | null = null;
       for (let idx = chainStart + 1; idx <= chainEnd; idx += 1) {
-        const prevVisit = visits[idx - 1];
         const currVisit = visits[idx];
+        const currCands = candidatesByStop[idx];
+        const prevRow = dpCost[dpCost.length - 1];
+        const prevBearings = dpBearing[dpBearing.length - 1];
+
+        const prevVisit = visits[idx - 1];
         const straightDist = haversineMeters(
           prevVisit.latitude,
           prevVisit.longitude,
@@ -995,25 +1079,50 @@ export class RoadTrailMatcher {
         );
         const speedMps = estimateLegSpeedMps(prevVisit, currVisit, straightDist);
         const maxDetour = Math.max(800, straightDist * 3.5 + 500);
-
         const prevCands = candidatesByStop[idx - 1];
-        const currCands = candidatesByStop[idx];
-        const prevRow = dpCost[dpCost.length - 1];
+
+        // Allow skipping 1 non-dwell moving waypoint when it forces an unnatural side-street loop/U-turn
+        const canSkipPrev =
+          idx >= chainStart + 2 &&
+          !prevVisit.isDwell &&
+          !visits[idx - 2].isDwell;
+        const skipPrevVisit = canSkipPrev ? visits[idx - 2] : null;
+        const skipStraightDist = skipPrevVisit
+          ? haversineMeters(
+              skipPrevVisit.latitude,
+              skipPrevVisit.longitude,
+              currVisit.latitude,
+              currVisit.longitude,
+            )
+          : 0;
+        const skipSpeedMps = skipPrevVisit
+          ? estimateLegSpeedMps(skipPrevVisit, currVisit, skipStraightDist)
+          : null;
+        const skipMaxDetour = Math.max(800, skipStraightDist * 3.5 + 500);
+        const skipCands = canSkipPrev ? candidatesByStop[idx - 2] : [];
+        const skipRow = canSkipPrev ? dpCost[dpCost.length - 2] : [];
+        const skipBearings = canSkipPrev ? dpBearing[dpBearing.length - 2] : [];
+        const prevAcc =
+          typeof prevVisit.accuracyMeters === 'number' && Number.isFinite(prevVisit.accuracyMeters)
+            ? prevVisit.accuracyMeters
+            : 35;
+        const skipPenalty = 45 + Math.max(0, 65 - prevAcc) * 0.55;
 
         const nextRow: number[] = [];
-        const nextPrev: number[] = [];
+        const nextPrevCand: number[] = [];
+        const nextStepOffset: number[] = [];
         const nextRoutes: Array<RoutedLegResult | null> = [];
+        const nextBearings: Array<number | null> = [];
         let anyConnected = false;
 
         for (let ci = 0; ci < currCands.length; ci += 1) {
           const currCand = currCands[ci];
-          const emission =
-            currCand.distMeters * 1.6 +
-            (currCand.distMeters / 20) ** 2 +
-            (roadCostFactor(currCand.kind, speedMps) - 1) * 15;
+          const emission = emissionCost(currCand, currVisit, speedMps);
           let bestTotal = Infinity;
           let bestPrevIdx = -1;
+          let bestStepOffset = 1;
           let bestRoute: RoutedLegResult | null = null;
+          let bestEndBearing: number | null = null;
 
           for (let pi = 0; pi < prevCands.length; pi += 1) {
             if (!Number.isFinite(prevRow[pi])) continue;
@@ -1026,17 +1135,68 @@ export class RoadTrailMatcher {
             );
             if (!routed) continue;
             const detourPenalty = Math.max(0, routed.distanceMeters - straightDist) * 0.35;
-            const total = prevRow[pi] + routed.cost * 0.35 + detourPenalty + emission;
+            let turnPenalty = 0;
+            const prevB = prevBearings[pi];
+            const depB = initialBearingDeg(routed.coordinates);
+            if (prevB !== null && depB !== null && !prevVisit.isDwell && routed.distanceMeters >= 12) {
+              const turnDeg = directedAngleDiffDeg(prevB, depB);
+              if (turnDeg > 135) turnPenalty = 55;
+              else if (turnDeg > 75) turnPenalty = (turnDeg - 75) * 0.3;
+            }
+            const total =
+              prevRow[pi] + routed.cost * 0.35 + detourPenalty + turnPenalty + emission;
             if (total < bestTotal) {
               bestTotal = total;
               bestPrevIdx = pi;
+              bestStepOffset = 1;
               bestRoute = routed;
+              bestEndBearing = finalBearingDeg(routed.coordinates) ?? prevB;
+            }
+          }
+
+          if (canSkipPrev) {
+            const skipEmission = emissionCost(currCand, currVisit, skipSpeedMps);
+            for (let ppi = 0; ppi < skipCands.length; ppi += 1) {
+              if (!Number.isFinite(skipRow[ppi])) continue;
+              const routed = routeBetweenCandidates(
+                graph,
+                skipCands[ppi],
+                currCand,
+                skipSpeedMps,
+                skipMaxDetour,
+              );
+              if (!routed) continue;
+              const detourPenalty = Math.max(0, routed.distanceMeters - skipStraightDist) * 0.35;
+              let turnPenalty = 0;
+              const prevB = skipBearings[ppi];
+              const depB = initialBearingDeg(routed.coordinates);
+              if (prevB !== null && depB !== null && routed.distanceMeters >= 12) {
+                const turnDeg = directedAngleDiffDeg(prevB, depB);
+                if (turnDeg > 135) turnPenalty = 55;
+                else if (turnDeg > 75) turnPenalty = (turnDeg - 75) * 0.3;
+              }
+              const total =
+                skipRow[ppi] +
+                routed.cost * 0.35 +
+                detourPenalty +
+                turnPenalty +
+                skipEmission +
+                skipPenalty;
+              if (total < bestTotal) {
+                bestTotal = total;
+                bestPrevIdx = ppi;
+                bestStepOffset = 2;
+                bestRoute = routed;
+                bestEndBearing = finalBearingDeg(routed.coordinates) ?? prevB;
+              }
             }
           }
 
           nextRow.push(bestTotal);
-          nextPrev.push(bestPrevIdx);
+          nextPrevCand.push(bestPrevIdx);
+          nextStepOffset.push(bestStepOffset);
           nextRoutes.push(bestRoute);
+          nextBearings.push(bestEndBearing);
           if (bestPrevIdx !== -1) anyConnected = true;
         }
 
@@ -1045,8 +1205,10 @@ export class RoadTrailMatcher {
           break;
         }
         dpCost.push(nextRow);
-        dpPrev.push(nextPrev);
+        dpPrevCand.push(nextPrevCand);
+        dpPrevStepOffset.push(nextStepOffset);
         dpRoute.push(nextRoutes);
+        dpBearing.push(nextBearings);
       }
 
       const resolvedEnd = brokenAt !== null ? brokenAt - 1 : chainEnd;
@@ -1060,14 +1222,23 @@ export class RoadTrailMatcher {
         }
       }
 
+      let step = lastRowIdx;
       let cursor = bestCandIdx;
-      for (let step = lastRowIdx; step >= 0; step -= 1) {
+      while (step >= 0 && cursor >= 0) {
         const stopIdx = chainStart + step;
         chosenCandidate[stopIdx] = candidatesByStop[stopIdx][cursor];
-        if (step > 0) {
-          legRoutes[stopIdx - 1] = dpRoute[step][cursor];
-          cursor = dpPrev[step][cursor];
+        if (step === 0) break;
+        const offset = dpPrevStepOffset[step][cursor];
+        const prevCursor = dpPrevCand[step][cursor];
+        const route = dpRoute[step][cursor];
+        if (offset === 2) {
+          skippedVisit[stopIdx - 1] = true;
         }
+        if (route) {
+          legRoutes[stopIdx - offset] = { route, nextIdx: stopIdx };
+        }
+        step -= offset;
+        cursor = prevCursor;
       }
 
       chainStart = resolvedEnd + 1;
@@ -1095,7 +1266,7 @@ export class RoadTrailMatcher {
     };
 
     const maybeAddSpur = (visit: TrailStopVisit, snapped: SnapCandidate | null) => {
-      if (!snapped) return;
+      if (!snapped || (!visit.isDwell && visits.length > 2)) return;
       const offset = haversineMeters(visit.latitude, visit.longitude, snapped.lat, snapped.lon);
       if (offset <= this.spurThresholdMeters) return;
       const sLon = Number(snapped.lon.toFixed(6));
@@ -1112,17 +1283,27 @@ export class RoadTrailMatcher {
       });
     };
 
-    for (let i = 0; i < visits.length - 1; i += 1) {
-      const leg = legRoutes[i];
-      if (leg && leg.coordinates.length >= 2) {
+    let i = 0;
+    while (i < visits.length - 1) {
+      if (skippedVisit[i]) {
+        i += 1;
+        continue;
+      }
+      const legEntry = legRoutes[i];
+      if (legEntry && legEntry.route.coordinates.length >= 2) {
         maybeAddSpur(visits[i], chosenCandidate[i]);
-        pendingRoadCoords.push(leg.coordinates);
-        pendingRoadKind = pendingRoadKind ?? leg.dominantRoadKind;
-        maybeAddSpur(visits[i + 1], chosenCandidate[i + 1]);
+        pendingRoadCoords.push(legEntry.route.coordinates);
+        pendingRoadKind = pendingRoadKind ?? legEntry.route.dominantRoadKind;
+        maybeAddSpur(visits[legEntry.nextIdx], chosenCandidate[legEntry.nextIdx]);
+        i = legEntry.nextIdx;
       } else {
         flushRoad();
+        let nextIdx = i + 1;
+        while (nextIdx < visits.length - 1 && skippedVisit[nextIdx]) {
+          nextIdx += 1;
+        }
         const a = visits[i];
-        const b = visits[i + 1];
+        const b = visits[nextIdx];
         segments.push({
           kind: 'direct',
           coordinates: [
@@ -1130,11 +1311,28 @@ export class RoadTrailMatcher {
             [b.longitude, b.latitude],
           ],
         });
+        i = nextIdx;
       }
     }
     flushRoad();
 
-    return { segments, hasRoadMatches };
+    const keptVisits: TrailStopVisit[] = [];
+    for (let idx = 0; idx < visits.length; idx += 1) {
+      if (skippedVisit[idx]) continue;
+      const v = visits[idx];
+      const snapped = chosenCandidate[idx];
+      if (snapped && !v.isDwell) {
+        keptVisits.push({
+          ...v,
+          latitude: Number(snapped.lat.toFixed(6)),
+          longitude: Number(snapped.lon.toFixed(6)),
+        });
+      } else {
+        keptVisits.push(v);
+      }
+    }
+
+    return { segments, visits: keptVisits, hasRoadMatches };
   }
 
   async matchTrails(rawPings: readonly TrailPingLike[]): Promise<MatchedUserTrail[]> {
@@ -1148,7 +1346,7 @@ export class RoadTrailMatcher {
         rawPings
           .map(
             (p) =>
-              `${p.userId}:${p.latitude.toFixed(6)},${p.longitude.toFixed(6)}:${p.recordedAt}:${p.isFuzzed ? 1 : 0}`,
+              `${p.userId}:${p.latitude.toFixed(6)},${p.longitude.toFixed(6)}:${p.recordedAt}:${p.isFuzzed ? 1 : 0}:${p.accuracy ?? ''}:${p.heading ?? ''}`,
           )
           .join('|'),
       )
@@ -1161,7 +1359,32 @@ export class RoadTrailMatcher {
       return cached;
     }
 
-    const compacted = averageNearbyTrailPings(rawPings);
+    // Pre-filter ultra-coarse moving pings when higher-confidence fixes exist in the same user's stream
+    const hasPreciseByUser = new Map<string, boolean>();
+    for (const p of rawPings) {
+      if (
+        !p.isFuzzed &&
+        typeof p.accuracy === 'number' &&
+        Number.isFinite(p.accuracy) &&
+        p.accuracy <= 60
+      ) {
+        hasPreciseByUser.set(p.userId, true);
+      }
+    }
+    const filteredPings = rawPings.filter((p) => {
+      if (p.isFuzzed) return true;
+      if (
+        hasPreciseByUser.get(p.userId) &&
+        typeof p.accuracy === 'number' &&
+        Number.isFinite(p.accuracy) &&
+        p.accuracy > MAX_COARSE_MOVING_ACCURACY_METERS
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    const compacted = averageNearbyTrailPings(filteredPings.length > 0 ? filteredPings : rawPings);
     const matched: MatchedUserTrail[] = [];
 
     for (const userTrail of compacted) {
@@ -1184,12 +1407,16 @@ export class RoadTrailMatcher {
       });
 
       const userSegments: TrailPathSegment[] = [];
+      const userVisits: TrailStopVisit[] = [];
       let userHasRoadMatches = false;
 
       for (const trip of trips) {
         const res = await this.matchSingleTrip(trip);
         for (const seg of res.segments) {
           userSegments.push(seg);
+        }
+        for (const kv of res.visits) {
+          userVisits.push(kv);
         }
         if (res.hasRoadMatches) userHasRoadMatches = true;
       }
@@ -1198,6 +1425,7 @@ export class RoadTrailMatcher {
         userId: userTrail.userId,
         username: userTrail.username,
         stops: userTrail.stops,
+        visits: userVisits,
         segments: userSegments,
         hasRoadMatches: userHasRoadMatches,
       });

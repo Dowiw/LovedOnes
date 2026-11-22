@@ -967,5 +967,19 @@ describe('@loved-ones/mobile-app', () => {
     });
     expect(status.kind).toBe('idle_at_place');
     expect(status.detailText).toContain('Idle at Dowi Home');
+
+    // 5. Cold-start warmup keeps initial pings in High-accuracy moving mode until warmup completes
+    const w0 = 1_700_100_000_000;
+    const warm1 = evaluateAdaptiveTrackingTransition(null, 52.52, 13.405, w0);
+    expect(warm1.isWarmup).toBe(true);
+    expect(warm1.nextMode).toBe('moving');
+
+    const warm2 = evaluateAdaptiveTrackingTransition(warm1.nextState, 52.52, 13.405, w0 + 10_000);
+    expect(warm2.isWarmup).toBe(true);
+    expect(warm2.nextMode).toBe('moving');
+
+    const warm3 = evaluateAdaptiveTrackingTransition(warm2.nextState, 52.52, 13.405, w0 + 20_000);
+    expect(warm3.isWarmup).toBe(false);
+    expect(warm3.nextMode).toBe('moving');
   });
 });

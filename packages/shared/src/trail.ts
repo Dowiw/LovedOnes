@@ -2,6 +2,7 @@ export const DEFAULT_TRAIL_CLUSTER_RADIUS_METERS = 85;
 export const DEFAULT_TRAIL_MAX_TIME_GAP_MS = 30 * 60 * 1000;
 export const DEFAULT_TRAIL_MAX_DISTANCE_METERS = 15_000;
 export const DEFAULT_TRAIL_SPUR_THRESHOLD_METERS = 15;
+export const DEFAULT_TRAIL_DWELL_THRESHOLD_MS = 90_000;
 const EARTH_RADIUS_METERS = 6_371_000;
 const METERS_PER_DEGREE_LAT = 111_320;
 
@@ -13,6 +14,8 @@ export interface TrailPingLike {
   recordedAt: string;
   isFuzzed?: boolean;
   speed?: number | null;
+  accuracy?: number | null;
+  heading?: number | null;
 }
 
 export interface AveragedTrailStop {
@@ -34,6 +37,11 @@ export interface TrailStopVisit {
   lastRecordedAt: string;
   isFuzzed: boolean;
   maxSpeedMps: number | null;
+  pingCount?: number;
+  dwellDurationMs?: number;
+  isDwell?: boolean;
+  accuracyMeters?: number | null;
+  headingDeg?: number | null;
 }
 
 export interface CompactUserTrail {
@@ -62,7 +70,9 @@ export interface MatchedUserTrail {
   userId: string;
   username: string;
   stops: AveragedTrailStop[];
-  /** Ordered segments combining road-snapped routes ('road'), unmatched/fuzzed gaps ('direct'), and >15m off-road spurs ('spur'). */
+  /** Per-visit arrival/departure sequence preserving separate revisits to the same stop. */
+  visits?: TrailStopVisit[];
+  /** Ordered segments combining road-snapped routes ('road'), unmatched/fuzzed gaps ('direct'), and >15m off-road dwell spurs ('spur'). */
   segments: TrailPathSegment[];
   /** True when at least one segment was matched onto road/path geometry. */
   hasRoadMatches: boolean;
@@ -80,6 +90,8 @@ export interface TrailGeoJsonFeature {
     pingCount?: number;
     firstRecordedAt?: string;
     lastRecordedAt?: string;
+    stayDurationMs?: number;
+    isDwell?: boolean;
     isFuzzed?: boolean;
     roadKind?: string;
   };
@@ -250,6 +262,22 @@ function compactSingleUserTrail(
       maxSpeedMps:
         typeof sorted[idx]?.speed === 'number' && Number.isFinite(sorted[idx].speed!)
           ? sorted[idx].speed!
+          : null,
+      pingCount: 1,
+      dwellDurationMs: 0,
+      isDwell: false,
+      accuracyMeters:
+        typeof sorted[idx]?.accuracy === 'number' &&
+        Number.isFinite(sorted[idx].accuracy!) &&
+        sorted[idx].accuracy! >= 0
+          ? sorted[idx].accuracy!
+          : null,
+      headingDeg:
+        typeof sorted[idx]?.heading === 'number' &&
+        Number.isFinite(sorted[idx].heading!) &&
+        sorted[idx].heading! >= 0 &&
+        sorted[idx].heading! <= 360
+          ? sorted[idx].heading!
           : null,
     }));
     return {
@@ -471,6 +499,7 @@ function compactSingleUserTrail(
   const stops: AveragedTrailStop[] = [];
   const pathCoordinates: [number, number][] = [];
   const visits: TrailStopVisit[] = [];
+  const visitAccuracyState: Array<{ sum: number; count: number }> = [];
   let lastClusterId: number | null = null;
 
   for (let i = 0; i < sorted.length; i += 1) {
@@ -496,6 +525,21 @@ function compactSingleUserTrail(
     }
     const speedVal =
       typeof pt.speed === 'number' && Number.isFinite(pt.speed) && pt.speed >= 0 ? pt.speed : null;
+    const accVal =
+      !entry.stop.isFuzzed &&
+      typeof pt.accuracy === 'number' &&
+      Number.isFinite(pt.accuracy) &&
+      pt.accuracy >= 0
+        ? pt.accuracy
+        : null;
+    const headVal =
+      !entry.stop.isFuzzed &&
+      typeof pt.heading === 'number' &&
+      Number.isFinite(pt.heading) &&
+      pt.heading >= 0 &&
+      pt.heading <= 360
+        ? pt.heading
+        : null;
 
     if (lastClusterId !== cid) {
       pathCoordinates.push([entry.stop.longitude, entry.stop.latitude]);
@@ -507,13 +551,35 @@ function compactSingleUserTrail(
         lastRecordedAt: pt.recordedAt,
         isFuzzed: entry.stop.isFuzzed,
         maxSpeedMps: speedVal,
+        pingCount: 1,
+        dwellDurationMs: 0,
+        isDwell: false,
+        accuracyMeters: accVal,
+        headingDeg: headVal,
       });
+      visitAccuracyState.push({ sum: accVal ?? 0, count: accVal !== null ? 1 : 0 });
       lastClusterId = cid;
     } else if (visits.length > 0) {
       const curVisit = visits[visits.length - 1];
+      const accState = visitAccuracyState[visitAccuracyState.length - 1];
       curVisit.lastRecordedAt = pt.recordedAt;
+      curVisit.pingCount = (curVisit.pingCount ?? 1) + 1;
+      const firstMs = Date.parse(curVisit.firstRecordedAt);
+      const lastMs = Date.parse(curVisit.lastRecordedAt);
+      const durationMs =
+        Number.isFinite(firstMs) && Number.isFinite(lastMs) ? Math.max(0, lastMs - firstMs) : 0;
+      curVisit.dwellDurationMs = durationMs;
+      curVisit.isDwell = durationMs >= DEFAULT_TRAIL_DWELL_THRESHOLD_MS;
       if (speedVal !== null && (curVisit.maxSpeedMps === null || speedVal > curVisit.maxSpeedMps)) {
         curVisit.maxSpeedMps = speedVal;
+      }
+      if (accVal !== null) {
+        accState.sum += accVal;
+        accState.count += 1;
+        curVisit.accuracyMeters = Number((accState.sum / accState.count).toFixed(1));
+      }
+      if (headVal !== null) {
+        curVisit.headingDeg = headVal;
       }
     }
   }
@@ -634,6 +700,155 @@ export interface BuildTrailGeoJsonOptions {
   filterUserId?: string | null;
 }
 
+function computeVisitDurationMs(firstRecordedAt?: string, lastRecordedAt?: string): number {
+  if (!firstRecordedAt || !lastRecordedAt) return 0;
+  const startMs = Date.parse(firstRecordedAt);
+  const endMs = Date.parse(lastRecordedAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return 0;
+  return Math.max(0, endMs - startMs);
+}
+
+/** Formats a dwell/stay duration in milliseconds into a concise label (`Passing through`, `< 1m`, `12m`, `1h 25m`). */
+export function formatStayDuration(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return 'Passing through';
+  const totalMinutes = Math.floor(durationMs / 60_000);
+  if (totalMinutes < 1) return '< 1m';
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+export interface TrailPlaceLike {
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  isPrivate?: boolean;
+}
+
+export interface TrailPointDetails {
+  username: string;
+  firstRecordedAt: string | null;
+  lastRecordedAt: string | null;
+  pingCount: number;
+  stayDurationMs: number;
+  durationLabel: string;
+  isDwell: boolean;
+  isFuzzed: boolean;
+  matchedPlaceName: string | null;
+  matchedPlaceIsPrivate: boolean;
+}
+
+/**
+ * Computes human-readable timestamp, stay duration, and saved-Place match details
+ * for a clicked or tapped trail point feature while respecting FUZZED privacy.
+ */
+export function resolveTrailPointDetails(input: {
+  latitude: number;
+  longitude: number;
+  username?: string;
+  firstRecordedAt?: string | null;
+  lastRecordedAt?: string | null;
+  pingCount?: number;
+  stayDurationMs?: number;
+  isDwell?: boolean;
+  isFuzzed?: boolean;
+  places?: readonly TrailPlaceLike[];
+}): TrailPointDetails {
+  const firstRecordedAt = input.firstRecordedAt ?? null;
+  const lastRecordedAt = input.lastRecordedAt ?? firstRecordedAt;
+  const stayDurationMs =
+    typeof input.stayDurationMs === 'number' && Number.isFinite(input.stayDurationMs)
+      ? Math.max(0, input.stayDurationMs)
+      : computeVisitDurationMs(firstRecordedAt ?? undefined, lastRecordedAt ?? undefined);
+  const isDwell =
+    typeof input.isDwell === 'boolean'
+      ? input.isDwell
+      : stayDurationMs >= DEFAULT_TRAIL_DWELL_THRESHOLD_MS;
+  const isFuzzed = Boolean(input.isFuzzed);
+
+  let matchedPlace: { name: string; isPrivate: boolean; dist: number } | null = null;
+  if (!isFuzzed && input.places && input.places.length > 0) {
+    for (const place of input.places) {
+      const dist = haversineMeters(input.latitude, input.longitude, place.latitude, place.longitude);
+      if (dist <= place.radiusMeters && (!matchedPlace || dist < matchedPlace.dist)) {
+        matchedPlace = { name: place.name, isPrivate: Boolean(place.isPrivate), dist };
+      }
+    }
+  }
+
+  return {
+    username: input.username ?? 'Member',
+    firstRecordedAt,
+    lastRecordedAt,
+    pingCount: typeof input.pingCount === 'number' && input.pingCount >= 1 ? input.pingCount : 1,
+    stayDurationMs,
+    durationLabel: formatStayDuration(stayDurationMs),
+    isDwell,
+    isFuzzed,
+    matchedPlaceName: matchedPlace?.name ?? null,
+    matchedPlaceIsPrivate: matchedPlace?.isPrivate ?? false,
+  };
+}
+
+function appendUserPointFeatures(
+  features: TrailGeoJsonFeature[],
+  userId: string,
+  username: string,
+  stops: readonly AveragedTrailStop[],
+  visits?: readonly TrailStopVisit[],
+): number {
+  let count = 0;
+  if (visits && visits.length > 0) {
+    for (const visit of visits) {
+      count += 1;
+      const stayDurationMs =
+        visit.dwellDurationMs ?? computeVisitDurationMs(visit.firstRecordedAt, visit.lastRecordedAt);
+      const isDwell =
+        visit.isDwell ?? stayDurationMs >= DEFAULT_TRAIL_DWELL_THRESHOLD_MS;
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [visit.longitude, visit.latitude] },
+        properties: {
+          kind: 'stop',
+          userId,
+          username,
+          pingCount: visit.pingCount ?? stops[visit.stopIndex]?.pingCount ?? 1,
+          firstRecordedAt: visit.firstRecordedAt,
+          lastRecordedAt: visit.lastRecordedAt,
+          stayDurationMs,
+          isDwell,
+          isFuzzed: visit.isFuzzed,
+        },
+      });
+    }
+    return count;
+  }
+
+  for (const stop of stops) {
+    count += 1;
+    const stayDurationMs = computeVisitDurationMs(stop.firstRecordedAt, stop.lastRecordedAt);
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [stop.longitude, stop.latitude] },
+      properties: {
+        kind: 'stop',
+        userId: stop.userId,
+        username: stop.username,
+        pingCount: stop.pingCount,
+        firstRecordedAt: stop.firstRecordedAt,
+        lastRecordedAt: stop.lastRecordedAt,
+        stayDurationMs,
+        isDwell: stayDurationMs >= DEFAULT_TRAIL_DWELL_THRESHOLD_MS,
+        isFuzzed: stop.isFuzzed,
+      },
+    });
+  }
+  return count;
+}
+
 /**
  * Converts either road-snapped `MatchedUserTrail[]` or raw `TrailPingLike[]`
  * into MapLibre-ready GeoJSON Point/LineString features shared across web and mobile.
@@ -657,22 +872,13 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
   if (usableMatched && usableMatched.length > 0) {
     for (const userTrail of usableMatched) {
       if (userTrail.hasRoadMatches) hasRoadMatches = true;
-      for (const stop of userTrail.stops) {
-        stopsCount += 1;
-        features.push({
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [stop.longitude, stop.latitude] },
-          properties: {
-            kind: 'stop',
-            userId: stop.userId,
-            username: stop.username,
-            pingCount: stop.pingCount,
-            firstRecordedAt: stop.firstRecordedAt,
-            lastRecordedAt: stop.lastRecordedAt,
-            isFuzzed: stop.isFuzzed,
-          },
-        });
-      }
+      stopsCount += appendUserPointFeatures(
+        features,
+        userTrail.userId,
+        userTrail.username,
+        userTrail.stops,
+        userTrail.visits,
+      );
       for (const seg of userTrail.segments) {
         if (seg.coordinates.length < 2) continue;
         features.push({
@@ -699,22 +905,13 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
 
   const compacted = averageNearbyTrailPings(rawFiltered);
   for (const userTrail of compacted) {
-    for (const stop of userTrail.stops) {
-      stopsCount += 1;
-      features.push({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [stop.longitude, stop.latitude] },
-        properties: {
-          kind: 'stop',
-          userId: stop.userId,
-          username: stop.username,
-          pingCount: stop.pingCount,
-          firstRecordedAt: stop.firstRecordedAt,
-          lastRecordedAt: stop.lastRecordedAt,
-          isFuzzed: stop.isFuzzed,
-        },
-      });
-    }
+    stopsCount += appendUserPointFeatures(
+      features,
+      userTrail.userId,
+      userTrail.username,
+      userTrail.stops,
+      userTrail.visits,
+    );
     if (userTrail.pathCoordinates.length >= 2) {
       features.push({
         type: 'Feature',

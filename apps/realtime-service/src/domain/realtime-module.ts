@@ -210,6 +210,41 @@ export function filterAnomalousLocationPoints<
     lastAccepted = { pt: item.pt, ts: item.ts };
   }
 
+  // Drop transient out-and-back lateral bounces (e.g., coarse Wi-Fi/cell jumps into nearby buildings while moving)
+  if (accepted.length >= 3) {
+    const cleaned: T[] = [accepted[0]!];
+    for (let i = 1; i < accepted.length - 1; i += 1) {
+      const prev = cleaned[cleaned.length - 1]!;
+      const curr = accepted[i]!;
+      const next = accepted[i + 1]!;
+      const tPrev = Date.parse(prev.recordedAt);
+      const tNext = Date.parse(next.recordedAt);
+      const dtWindowSec =
+        Number.isFinite(tPrev) && Number.isFinite(tNext) ? (tNext - tPrev) / 1000 : NaN;
+
+      if (Number.isFinite(dtWindowSec) && dtWindowSec > 0 && dtWindowSec <= 90) {
+        const dAB = haversineMeters(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+        const dBC = haversineMeters(curr.latitude, curr.longitude, next.latitude, next.longitude);
+        const dAC = haversineMeters(prev.latitude, prev.longitude, next.latitude, next.longitude);
+        const currAcc =
+          typeof curr.accuracy === 'number' && Number.isFinite(curr.accuracy) ? curr.accuracy : null;
+        const detourMeters = dAB + dBC - dAC;
+        const detourRatio = (dAB + dBC) / Math.max(dAC, 1);
+        const impliedPathSpeed = (dAB + dBC) / dtWindowSec;
+        const isCoarseLateralBounce =
+          currAcc !== null && currAcc >= 65 && detourRatio > 2.2 && detourMeters > 110;
+        const isImpossibleLateralSpike =
+          detourRatio > 2.8 && detourMeters > 160 && impliedPathSpeed > 45;
+        if (isCoarseLateralBounce || isImpossibleLateralSpike) {
+          continue;
+        }
+      }
+      cleaned.push(curr);
+    }
+    cleaned.push(accepted[accepted.length - 1]!);
+    return cleaned;
+  }
+
   return accepted;
 }
 
@@ -264,7 +299,9 @@ function toPrivacySafeBroadcast(
     latitude: fuzzed.latitude,
     longitude: fuzzed.longitude,
     altitude: row.altitude,
+    accuracy: fuzzed.isFuzzed ? null : (row.accuracy ?? null),
     speed: row.speed,
+    heading: fuzzed.isFuzzed ? null : (row.heading ?? null),
     batteryLevel: presence?.batteryLevel ?? row.batteryLevel,
     recordedAt: row.recordedAt,
     lastHeartbeatAt: presence?.lastHeartbeatAt ?? null,
@@ -490,7 +527,9 @@ export class RealtimeModule {
         latitude: fuzzed.latitude,
         longitude: fuzzed.longitude,
         altitude: latest.altitude ?? null,
+        accuracy: fuzzed.isFuzzed ? null : (latest.accuracy ?? null),
         speed: latest.speed ?? null,
+        heading: fuzzed.isFuzzed ? null : (latest.heading ?? null),
         batteryLevel: activePresence.batteryLevel,
         recordedAt: latest.recordedAt,
         lastHeartbeatAt: activePresence.lastHeartbeatAt,

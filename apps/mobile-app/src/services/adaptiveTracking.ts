@@ -8,6 +8,8 @@ import type { AdaptiveTrackingState } from './secureConfig';
 export const BACKGROUND_WATCHDOG_TASK = 'LOVED_ONES_BACKGROUND_WATCHDOG_TASK';
 export const WATCHDOG_MINIMUM_INTERVAL_MINUTES = 15;
 export const STATIONARY_DWELL_BEFORE_IDLE_MS = 60_000;
+export const DEFAULT_WARMUP_PING_COUNT = 3;
+export const DEFAULT_WARMUP_WINDOW_MS = 30_000;
 
 export type AdaptiveLocationMode = 'moving' | 'idle';
 
@@ -15,14 +17,42 @@ export interface AdaptiveModeEvaluation {
   previousMode: AdaptiveLocationMode;
   nextMode: AdaptiveLocationMode;
   modeChanged: boolean;
+  isWarmup: boolean;
   movedMeters: number;
   nextState: AdaptiveTrackingState;
 }
 
+/** Returns true while cold-start high-accuracy warmup pings are still active. */
+export function isAdaptiveWarmupActive(
+  state: AdaptiveTrackingState | null,
+  nowMs = Date.now(),
+): boolean {
+  if (!state) return true;
+  const remaining = state.warmupRemainingPings ?? 0;
+  const untilMs = state.warmupUntilMs ?? 0;
+  return remaining > 0 && nowMs < untilMs;
+}
+
+/** Creates a fresh high-accuracy warmup state when starting or resuming tracking. */
+export function createInitialAdaptiveWarmupState(
+  latitude: number,
+  longitude: number,
+  nowMs = Date.now(),
+): AdaptiveTrackingState {
+  return {
+    mode: 'moving',
+    anchorLatitude: latitude,
+    anchorLongitude: longitude,
+    stationarySinceMs: nowMs,
+    warmupRemainingPings: DEFAULT_WARMUP_PING_COUNT,
+    warmupUntilMs: nowMs + DEFAULT_WARMUP_WINDOW_MS,
+  };
+}
+
 /**
  * Computes whether background location polling should stay in fast moving mode
- * (15s) or step down to low-power idle check-in mode (5 min) based on whether
- * the device stayed within 20m of its anchor for at least 60 seconds.
+ * (15s, High accuracy) or step down to low-power idle check-in mode (5 min, Balanced)
+ * after cold-start warmup completes and the device stays within 20m for 60s.
  */
 export function evaluateAdaptiveTrackingTransition(
   currentState: AdaptiveTrackingState | null,
@@ -33,19 +63,28 @@ export function evaluateAdaptiveTrackingTransition(
   dwellThresholdMs = STATIONARY_DWELL_BEFORE_IDLE_MS,
 ): AdaptiveModeEvaluation {
   if (!currentState) {
+    const remaining = Math.max(0, DEFAULT_WARMUP_PING_COUNT - 1);
+    const warmupUntilMs = nowMs + DEFAULT_WARMUP_WINDOW_MS;
     return {
       previousMode: 'moving',
       nextMode: 'moving',
       modeChanged: false,
+      isWarmup: remaining > 0,
       movedMeters: 0,
       nextState: {
         mode: 'moving',
         anchorLatitude: latitude,
         anchorLongitude: longitude,
         stationarySinceMs: nowMs,
+        warmupRemainingPings: remaining,
+        warmupUntilMs,
       },
     };
   }
+
+  const nextWarmupRemaining = Math.max(0, (currentState.warmupRemainingPings ?? 0) - 1);
+  const nextWarmupUntilMs = currentState.warmupUntilMs ?? 0;
+  const isWarmup = nextWarmupRemaining > 0 && nowMs < nextWarmupUntilMs;
 
   const movedMeters = haversineMeters(
     currentState.anchorLatitude,
@@ -59,30 +98,38 @@ export function evaluateAdaptiveTrackingTransition(
       previousMode: currentState.mode,
       nextMode: 'moving',
       modeChanged: currentState.mode !== 'moving',
+      isWarmup,
       movedMeters,
       nextState: {
         mode: 'moving',
         anchorLatitude: latitude,
         anchorLongitude: longitude,
         stationarySinceMs: nowMs,
+        warmupRemainingPings: nextWarmupRemaining,
+        warmupUntilMs: nextWarmupUntilMs,
       },
     };
   }
 
   const elapsedStationaryMs = Math.max(0, nowMs - currentState.stationarySinceMs);
   const nextMode: AdaptiveLocationMode =
-    currentState.mode === 'idle' || elapsedStationaryMs >= dwellThresholdMs ? 'idle' : 'moving';
+    !isWarmup && (currentState.mode === 'idle' || elapsedStationaryMs >= dwellThresholdMs)
+      ? 'idle'
+      : 'moving';
 
   return {
     previousMode: currentState.mode,
     nextMode,
     modeChanged: nextMode !== currentState.mode,
+    isWarmup,
     movedMeters,
     nextState: {
       mode: nextMode,
       anchorLatitude: currentState.anchorLatitude,
       anchorLongitude: currentState.anchorLongitude,
       stationarySinceMs: currentState.stationarySinceMs,
+      warmupRemainingPings: nextWarmupRemaining,
+      warmupUntilMs: nextWarmupUntilMs,
     },
   };
 }

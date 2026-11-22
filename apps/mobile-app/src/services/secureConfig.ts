@@ -60,6 +60,8 @@ export interface AdaptiveTrackingState {
   anchorLatitude: number;
   anchorLongitude: number;
   stationarySinceMs: number;
+  warmupRemainingPings?: number;
+  warmupUntilMs?: number;
 }
 
 const KEYS = {

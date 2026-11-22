@@ -305,4 +305,158 @@ describe('RoadTrailMatcher', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('snaps tram/transit speeds onto rail lines, skips noisy lateral moving spikes, and only emits spurs for real dwells', async () => {
+    const edges: RoadEdgeFeature[] = [
+      // Straight tram/rail line along 52.5200
+      {
+        kind: 'rail',
+        coords: [
+          [13.4, 52.52],
+          [13.408, 52.52],
+        ],
+      },
+      // Parallel side street south of the corridor with perpendicular spur street
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.403, 52.52],
+          [13.403, 52.5189],
+        ],
+      },
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.4, 52.52],
+          [13.408, 52.52],
+        ],
+      },
+    ];
+
+    const matcher = new RoadTrailMatcher({ tileProvider: createMemoryRoadProvider(edges) });
+    const [tramMatch] = await matcher.matchTrails([
+      {
+        userId: 'tram-rider',
+        username: 'Tram',
+        latitude: 52.52,
+        longitude: 13.4005,
+        recordedAt: '2026-11-22T14:00:00.000Z',
+        speed: 10,
+        accuracy: 12,
+        heading: 90,
+      },
+      {
+        // Noisy coarse moving Wi-Fi jump ~110m south onto the side street (single 15s ping, not a dwell)
+        userId: 'tram-rider',
+        username: 'Tram',
+        latitude: 52.519,
+        longitude: 13.403,
+        recordedAt: '2026-11-22T14:00:15.000Z',
+        speed: 10,
+        accuracy: 95,
+      },
+      {
+        userId: 'tram-rider',
+        username: 'Tram',
+        latitude: 52.52,
+        longitude: 13.406,
+        recordedAt: '2026-11-22T14:00:35.000Z',
+        speed: 10,
+        accuracy: 12,
+        heading: 90,
+      },
+    ]);
+
+    expect(tramMatch.hasRoadMatches).toBe(true);
+    // Moving noisy spike must NOT produce a spur or detour south to 52.5190
+    expect(tramMatch.segments.filter((s) => s.kind === 'spur')).toHaveLength(0);
+    const roadCoords = tramMatch.segments
+      .filter((s) => s.kind === 'road')
+      .flatMap((s) => s.coordinates);
+    expect(roadCoords.length).toBeGreaterThanOrEqual(2);
+    expect(roadCoords.every(([, lat]) => Math.abs(lat - 52.52) < 0.0002)).toBe(true);
+
+    // Rail-only track matches at transit speed (> 4.5 m/s)
+    const railOnlyMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        {
+          kind: 'rail',
+          coords: [
+            [13.4, 52.52],
+            [13.408, 52.52],
+          ],
+        },
+      ]),
+    });
+    const [railSnap] = await railOnlyMatcher.matchTrails([
+      {
+        userId: 'tram-only',
+        username: 'TramOnly',
+        latitude: 52.52005,
+        longitude: 13.401,
+        recordedAt: '2026-11-22T14:10:00.000Z',
+        speed: 11,
+      },
+      {
+        userId: 'tram-only',
+        username: 'TramOnly',
+        latitude: 52.52005,
+        longitude: 13.406,
+        recordedAt: '2026-11-22T14:10:30.000Z',
+        speed: 11,
+      },
+    ]);
+    expect(railSnap.hasRoadMatches).toBe(true);
+    expect(railSnap.segments[0]?.roadKind).toBe('rail');
+
+    // Genuine >90s off-road dwell in a multi-ping trip emits a spur, while moving waypoints do not
+    const dwellMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        {
+          kind: 'minor_road',
+          coords: [
+            [13.4, 52.52],
+            [13.408, 52.52],
+          ],
+        },
+      ]),
+    });
+    const [dwellTrip] = await dwellMatcher.matchTrails([
+      {
+        userId: 'dwell-user',
+        username: 'Dwell',
+        latitude: 52.5204, // ~44m north of road, genuine 10m dwell
+        longitude: 13.401,
+        recordedAt: '2026-11-22T15:00:00.000Z',
+        accuracy: 10,
+      },
+      {
+        userId: 'dwell-user',
+        username: 'Dwell',
+        latitude: 52.52042,
+        longitude: 13.40102,
+        recordedAt: '2026-11-22T15:10:00.000Z',
+        accuracy: 10,
+      },
+      {
+        userId: 'dwell-user',
+        username: 'Dwell',
+        latitude: 52.52002,
+        longitude: 13.404,
+        recordedAt: '2026-11-22T15:12:00.000Z',
+        speed: 8,
+        accuracy: 10,
+      },
+      {
+        userId: 'dwell-user',
+        username: 'Dwell',
+        latitude: 52.52002,
+        longitude: 13.407,
+        recordedAt: '2026-11-22T15:13:00.000Z',
+        speed: 8,
+        accuracy: 10,
+      },
+    ]);
+    expect(dwellTrip.segments.filter((s) => s.kind === 'spur')).toHaveLength(1);
+  });
 });

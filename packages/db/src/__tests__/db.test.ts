@@ -173,7 +173,13 @@ describe('@loved-ones/db PostGIS integration', () => {
       // Two Berlin points (one inside window, one outside window) + one Munich point (outside Berlin bbox)
       await insertLocationBatch(pool, visibleId, [
         { latitude: 52.52, longitude: 13.405, recordedAt: '2026-11-19T08:00:00.000Z' },
-        { latitude: 52.522, longitude: 13.41, recordedAt: '2026-11-19T10:30:00.000Z' },
+        {
+          latitude: 52.522,
+          longitude: 13.41,
+          accuracy: 11.5,
+          heading: 184,
+          recordedAt: '2026-11-19T10:30:00.000Z',
+        },
         { latitude: 48.1351, longitude: 11.582, recordedAt: '2026-11-19T11:00:00.000Z' },
       ]);
       // Ghost point inside Berlin bbox & time window must be excluded in SQL
@@ -191,6 +197,8 @@ describe('@loved-ones/db PostGIS integration', () => {
       expect(trails).toHaveLength(1);
       expect(trails[0].userId).toBe(visibleId);
       expect(trails[0].recordedAt).toBe('2026-11-19T10:30:00.000Z');
+      expect(trails[0].accuracy).toBe(11.5);
+      expect(trails[0].heading).toBe(184);
     } finally {
       await pool.query('DELETE FROM groups WHERE id = $1', [groupId]);
       await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[visibleId, ghostId]]);

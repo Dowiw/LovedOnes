@@ -262,3 +262,7 @@ CREATE TABLE IF NOT EXISTS location_share_guests (
 
 CREATE INDEX IF NOT EXISTS idx_location_share_guests_token_updated
     ON location_share_guests (share_token, updated_at DESC);
+
+ALTER TABLE location_history
+    ADD COLUMN IF NOT EXISTS accuracy DOUBLE PRECISION NULL,
+    ADD COLUMN IF NOT EXISTS heading DOUBLE PRECISION NULL;

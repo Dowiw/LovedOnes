@@ -1087,4 +1087,72 @@ describe('RealtimeModule domain interface', () => {
     expect(dup).toBe(0);
     expect(calls).toHaveLength(1);
   });
+
+  it('drops transient coarse lateral Wi-Fi/cell bounces while preserving genuine street turns and stripping FUZZED accuracy/heading', async () => {
+    const filtered = filterAnomalousLocationPoints([
+      {
+        latitude: 52.51,
+        longitude: 13.52,
+        accuracy: 12,
+        recordedAt: '2026-11-22T12:00:00.000Z',
+      },
+      {
+        // Sudden 180m coarse lateral jump south into a supermarket in 15s, then back to main road
+        latitude: 52.5083,
+        longitude: 13.521,
+        accuracy: 110,
+        recordedAt: '2026-11-22T12:00:15.000Z',
+      },
+      {
+        latitude: 52.51,
+        longitude: 13.522,
+        accuracy: 10,
+        recordedAt: '2026-11-22T12:00:30.000Z',
+      },
+    ]);
+    expect(filtered).toHaveLength(2);
+    expect(filtered.map((p) => p.longitude)).toEqual([13.52, 13.522]);
+
+    // Real 90-degree turn stays intact
+    const corner = filterAnomalousLocationPoints([
+      {
+        latitude: 52.51,
+        longitude: 13.52,
+        accuracy: 15,
+        recordedAt: '2026-11-22T12:01:00.000Z',
+      },
+      {
+        latitude: 52.51,
+        longitude: 13.522,
+        accuracy: 15,
+        recordedAt: '2026-11-22T12:01:15.000Z',
+      },
+      {
+        latitude: 52.512,
+        longitude: 13.522,
+        accuracy: 15,
+        recordedAt: '2026-11-22T12:01:30.000Z',
+      },
+    ]);
+    expect(corner).toHaveLength(3);
+
+    const harness = createInMemoryRealtimeHarness();
+    await harness.mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.52,
+          longitude: 13.405,
+          accuracy: 9,
+          heading: 92,
+          recordedAt: '2026-11-22T12:05:00.000Z',
+        },
+      ],
+    });
+    const exactPin = harness.locationBroadcasts.find((b) => b.groupId === GROUP_EXACT);
+    const fuzzedPin = harness.locationBroadcasts.find((b) => b.groupId === GROUP_FUZZED);
+    expect(exactPin?.accuracy).toBe(9);
+    expect(exactPin?.heading).toBe(92);
+    expect(fuzzedPin?.accuracy).toBeNull();
+    expect(fuzzedPin?.heading).toBeNull();
+  });
 });

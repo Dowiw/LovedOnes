@@ -320,6 +320,7 @@ export const LocationPointSchema = z.object({
   altitude: z.number().nullable().optional(),
   accuracy: z.number().min(0).nullable().optional(),
   speed: z.number().min(0).nullable().optional(),
+  heading: z.number().min(0).max(360).nullable().optional(),
   batteryLevel: z.number().int().min(0).max(100).nullable().optional(),
   recordedAt: z.string().datetime(),
 });
@@ -372,7 +373,9 @@ export const LocationBroadcastSchema = z.object({
   latitude: z.number(),
   longitude: z.number(),
   altitude: z.number().nullable().optional(),
+  accuracy: z.number().min(0).nullable().optional(),
   speed: z.number().nullable().optional(),
+  heading: z.number().min(0).max(360).nullable().optional(),
   batteryLevel: z.number().nullable().optional(),
   recordedAt: z.string(),
   lastHeartbeatAt: z.string().nullable().optional(),
@@ -1178,10 +1181,26 @@ export const AveragedTrailStopSchema = z.object({
   isFuzzed: z.boolean(),
 });
 
+export const TrailStopVisitSchema = z.object({
+  stopIndex: z.number().int().nonnegative(),
+  latitude: z.number(),
+  longitude: z.number(),
+  firstRecordedAt: z.string(),
+  lastRecordedAt: z.string(),
+  isFuzzed: z.boolean(),
+  maxSpeedMps: z.number().nullable(),
+  pingCount: z.number().int().min(1).optional(),
+  dwellDurationMs: z.number().nonnegative().optional(),
+  isDwell: z.boolean().optional(),
+  accuracyMeters: z.number().nullable().optional(),
+  headingDeg: z.number().nullable().optional(),
+});
+
 export const MatchedUserTrailSchema = z.object({
   userId: z.string(),
   username: z.string(),
   stops: z.array(AveragedTrailStopSchema),
+  visits: z.array(TrailStopVisitSchema).optional(),
   segments: z.array(TrailPathSegmentSchema),
   hasRoadMatches: z.boolean(),
 });

@@ -98,4 +98,52 @@ describe('@loved-ones/web-dashboard helpers', () => {
     const status = await apiFetchForgotPasswordStatus();
     expect(status).toEqual({ emailRecoveryAvailable: false });
   });
+
+  it('holds coarse startup geolocation fixes until accuracy improves or warmup completes', async () => {
+    const { createGeoWarmupGate } = await import('../lib/geoWarmup');
+    const gate = createGeoWarmupGate({
+      maxWarmupSamples: 3,
+      maxWarmupWindowMs: 12_000,
+      acceptableAccuracyMeters: 120,
+    });
+
+    const t0 = 1_700_000_000_000;
+    // Fix 1 is coarse (450m Wi-Fi/IP) -> held locally while refining
+    const r1 = gate.evaluate(
+      { latitude: 52.51, longitude: 13.5, accuracy: 450, recordedAt: '2026-11-22T10:00:00.000Z' },
+      t0,
+    );
+    expect(r1.shouldUpload).toBe(false);
+    expect(r1.warmingUp).toBe(true);
+
+    // Fix 2 is crisp (14m GPS) -> uploads immediately and completes warmup
+    const r2 = gate.evaluate(
+      { latitude: 52.52, longitude: 13.51, accuracy: 14, recordedAt: '2026-11-22T10:00:03.000Z' },
+      t0 + 3_000,
+    );
+    expect(r2.shouldUpload).toBe(true);
+    expect(r2.warmingUp).toBe(false);
+    expect(r2.pointToUpload?.accuracy).toBe(14);
+
+    // Desktop with only coarse fixes falls back to best accuracy after 3 samples
+    gate.reset();
+    expect(
+      gate.evaluate(
+        { latitude: 52.5, longitude: 13.4, accuracy: 500, recordedAt: '2026-11-22T10:01:00.000Z' },
+        t0,
+      ).shouldUpload,
+    ).toBe(false);
+    expect(
+      gate.evaluate(
+        { latitude: 52.501, longitude: 13.401, accuracy: 250, recordedAt: '2026-11-22T10:01:04.000Z' },
+        t0 + 4_000,
+      ).shouldUpload,
+    ).toBe(false);
+    const fallback = gate.evaluate(
+      { latitude: 52.502, longitude: 13.402, accuracy: 380, recordedAt: '2026-11-22T10:01:08.000Z' },
+      t0 + 8_000,
+    );
+    expect(fallback.shouldUpload).toBe(true);
+    expect(fallback.pointToUpload?.accuracy).toBe(250);
+  });
 });
