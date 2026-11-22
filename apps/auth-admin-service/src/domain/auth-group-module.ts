@@ -653,6 +653,10 @@ export class AuthGroupModule {
     await this.deleteChallenge(key);
   }
 
+  isEmailRecoveryConfigured(): boolean {
+    return Boolean(this.emailSender?.isConfigured());
+  }
+
   async sendRecoveryVerificationCode(
     userId: string,
     rawInput: unknown,
@@ -668,6 +672,7 @@ export class AuthGroupModule {
       throw new DomainError(
         503,
         'Email delivery is not configured on the server (set SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM).',
+        { code: 'SMTP_NOT_CONFIGURED' },
       );
     }
 
@@ -778,6 +783,13 @@ export class AuthGroupModule {
     if (!parsed.success) {
       throw new DomainError(400, 'Enter a valid email address', parsed.error.flatten());
     }
+    if (!this.emailSender?.isConfigured()) {
+      throw new DomainError(
+        503,
+        'Password reset by email is not configured on this server. Please contact your Host Admin to reset your password.',
+        { code: 'SMTP_NOT_CONFIGURED' },
+      );
+    }
 
     const genericMessage =
       'If that account has a verified backup email, a 6-digit reset code has been sent.';
@@ -787,8 +799,7 @@ export class AuthGroupModule {
     if (
       !account ||
       !account.recoveryEmail ||
-      !account.recoveryEmailVerified ||
-      !this.emailSender?.isConfigured()
+      !account.recoveryEmailVerified
     ) {
       return { ok: true, message: genericMessage };
     }

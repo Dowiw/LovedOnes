@@ -624,6 +624,15 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     },
   );
 
+  app.get(
+    '/api/auth/forgot-password/status',
+    { preHandler: [authRateLimit] },
+    async (request: AuthenticatedRequest) => {
+      request.skipTelemetry = true;
+      return { emailRecoveryAvailable: authGroup.isEmailRecoveryConfigured() };
+    },
+  );
+
   app.post(
     '/api/auth/forgot-password/request',
     { preHandler: [authRateLimit] },

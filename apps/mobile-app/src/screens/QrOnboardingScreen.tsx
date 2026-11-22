@@ -180,6 +180,8 @@ export function QrOnboardingScreen({
   const [loginNotFoundPrompt, setLoginNotFoundPrompt] = useState(false);
 
   const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request');
+  const [emailRecoveryAvailable, setEmailRecoveryAvailable] = useState<boolean | null>(null);
+  const [checkingForgotStatus, setCheckingForgotStatus] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotCode, setForgotCode] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
@@ -796,6 +798,32 @@ export function QrOnboardingScreen({
     }
   }
 
+  async function openForgotStep() {
+    setForgotEmail(email.trim());
+    setForgotStep('request');
+    setError(null);
+    setNotice(null);
+    transitionTo('forgot');
+    const cleanServer = serverUrl.trim().replace(/\/+$/, '');
+    if (!cleanServer) return;
+    setCheckingForgotStatus(true);
+    try {
+      const res = await fetch(`${cleanServer}/api/auth/forgot-password/status`);
+      if (res.ok) {
+        const body = (await res.json()) as { emailRecoveryAvailable?: boolean };
+        if (typeof body.emailRecoveryAvailable === 'boolean') {
+          setEmailRecoveryAvailable(body.emailRecoveryAvailable);
+          return;
+        }
+      }
+      setEmailRecoveryAvailable((prev) => prev ?? true);
+    } catch {
+      setEmailRecoveryAvailable((prev) => prev ?? true);
+    } finally {
+      setCheckingForgotStatus(false);
+    }
+  }
+
   async function handleRequestReset() {
     setError(null);
     setNotice(null);
@@ -813,12 +841,17 @@ export function QrOnboardingScreen({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: cleanEmail }),
         });
-        const body = (await res.json()) as { error?: string; message?: string };
+        const body = (await res.json()) as { error?: string; code?: string; message?: string };
         if (!res.ok) {
+          if (res.status === 503 || body.code === 'SMTP_NOT_CONFIGURED') {
+            setEmailRecoveryAvailable(false);
+            return null;
+          }
           throw new Error(body.error ?? `HTTP ${res.status}`);
         }
         return body;
       }, 750);
+      if (!data) return;
       setForgotStep('reset');
       setNotice(
         data.message ??
@@ -2670,13 +2703,7 @@ export function QrOnboardingScreen({
                       accessibilityRole="button"
                       accessibilityLabel="Forgot password"
                       hitSlop={10}
-                      onPress={() => {
-                        setForgotEmail(email.trim());
-                        setForgotStep('request');
-                        setError(null);
-                        setNotice(null);
-                        transitionTo('forgot');
-                      }}
+                      onPress={() => void openForgotStep()}
                     >
                       <Text
                         style={[
@@ -2911,12 +2938,60 @@ export function QrOnboardingScreen({
                 <Text
                   style={[styles.sheetSubtitle, { color: palette.inkMuted, fontFamily: fonts.body }]}
                 >
-                  {forgotStep === 'request'
-                    ? 'Enter your account email or verified backup email for a 6-digit recovery code.'
-                    : 'Enter the 6-digit code and set your new password.'}
+                  {checkingForgotStatus && emailRecoveryAvailable === null
+                    ? 'Checking recovery availability on server...'
+                    : emailRecoveryAvailable === false
+                      ? 'Email password reset is not configured on this server.'
+                      : forgotStep === 'request'
+                        ? 'Enter your account email or verified backup email for a 6-digit recovery code.'
+                        : 'Enter the 6-digit code and set your new password.'}
                 </Text>
 
-                {forgotStep === 'request' ? (
+                {checkingForgotStatus && emailRecoveryAvailable === null ? (
+                  <View style={styles.btnLoadingRow}>
+                    <ActivityIndicator color={palette.ink} size="small" />
+                    <Text style={[styles.noticeText, { color: palette.inkMuted, fontFamily: fonts.body }]}>
+                      Checking server settings...
+                    </Text>
+                  </View>
+                ) : emailRecoveryAvailable === false ? (
+                  <>
+                    <View
+                      style={[
+                        styles.feedbackBox,
+                        { backgroundColor: palette.noticeBg, borderColor: palette.noticeBorder },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.noticeText,
+                          { color: palette.noticeText, fontFamily: fonts.body },
+                        ]}
+                      >
+                        SMTP email delivery is not enabled on this server. Please contact your Host
+                        Admin to help recover your account.
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      activeOpacity={0.82}
+                      style={[
+                        styles.secondaryBtn,
+                        { backgroundColor: palette.surface, borderColor: palette.borderStrong },
+                      ]}
+                      onPress={() => transitionTo('existing_login')}
+                    >
+                      <Text
+                        style={[
+                          styles.secondaryBtnText,
+                          { color: palette.ink, fontFamily: fonts.display },
+                        ]}
+                      >
+                        Back to Sign In
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                ) : forgotStep === 'request' ? (
                   <>
                     <View style={styles.fieldGroup}>
                       <Text

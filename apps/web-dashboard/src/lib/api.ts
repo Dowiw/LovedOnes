@@ -399,6 +399,13 @@ export async function apiClearRecoveryEmail(
   });
 }
 
+export async function apiFetchForgotPasswordStatus(): Promise<{
+  emailRecoveryAvailable: boolean;
+}> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson(`${authBase}/api/auth/forgot-password/status`);
+}
+
 export async function apiRequestPasswordReset(
   email: string,
 ): Promise<{ ok: boolean; message: string }> {
