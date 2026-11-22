@@ -23,16 +23,62 @@ const { Pool } = pg;
 
 export type Database = NodePgDatabase<typeof schema>;
 
-export function createPool(connectionString = process.env.DATABASE_URL): pg.Pool {
+export type PoolSslMode = 'disable' | 'require' | 'no-verify' | 'verify-full';
+
+export function resolvePoolSslConfig(
+  connectionString: string,
+  sslModeOverride?: PoolSslMode | string,
+  sslCaOverride?: string,
+): pg.PoolConfig['ssl'] {
+  const rawMode = (sslModeOverride ?? process.env.DATABASE_SSL ?? '').trim().toLowerCase();
+  let effectiveMode = rawMode;
+  if (!effectiveMode) {
+    try {
+      const parsed = new URL(connectionString);
+      const urlSslMode = parsed.searchParams.get('sslmode')?.trim().toLowerCase();
+      if (urlSslMode === 'disable' || urlSslMode === 'require' || urlSslMode === 'no-verify' || urlSslMode === 'verify-full') {
+        effectiveMode = urlSslMode;
+      }
+    } catch {
+      // ignore non-standard URI parse failures
+    }
+  }
+
+  if (!effectiveMode || effectiveMode === 'false' || effectiveMode === 'disable') {
+    return undefined;
+  }
+
+  const rawCa = (sslCaOverride ?? process.env.DATABASE_SSL_CA ?? '').trim();
+  let ca: string | undefined;
+  if (rawCa) {
+    ca = rawCa.includes('BEGIN CERTIFICATE') ? rawCa : fs.existsSync(rawCa) ? fs.readFileSync(rawCa, 'utf8') : undefined;
+  }
+
+  if (effectiveMode === 'no-verify' || effectiveMode === 'allow') {
+    return { rejectUnauthorized: false, ...(ca ? { ca } : {}) };
+  }
+  if (effectiveMode === 'true' || effectiveMode === 'require' || effectiveMode === 'verify-full' || effectiveMode === 'verify-ca') {
+    return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  }
+  return undefined;
+}
+
+export function createPool(
+  connectionString = process.env.DATABASE_URL,
+  options?: { sslMode?: PoolSslMode | string; sslCa?: string },
+): pg.Pool {
   if (!connectionString) {
     throw new Error('DATABASE_URL environment variable is required');
   }
-  return new Pool({ connectionString });
+  const ssl = resolvePoolSslConfig(connectionString, options?.sslMode, options?.sslCa);
+  return new Pool({ connectionString, ...(ssl ? { ssl } : {}) });
 }
 
 export function createDb(pool: pg.Pool): Database {
   return drizzle(pool, { schema });
 }
+
+const MIGRATIONS_ADVISORY_LOCK_KEY = 784512901;
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -45,7 +91,16 @@ export async function runMigrations(pool: pg.Pool): Promise<void> {
     throw new Error(`Migration SQL file not found. Checked: ${candidates.join(', ')}`);
   }
   const sql = fs.readFileSync(migrationFile, 'utf8');
-  await pool.query(sql);
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATIONS_ADVISORY_LOCK_KEY]);
+    await client.query(sql);
+  } finally {
+    await client
+      .query('SELECT pg_advisory_unlock($1)', [MIGRATIONS_ADVISORY_LOCK_KEY])
+      .catch(() => {});
+    client.release();
+  }
 }
 
 /**
@@ -1047,4 +1102,24 @@ export async function resolveAuditContext(
 
   await Promise.all(tasks);
   return snapshot;
+}
+
+/**
+ * Deletes location history rows older than `retentionDays`.
+ * Values <= 0 disable pruning and return 0.
+ */
+export async function pruneLocationHistory(
+  pool: pg.Pool,
+  retentionDays: number,
+): Promise<number> {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    return 0;
+  }
+  const days = Math.floor(retentionDays);
+  const res = await pool.query(
+    `DELETE FROM location_history
+     WHERE recorded_at < NOW() - make_interval(days => $1)`,
+    [days],
+  );
+  return res.rowCount ?? 0;
 }

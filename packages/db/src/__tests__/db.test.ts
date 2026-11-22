@@ -14,6 +14,8 @@ import {
   insertLocationBatch,
   listLocationRequestsForUser,
   listRecentPlaceTransitions,
+  pruneLocationHistory,
+  resolvePoolSslConfig,
   respondToLocationRequestRecord,
   runMigrations,
 } from '../index.js';
@@ -357,6 +359,43 @@ describe('@loved-ones/db PostGIS integration', () => {
     } finally {
       await pool.query('DELETE FROM groups WHERE id = $1', [groupId]);
       await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[adminId, bobId]]);
+    }
+  });
+
+  it('resolves pool SSL configs and prunes stale location_history rows', async () => {
+    await Promise.all([runMigrations(pool), runMigrations(pool)]);
+    expect(resolvePoolSslConfig('postgresql://user:pass@localhost:5432/db')).toBeUndefined();
+    expect(resolvePoolSslConfig('postgresql://user:pass@db.example.com:5432/db', 'require')).toEqual({
+      rejectUnauthorized: true,
+    });
+    expect(
+      resolvePoolSslConfig('postgresql://user:pass@db.example.com:5432/db?sslmode=no-verify'),
+    ).toEqual({ rejectUnauthorized: false });
+
+    const email = `retention-${Date.now()}@example.com`;
+    const userRes = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, username, password_hash, role)
+       VALUES ($1, 'retention-tester', 'hash', 'USER')
+       RETURNING id`,
+      [email],
+    );
+    const userId = userRes.rows[0].id;
+    try {
+      const oldDate = new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString();
+      const recentDate = new Date().toISOString();
+      await insertLocationBatch(pool, userId, [
+        { latitude: 52.5, longitude: 13.4, recordedAt: oldDate },
+        { latitude: 52.51, longitude: 13.41, recordedAt: recentDate },
+      ]);
+      const deleted = await pruneLocationHistory(pool, 30);
+      expect(deleted).toBeGreaterThanOrEqual(1);
+      const remaining = await pool.query<{ count: string }>(
+        'SELECT COUNT(*)::text AS count FROM location_history WHERE user_id = $1',
+        [userId],
+      );
+      expect(Number(remaining.rows[0].count)).toBe(1);
+    } finally {
+      await pool.query('DELETE FROM users WHERE id = $1', [userId]);
     }
   });
 });

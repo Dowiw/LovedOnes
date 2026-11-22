@@ -3,6 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import cors from '@fastify/cors';
 import Fastify, { FastifyInstance } from 'fastify';
+import { registerGracefulShutdown } from '@loved-ones/shared/auth';
 import { createServiceLogger, ServiceLoggerHandle } from '@loved-ones/shared/logger';
 
 export interface MapServiceOptions {
@@ -80,8 +81,13 @@ export async function createMapServer(
     exposedHeaders: ['Accept-Ranges', 'Content-Range', 'Content-Length', 'ETag'],
   });
 
-  app.get('/health', async () => {
-    return { status: 'ok', service: 'map-service', tilesDir };
+  app.get('/health', async (_request, reply) => {
+    const tilesAvailable = fs.existsSync(tilesDir);
+    return reply.code(tilesAvailable ? 200 : 503).send({
+      status: tilesAvailable ? 'ok' : 'degraded',
+      service: 'map-service',
+      tilesDir,
+    });
   });
 
   app.route({
@@ -147,6 +153,7 @@ export async function createMapServer(
 async function main() {
   const port = Number.parseInt(process.env.PORT ?? process.env.MAP_SERVICE_PORT ?? '8085', 10);
   const { app, loggerHandle } = await createMapServer();
+  registerGracefulShutdown(app, loggerHandle.logger, 'map-service');
   await app.listen({ port, host: '0.0.0.0' });
   loggerHandle.logger.info({ port }, 'map-service listening');
 }

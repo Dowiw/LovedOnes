@@ -72,4 +72,4 @@ jobs:
         run: pnpm test
 
       - name: Validate Docker Compose configurations
-        run: docker compose config -q && docker compose -f docker-compose.dev.yml config -q
+        run: docker compose config -q && docker compose -f docker-compose.yml -f docker-compose.cloud.yml config -q && docker compose -f docker-compose.dev.yml config -q

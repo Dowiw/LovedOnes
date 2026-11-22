@@ -16,9 +16,12 @@ import {
 import {
   attachAuthAndTelemetry,
   AuthenticatedRequest,
+  createFastifyCorsDelegator,
   createTokenService,
   DomainError,
   extractBearerToken,
+  isOriginAllowed,
+  registerGracefulShutdown,
 } from '@loved-ones/shared/auth';
 import {
   createServiceLogger,
@@ -95,14 +98,16 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     });
   }
 
-  const app = Fastify({ logger: false });
-  await app.register(cors, {
-    origin: true,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'If-None-Match', 'If-Modified-Since'],
-    exposedHeaders: ['ETag', 'Last-Modified'],
-  });
+  const app = Fastify({ logger: false, trustProxy: true });
+  await app.register(cors, () =>
+    createFastifyCorsDelegator({
+      publicServerUrl: process.env.PUBLIC_SERVER_URL,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Authorization', 'Content-Type', 'If-None-Match', 'If-Modified-Since'],
+      exposedHeaders: ['ETag', 'Last-Modified'],
+    }),
+  );
 
   app.setErrorHandler((err, request, reply) => {
     if (err instanceof DomainError) {
@@ -159,6 +164,15 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
     cors: {
       origin: true,
       credentials: true,
+    },
+    allowRequest: (req, callback) => {
+      const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+      const rawHost = req.headers['x-forwarded-host'] ?? req.headers.host;
+      const reqHost = (Array.isArray(rawHost) ? rawHost[0] : rawHost)?.split(',')[0]?.trim();
+      const allowed = isOriginAllowed(origin, reqHost, {
+        publicServerUrl: process.env.PUBLIC_SERVER_URL,
+      });
+      callback(null, allowed);
     },
     adapter: createAdapter(pubClient, subClient),
   });
@@ -242,8 +256,27 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
 
   // ---- REST Routes ----
 
-  app.get('/health', async () => {
-    return { status: 'ok', service: 'realtime-service' };
+  app.get('/health', async (_request, reply) => {
+    let pgOk = false;
+    let redisOk = false;
+    try {
+      await pool.query('SELECT 1');
+      pgOk = true;
+    } catch {
+      pgOk = false;
+    }
+    try {
+      redisOk = (await redis.ping()) === 'PONG';
+    } catch {
+      redisOk = false;
+    }
+    const status = pgOk && redisOk ? 'ok' : 'degraded';
+    return reply.code(pgOk && redisOk ? 200 : 503).send({
+      status,
+      service: 'realtime-service',
+      postgres: pgOk ? 'ok' : 'error',
+      redis: redisOk ? 'ok' : 'error',
+    });
   });
 
   app.post(
@@ -827,6 +860,7 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
 async function main() {
   const port = Number.parseInt(process.env.PORT ?? process.env.REALTIME_PORT ?? '4002', 10);
   const { app, loggerHandle } = await createRealtimeServer();
+  registerGracefulShutdown(app, loggerHandle.logger, 'realtime-service');
   await app.listen({ port, host: '0.0.0.0' });
   loggerHandle.logger.info({ port }, 'realtime-service listening');
 }
