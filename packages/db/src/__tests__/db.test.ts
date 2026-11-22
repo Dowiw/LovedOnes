@@ -6,6 +6,7 @@ import {
   createPool,
   deduplicateLocationPoints,
   deleteGroupPlaceRecord,
+  enforceLocationQuotas,
   evaluateAndRecordPlaceTransitions,
   getDatabaseTelemetry,
   getGroupMembershipPrivacyInfo,
@@ -15,6 +16,7 @@ import {
   listLocationRequestsForUser,
   listRecentPlaceTransitions,
   pruneLocationHistory,
+  pruneResourceTables,
   resolvePoolSslConfig,
   respondToLocationRequestRecord,
   runMigrations,
@@ -394,6 +396,36 @@ describe('@loved-ones/db PostGIS integration', () => {
         [userId],
       );
       expect(Number(remaining.rows[0].count)).toBe(1);
+
+      // Verify FIFO quota enforcement returns exact deleted count and timestamp bounds
+      const t1 = '2026-11-20T10:00:00.000Z';
+      const t2 = '2026-11-20T10:05:00.000Z';
+      const t3 = '2026-11-20T10:10:00.000Z';
+      await insertLocationBatch(pool, userId, [
+        { latitude: 52.52, longitude: 13.42, recordedAt: t1 },
+        { latitude: 52.53, longitude: 13.43, recordedAt: t2 },
+        { latitude: 52.54, longitude: 13.44, recordedAt: t3 },
+      ]);
+      const quotaRes = await enforceLocationQuotas(pool, {
+        userId,
+        perUserMaxPoints: 2,
+      });
+      expect(quotaRes.trims).toHaveLength(1);
+      expect(quotaRes.trims[0].deletedPoints).toBe(2);
+      expect(quotaRes.trims[0].scope).toBe('user_points');
+      expect(new Date(quotaRes.trims[0].rangeEnd).getTime()).toBeLessThanOrEqual(
+        new Date(t2).getTime(),
+      );
+
+      const telemetryAfter = await getDatabaseTelemetry(pool);
+      expect(telemetryAfter.breakdown).toBeDefined();
+      expect(telemetryAfter.breakdown!.tables.length).toBeGreaterThan(0);
+
+      const pruned = await pruneResourceTables(pool, {
+        locationRetentionDays: 0,
+        resolvedRequestRetentionDays: 30,
+      });
+      expect(pruned.deletedLocations).toBe(0);
     } finally {
       await pool.query('DELETE FROM users WHERE id = $1', [userId]);
     }

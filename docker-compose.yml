@@ -208,6 +208,7 @@ services:
       HOSTNAME: "0.0.0.0"
       PORT: 3000
       NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
     networks:
       - internal_net
     healthcheck:

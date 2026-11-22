@@ -278,6 +278,7 @@ export interface RealtimeModuleOptions extends CoordinateFilterOptions {
   broadcaster: RealtimeBroadcaster;
   now?: () => number;
   onPlaceTransition?: (event: PlaceTransitionEvent) => void;
+  onLocationIngested?: (userId: string, inserted: number) => Promise<void>;
 }
 
 /**
@@ -291,6 +292,7 @@ export class RealtimeModule {
   private readonly filterOptions: CoordinateFilterOptions;
   private readonly now: () => number;
   private readonly onPlaceTransition?: (event: PlaceTransitionEvent) => void;
+  private readonly onLocationIngested?: (userId: string, inserted: number) => Promise<void>;
 
   constructor(options: RealtimeModuleOptions) {
     this.store = options.store;
@@ -302,6 +304,7 @@ export class RealtimeModule {
     };
     this.now = options.now ?? (() => Date.now());
     this.onPlaceTransition = options.onPlaceTransition;
+    this.onLocationIngested = options.onLocationIngested;
   }
 
   private async requireMembership(
@@ -331,6 +334,10 @@ export class RealtimeModule {
     const inserted = await this.store.insertLocationBatch(user.id, points);
     const latest = points[points.length - 1];
     if (!latest || inserted === 0) return inserted;
+
+    if (this.onLocationIngested) {
+      await this.onLocationIngested(user.id, inserted).catch(() => {});
+    }
 
     const recordedAtMs = new Date(latest.recordedAt).getTime();
     const [memberships, profile] = await Promise.all([

@@ -5,6 +5,7 @@ import cors from '@fastify/cors';
 import Fastify, { FastifyInstance } from 'fastify';
 import { registerGracefulShutdown } from '@loved-ones/shared/auth';
 import { createServiceLogger, ServiceLoggerHandle } from '@loved-ones/shared/logger';
+import { startServiceHeartbeatFromUrl } from '@loved-ones/shared/telemetry';
 
 export interface MapServiceOptions {
   tilesDir?: string;
@@ -65,12 +66,26 @@ export async function createMapServer(
     options.tilesDir ?? process.env.TILES_DIR ?? path.resolve(process.cwd(), '../../infra/tiles'),
   );
 
+  const resolvedLogDir = options.logDir ?? process.env.LOG_DIR;
+  const resolvedRedisUrl = options.redisUrl ?? process.env.REDIS_URL;
+
   const loggerHandle = await createServiceLogger('map-service', {
-    logDir: options.logDir ?? process.env.LOG_DIR,
-    redisUrl: options.redisUrl ?? process.env.REDIS_URL,
+    logDir: resolvedLogDir,
+    redisUrl: resolvedRedisUrl,
     disableFile: options.disableFileLog,
     disableRedis: options.disableRedisLog,
   });
+
+  const heartbeat = options.disableRedisLog
+    ? null
+    : startServiceHeartbeatFromUrl({
+        service: 'map-service',
+        redisUrl: resolvedRedisUrl,
+        mounts: [
+          { mountLabel: 'tiles', path: tilesDir },
+          ...(resolvedLogDir ? [{ mountLabel: 'logs' as const, path: resolvedLogDir }] : []),
+        ],
+      });
 
   const app = Fastify({ logger: false });
 
@@ -144,6 +159,7 @@ export async function createMapServer(
   });
 
   app.addHook('onClose', async () => {
+    await heartbeat?.stop();
     await loggerHandle.close();
   });
 

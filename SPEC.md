@@ -176,26 +176,25 @@ Every microservice must use the shared logger in `packages/shared/logger`:
 * **Target 3 (Live Redis Stream):** Custom Pino transport pushes each serialized log entry into Redis list `logs:ring` (`LPUSH` + `LTRIM 0 499`) and publishes to Redis channel `logs:stream`. The Admin Dashboard subscribes to `logs:stream` to display a live terminal feed.
 * **Mandatory User & Admin Action Auditing:** Every state-changing action performed by any user, guest, Group `ADMIN`, or `HOST_ADMIN` across every backend service MUST emit a structured `logger.info({ action, ... }, humanReadableMessage)` audit record through this 3-way logger so `/admin` operators have a complete live audit trail—while redacting secrets, passwords, raw tokens, and encryption keys.
 
-### 4.3 Storage & Per-User Compute/RAM Telemetry
+### 4.3 Storage, Cluster Compute & Resource Allocation Telemetry
 
-`auth-admin-service` exposes `GET /api/admin/telemetry` (polled every 5s or streamed via WebSocket):
+`auth-admin-service` exposes `GET /api/admin/telemetry` (polled every 5s), `GET/PATCH /api/admin/resource-limits`, `POST /api/admin/resource-limits/prune`, and `DELETE /api/admin/notices/:noticeId` (`DELETE /api/admin/notices`):
 
-1. **Disk & Log Storage:**
-   * Reads `/var/log/app` total directory size via `fs.promises.stat` and compares against `MAX_LOG_STORAGE_MB` env var.
-   * Queries PostgreSQL total database size (`pg_database_size(current_database())`).
-2. **Per-User Database Footprint:**
-```sql
-SELECT u.id, u.username,
-  COALESCE(SUM(pg_column_size(lh.*)), 0) AS location_bytes,
-  COUNT(lh.id) AS location_points
-FROM users u
-LEFT JOIN location_history lh ON lh.user_id = u.id
-GROUP BY u.id;
-```
-3. **Per-User Compute & Memory Attribution:**
+1. **Cluster Service Node Heartbeats (Single-Node & Separated Deployments):**
+   * Each service (`auth-admin-service`, `realtime-service`, `map-service`, and `web-dashboard`) periodically publishes a TTL-expiring node snapshot (`telemetry:node:<service>:<instanceId>`) to Redis containing process CPU %, load average, RSS/heap RAM, container cgroup memory limits (when present), and `statfs` mount stats for `LOG_DIR` / `TILES_DIR`.
+2. **Disk, Log & Map Storage Breakdown:**
+   * Reads `/var/log/app` total directory size and compares against `MAX_LOG_STORAGE_MB` / `LogRetentionSettings`.
+   * Separates protected/non-deletable host & primary map storage (`region.pmtiles`, OS/Docker) from deletable city `.pmtiles` extracts (`maxMapStorageMb`) and logs.
+3. **PostgreSQL System vs. Prunable Breakdown & Redis Introspection:**
+   * Queries `pg_database_size`, per-table `pg_relation_size` / `pg_indexes_size` / `pg_stat_user_tables` (`n_live_tup`, `n_dead_tup`), and Redis `INFO memory` / `INFO stats`.
+   * Separates protected system/identity tables (`users`, `groups`, `group_memberships`, `group_places`, `spatial_ref_sys`, catalogs/WAL) from prunable operational data (`location_history`, `messages`, `group_place_events`, `location_requests`, `registration_requests`, `location_share_links`/`guests`).
+4. **Per-User Database Footprint & Option A FIFO Quota Enforcement:**
+   * Aggregates per-user `location_history` rows + proportional PostGIS index share + `messages` + inline `avatar_url` bytes.
+   * When `autoTrimOnQuota` is enabled and `perUserMaxPoints`, `perUserMaxLocationMb`, or `maxDatabaseMb` is exceeded during location ingestion, the oldest `location_history` points are trimmed FIFO and a persistent `AdminNotice` (recording exact deleted point count and timestamp range) is stored in Redis until dismissed by the `HOST_ADMIN`.
+5. **Per-User Compute & Memory Attribution:**
    * A Fastify/Socket.io middleware wraps every authenticated request and WebSocket event with `performance.now()`.
    * Increments Redis hash counters per user (`HINCRBYFLOAT telemetry:user:<id> cpu_ms <elapsed>`, `HINCRBY telemetry:user:<id> events_count 1`) and measures Redis state size (`MEMORY USAGE session:user:<id>`).
-   * Admin UI renders a table of active users ranked by `cpu_ms/min`, `pings/min`, active socket count, and storage consumed.
+   * Admin UI renders host volumes, Postgres table breakdown, live service node CPU/RAM, resource limit controls, persistent quota notices, and active accounts ranked by `cpu_ms/min`.
 
 ---
 

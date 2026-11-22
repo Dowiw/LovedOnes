@@ -6,7 +6,10 @@ import { getDatabaseTelemetry } from '@loved-ones/db';
 import { GroupRole, PrivacyMode, SystemRole } from '@loved-ones/shared';
 import { LOGS_RING_KEY } from '@loved-ones/shared/logger';
 import {
+  getRedisTelemetrySnapshot,
   getUserTelemetryFromRedis,
+  listAdminNotices,
+  listClusterNodeTelemetry,
   REMOVED_USER_PREFIX,
   SESSION_USER_PREFIX,
   SOCKETS_USER_PREFIX,
@@ -702,5 +705,17 @@ export class PostgresRedisTelemetryStore implements TelemetryQueryStore {
 
   getRecentLogLines(limit: number): Promise<string[]> {
     return this.redis.lrange(LOGS_RING_KEY, 0, Math.max(0, limit - 1));
+  }
+
+  getRedisTelemetry() {
+    return getRedisTelemetrySnapshot(this.redis);
+  }
+
+  getClusterNodes() {
+    return listClusterNodeTelemetry(this.redis);
+  }
+
+  listAdminNotices() {
+    return listAdminNotices(this.redis);
   }
 }
