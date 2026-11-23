@@ -218,11 +218,11 @@ function ensureTrailChevronImage(map: maplibregl.Map): void {
   const size = 32;
   const data = new Uint8Array(size * size * 4);
   const tipX = 16;
-  const tipY = 8.5;
-  const leftX = 7.5;
-  const rightX = 24.5;
-  const armY = 21.5;
-  const strokeHalfWidth = 2.4;
+  const tipY = 10.5;
+  const leftX = 9.5;
+  const rightX = 22.5;
+  const armY = 20.5;
+  const strokeHalfWidth = 2.2;
   const sdfScale = 24;
 
   for (let y = 0; y < size; y += 1) {
@@ -1393,7 +1393,17 @@ export function MapCanvas({
         filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'chevron']],
         layout: {
           'icon-image': TRAIL_CHEVRON_IMAGE_ID,
-          'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.5, 14, 0.72, 17, 0.88],
+          'icon-size': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            10,
+            ['case', ['boolean', ['get', 'isReturnPass'], false], 0.38, 0.32],
+            14,
+            ['case', ['boolean', ['get', 'isReturnPass'], false], 0.52, 0.44],
+            17,
+            ['case', ['boolean', ['get', 'isReturnPass'], false], 0.62, 0.52],
+          ],
           'icon-rotate': ['coalesce', ['get', 'bearingDeg'], 0],
           'icon-rotation-alignment': 'map',
           'icon-allow-overlap': true,
@@ -1402,8 +1412,13 @@ export function MapCanvas({
         paint: {
           'icon-color': mapThemeRef.current === 'dark' ? '#09090b' : '#ffffff',
           'icon-halo-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
-          'icon-halo-width': 1.2,
-          'icon-opacity': ['interpolate', ['linear'], ['coalesce', ['get', 'progress'], 1], 0, 0.72, 1, 0.98],
+          'icon-halo-width': 0.65,
+          'icon-opacity': [
+            'case',
+            ['boolean', ['get', 'isReturnPass'], false],
+            0.98,
+            ['interpolate', ['linear'], ['coalesce', ['get', 'progress'], 1], 0, 0.52, 1, 0.94],
+          ],
         },
       });
       map.addLayer({

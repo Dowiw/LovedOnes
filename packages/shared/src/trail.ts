@@ -947,17 +947,16 @@ function directedBearingDiffDeg(a: number, b: number): number {
   return diff > 180 ? 360 - diff : diff;
 }
 
-const CHEVRON_SPACING_METERS = 135;
+const CHEVRON_SPACING_METERS = 130;
 const CHEVRON_MIN_SEGMENT_METERS = 42;
 const CHEVRON_STOP_CLEARANCE_METERS = 26;
 const CHEVRON_SAME_DIR_CLEARANCE_METERS = 85;
-const CHEVRON_RETURN_DETECT_METERS = 28;
-const CHEVRON_RETURN_LATERAL_OFFSET_METERS = 4.5;
+const CHEVRON_OPPOSITE_STAGGER_METERS = 34;
 
 /**
- * Generates chronological directional chevron Point features along a user's trail segments
- * from earlier nodes to later nodes, offsetting overlapping return passes so users can
- * immediately tell outbound travel apart from taking the same route back.
+ * Generates chronological inline directional chevron Point features along a user's
+ * trail segments from earlier nodes to later nodes, staggering return-pass arrows
+ * into open gaps along the line so outbound and return directions read cleanly without clutter.
  */
 function appendTrailChevronFeatures(
   features: TrailGeoJsonFeature[],
@@ -1006,9 +1005,11 @@ function appendTrailChevronFeatures(
       }
     }
 
-    // Walk vertices chronologically and sample each target arc-length
+    // Walk vertices chronologically and sample each target arc-length, staggering
+    // opposite-direction passes cleanly into open gaps along the polyline.
     let targetIdx = 0;
     let walkedMeters = 0;
+    let staggerOffsetMeters = 0;
     for (let i = 0; i < seg.coordinates.length - 1 && targetIdx < targetsMeters.length; i += 1) {
       const [lonA, latA] = seg.coordinates[i];
       const [lonB, latB] = seg.coordinates[i + 1];
@@ -1017,45 +1018,49 @@ function appendTrailChevronFeatures(
 
       while (
         targetIdx < targetsMeters.length &&
-        targetsMeters[targetIdx] <= walkedMeters + edgeLen
+        targetsMeters[targetIdx] + staggerOffsetMeters <= walkedMeters + edgeLen
       ) {
-        const localDist = Math.max(0, targetsMeters[targetIdx] - walkedMeters);
+        const sampleDistAlongSeg = targetsMeters[targetIdx] + staggerOffsetMeters;
+        const localDist = Math.max(0, sampleDistAlongSeg - walkedMeters);
         const frac = localDist / edgeLen;
-        let sampleLon = lonA + frac * (lonB - lonA);
-        let sampleLat = latA + frac * (latB - latA);
+        const sampleLon = lonA + frac * (lonB - lonA);
+        const sampleLat = latA + frac * (latB - latA);
         const bearingDeg = computeCompassBearingDeg(latA, lonA, latB, lonB);
 
         const nearStop = stopCoords.some(
           ([sLon, sLat]) => haversineMeters(sampleLat, sampleLon, sLat, sLon) < CHEVRON_STOP_CLEARANCE_METERS,
         );
-        const tooCloseSameDir = placed.some(
+        const overlapsSameDir = placed.some(
           (p) =>
             haversineMeters(sampleLat, sampleLon, p.lat, p.lon) < CHEVRON_SAME_DIR_CLEARANCE_METERS &&
             directedBearingDiffDeg(bearingDeg, p.bearingDeg) <= 45,
         );
+        const collidesOpposite = placed.some(
+          (p) =>
+            haversineMeters(sampleLat, sampleLon, p.lat, p.lon) < CHEVRON_OPPOSITE_STAGGER_METERS &&
+            directedBearingDiffDeg(bearingDeg, p.bearingDeg) >= 115,
+        );
 
-        if (!nearStop && !tooCloseSameDir) {
-          const overlapsOpposite = placed.some(
-            (p) =>
-              haversineMeters(sampleLat, sampleLon, p.lat, p.lon) < CHEVRON_RETURN_DETECT_METERS &&
-              directedBearingDiffDeg(bearingDeg, p.bearingDeg) >= 115,
-          );
-          if (overlapsOpposite) {
-            // Nudge return-pass chevron slightly right of travel direction (+90 deg)
-            // so outbound and return arrows remain visually distinct side-by-side.
-            const rightRad = ((bearingDeg + 90) * Math.PI) / 180;
-            const cosLat = Math.max(0.15, Math.cos((sampleLat * Math.PI) / 180));
-            sampleLat += (Math.cos(rightRad) * CHEVRON_RETURN_LATERAL_OFFSET_METERS) / METERS_PER_DEGREE_LAT;
-            sampleLon +=
-              (Math.sin(rightRad) * CHEVRON_RETURN_LATERAL_OFFSET_METERS) /
-              (METERS_PER_DEGREE_LAT * cosLat);
+        // If a return chevron lands right on top of an outbound chevron, stagger it ~40m along the line
+        if (!nearStop && !overlapsSameDir && collidesOpposite && staggerOffsetMeters === 0) {
+          staggerOffsetMeters = 40;
+          if (targetsMeters[targetIdx] + staggerOffsetMeters <= walkedMeters + edgeLen) {
+            continue;
           }
+          break;
+        }
 
+        if (!nearStop && !overlapsSameDir && !collidesOpposite) {
           const progress = Number(
             Math.max(
               0,
-              Math.min(1, (cumulativeBaseMeters + walkedMeters + localDist) / grandTotalMeters),
+              Math.min(1, (cumulativeBaseMeters + sampleDistAlongSeg) / grandTotalMeters),
             ).toFixed(3),
+          );
+          const hasEarlierOpposite = placed.some(
+            (p) =>
+              haversineMeters(sampleLat, sampleLon, p.lat, p.lon) < CHEVRON_SAME_DIR_CLEARANCE_METERS &&
+              directedBearingDiffDeg(bearingDeg, p.bearingDeg) >= 115,
           );
           placed.push({ lon: sampleLon, lat: sampleLat, bearingDeg });
           features.push({
@@ -1070,12 +1075,13 @@ function appendTrailChevronFeatures(
               username,
               bearingDeg,
               progress,
-              isReturnPass: overlapsOpposite,
+              isReturnPass: hasEarlierOpposite,
               segmentOrder,
             },
           });
           segmentOrder += 1;
         }
+        staggerOffsetMeters = 0;
         targetIdx += 1;
       }
 

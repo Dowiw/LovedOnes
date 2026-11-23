@@ -2199,7 +2199,17 @@ export function MobileMapScreen({
             layout={{
               'text-field': '›',
               'text-font': ['PlusJakartaSans-SemiBold'],
-              'text-size': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 15, 17, 17],
+              'text-size': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                10,
+                ['case', ['boolean', ['get', 'isReturnPass'], false], 11.5, 10],
+                14,
+                ['case', ['boolean', ['get', 'isReturnPass'], false], 14, 12],
+                17,
+                ['case', ['boolean', ['get', 'isReturnPass'], false], 16, 14],
+              ],
               'text-rotate': ['-', ['coalesce', ['get', 'bearingDeg'], 0], 90],
               'text-rotation-alignment': 'map',
               'text-keep-upright': false,
@@ -2209,8 +2219,13 @@ export function MobileMapScreen({
             paint={{
               'text-color': resolvedMapTheme === 'dark' ? '#09090b' : '#ffffff',
               'text-halo-color': resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
-              'text-halo-width': 1.2,
-              'text-opacity': ['interpolate', ['linear'], ['coalesce', ['get', 'progress'], 1], 0, 0.72, 1, 0.98],
+              'text-halo-width': 0.65,
+              'text-opacity': [
+                'case',
+                ['boolean', ['get', 'isReturnPass'], false],
+                0.98,
+                ['interpolate', ['linear'], ['coalesce', ['get', 'progress'], 1], 0, 0.52, 1, 0.94],
+              ],
             }}
           />
           <Layer

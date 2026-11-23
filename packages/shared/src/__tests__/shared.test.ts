@@ -1365,8 +1365,19 @@ describe('@loved-ones/shared', () => {
     );
     expect(eastChevrons.length).toBeGreaterThanOrEqual(2);
     expect(westChevrons.length).toBeGreaterThanOrEqual(2);
-    // Outbound progress precedes return progress chronologically
+    // Outbound progress precedes return progress chronologically, and return arrows stay centered without colliding
     expect(eastChevrons[0]!.properties.progress!).toBeLessThan(westChevrons[0]!.properties.progress!);
     expect(westChevrons.some((c) => c.properties.isReturnPass === true)).toBe(true);
+    for (const w of westChevrons) {
+      for (const e of eastChevrons) {
+        const dist = haversineMeters(
+          w.geometry.coordinates[1] as number,
+          w.geometry.coordinates[0] as number,
+          e.geometry.coordinates[1] as number,
+          e.geometry.coordinates[0] as number,
+        );
+        expect(dist).toBeGreaterThanOrEqual(30);
+      }
+    }
   });
 });
