@@ -106,9 +106,10 @@ describe('@loved-ones/realtime-service integration', () => {
     });
     const invite = invRes.json();
 
-    const bobReg = await authApp.inject({
+    const bobReq = await authApp.inject({
       method: 'POST',
-      url: '/api/auth/register',
+      url: '/api/auth/registration-requests',
+      headers: { 'x-forwarded-for': '203.0.113.51' },
       payload: {
         email: 'rt-bob@lovedones.test',
         username: 'Bob',
@@ -116,7 +117,22 @@ describe('@loved-ones/realtime-service integration', () => {
         inviteToken: invite.inviteToken,
       },
     });
-    const bob = bobReg.json();
+    expect(bobReq.statusCode).toBe(201);
+    const approveBob = await authApp.inject({
+      method: 'POST',
+      url: `/api/admin/registration-requests/${bobReq.json().request.id}/approve`,
+      headers: { Authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(approveBob.statusCode).toBe(200);
+    const bobLogin = await authApp.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: {
+        email: 'rt-bob@lovedones.test',
+        password: 'Password1234',
+      },
+    });
+    const bob = bobLogin.json();
 
     const connectSocket = (token: string): Promise<Socket> =>
       new Promise((resolve, reject) => {

@@ -7,16 +7,21 @@ import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
 import {
+  countUsers,
   createPool,
+  getServerSetting,
   pruneExpiredShareLinks,
   pruneResourceTables,
   resolveAuditContext,
   runMigrations,
+  setServerSetting,
 } from '@loved-ones/db';
 import {
   DEFAULT_APP_VERSION,
   evaluateClientVersion,
+  isSafeLoginBackgroundUrl,
   MOBILE_DEFAULT_DOWNLOAD_URL,
+  UpdateLoginAppearanceSchema,
   UpdateLogRetentionSchema,
   UpdateResourceLimitsSchema,
 } from '@loved-ones/shared';
@@ -282,7 +287,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
       process.env.ALLOW_REMOTE_SYSTEM_UPDATE !== 'false',
   });
 
-  const app = Fastify({ logger: false, bodyLimit: 1024 * 1024, trustProxy: true });
+  const app = Fastify({ logger: false, bodyLimit: 3 * 1024 * 1024, trustProxy: true });
   await app.register(cors, () =>
     createFastifyCorsDelegator({
       publicServerUrl,
@@ -454,6 +459,22 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   });
 
   // ---- Auth & Onboarding Endpoints ----
+
+  const LOGIN_BACKGROUND_SETTING_KEY = 'login_background_url';
+
+  app.get('/api/auth/public-config', async (request: AuthenticatedRequest) => {
+    request.skipTelemetry = true;
+    const [userCount, rawBackground] = await Promise.all([
+      countUsers(pool),
+      getServerSetting(pool, LOGIN_BACKGROUND_SETTING_KEY),
+    ]);
+    const loginBackgroundUrl = isSafeLoginBackgroundUrl(rawBackground) ? rawBackground : null;
+    return {
+      bootstrapRequired: userCount === 0,
+      requireAdminApproval: userCount > 0,
+      loginBackgroundUrl,
+    };
+  });
 
   app.post(
     '/api/auth/onboarding/handshake',
@@ -1241,6 +1262,62 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
         `${actor.username} cleared ${cleared} admin notice(s)`,
       );
       return { ok: true, cleared };
+    },
+  );
+
+  app.get(
+    '/api/admin/login-appearance',
+    { preHandler: [requireHostAdmin] },
+    async () => {
+      const rawBackground = await getServerSetting(pool, LOGIN_BACKGROUND_SETTING_KEY);
+      return {
+        loginBackgroundUrl: isSafeLoginBackgroundUrl(rawBackground) ? rawBackground : null,
+      };
+    },
+  );
+
+  app.patch(
+    '/api/admin/login-appearance',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const parsed = UpdateLoginAppearanceSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        throw new DomainError(400, 'Invalid login background image', parsed.error.flatten());
+      }
+      const nextUrl = parsed.data.loginBackgroundUrl;
+      await setServerSetting(pool, LOGIN_BACKGROUND_SETTING_KEY, nextUrl, actor.id);
+      loggerHandle.logger.info(
+        {
+          action: 'admin.login_background_updated',
+          userId: actor.id,
+          username: actor.username,
+          hasBackground: Boolean(nextUrl),
+          sourceType: !nextUrl ? 'cleared' : nextUrl.startsWith('data:') ? 'upload' : 'url',
+        },
+        nextUrl
+          ? `${actor.username} updated the login screen background photo`
+          : `${actor.username} reset the login screen background photo to default`,
+      );
+      return { loginBackgroundUrl: nextUrl };
+    },
+  );
+
+  app.post(
+    '/api/admin/system/update/dismiss',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const status = await systemUpdater.dismissError();
+      loggerHandle.logger.info(
+        {
+          action: 'system.update_error_dismissed',
+          userId: actor.id,
+          username: actor.username,
+        },
+        `${actor.username} dismissed the system update status banner`,
+      );
+      return status;
     },
   );
 

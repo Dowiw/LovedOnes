@@ -266,3 +266,10 @@ CREATE INDEX IF NOT EXISTS idx_location_share_guests_token_updated
 ALTER TABLE location_history
     ADD COLUMN IF NOT EXISTS accuracy DOUBLE PRECISION NULL,
     ADD COLUMN IF NOT EXISTS heading DOUBLE PRECISION NULL;
+
+CREATE TABLE IF NOT EXISTS server_settings (
+    key VARCHAR(64) PRIMARY KEY,
+    value TEXT NULL,
+    updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

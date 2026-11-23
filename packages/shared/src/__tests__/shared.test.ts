@@ -23,6 +23,7 @@ import {
   isPointCoveredByRegions,
   isSafeAvatarUrl,
   isSafeHexColor,
+  isSafeLoginBackgroundUrl,
   LocationBatchSchema,
   LocationSnapshotQuerySchema,
   type MapRegion,
@@ -32,11 +33,13 @@ import {
   normalizePrivacyMode,
   parseBoundingBox,
   parseInviteInput,
+  PublicLoginConfigSchema,
   QrInvitePayloadSchema,
   resolveMemberPresenceStatus,
   RespondLocationRequestSchema,
   slugifyCityName,
   TrailQuerySchema,
+  UpdateLoginAppearanceSchema,
   UpdateProfileSchema,
   withMinDelay,
 } from '../index.js';
@@ -1379,5 +1382,37 @@ describe('@loved-ones/shared', () => {
         expect(dist).toBeGreaterThanOrEqual(30);
       }
     }
+  });
+
+  it('validates login background URLs safely and rejects SVG or non-HTTP schemes', () => {
+    const validPng =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2dIAAAAASUVORK5CYII=';
+    expect(isSafeLoginBackgroundUrl(validPng)).toBe(true);
+    expect(isSafeLoginBackgroundUrl('https://cdn.example.com/backdrop.webp')).toBe(true);
+    expect(isSafeLoginBackgroundUrl('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=')).toBe(false);
+    expect(isSafeLoginBackgroundUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeLoginBackgroundUrl('')).toBe(false);
+
+    expect(
+      UpdateLoginAppearanceSchema.safeParse({ loginBackgroundUrl: validPng }).success,
+    ).toBe(true);
+    expect(UpdateLoginAppearanceSchema.safeParse({ loginBackgroundUrl: null }).success).toBe(true);
+    expect(
+      UpdateLoginAppearanceSchema.safeParse({
+        loginBackgroundUrl: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+      }).success,
+    ).toBe(false);
+
+    expect(
+      PublicLoginConfigSchema.parse({
+        bootstrapRequired: false,
+        requireAdminApproval: true,
+        loginBackgroundUrl: null,
+      }),
+    ).toEqual({
+      bootstrapRequired: false,
+      requireAdminApproval: true,
+      loginBackgroundUrl: null,
+    });
   });
 });

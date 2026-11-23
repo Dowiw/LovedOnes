@@ -55,6 +55,53 @@ export const AvatarUrlSchema = z
     message: 'Avatar must be a PNG, JPEG, WebP, or GIF image under 256 KB or an HTTP(S) URL',
   });
 
+export const MAX_LOGIN_BACKGROUND_URL_LENGTH = 1_572_864;
+
+/**
+ * Validates that a login background image URL is either an explicit raster image
+ * base64 data URI (PNG/JPEG/WebP/GIF, bounded to ~1.5 MB) or an HTTP(S) URL,
+ * rejecting SVGs and non-HTTP schemes to prevent stored XSS.
+ */
+export function isSafeLoginBackgroundUrl(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_LOGIN_BACKGROUND_URL_LENGTH) return false;
+  if (SAFE_DATA_IMAGE_REGEX.test(trimmed)) return true;
+  if (trimmed.length > 2048) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export const LoginBackgroundUrlSchema = z
+  .string()
+  .trim()
+  .max(MAX_LOGIN_BACKGROUND_URL_LENGTH)
+  .refine((value) => isSafeLoginBackgroundUrl(value), {
+    message:
+      'Login background must be a PNG, JPEG, WebP, or GIF image under 1.5 MB or an HTTP(S) URL',
+  });
+
+export const PublicLoginConfigSchema = z.object({
+  bootstrapRequired: z.boolean(),
+  requireAdminApproval: z.boolean(),
+  loginBackgroundUrl: z.string().nullable(),
+});
+export type PublicLoginConfig = z.infer<typeof PublicLoginConfigSchema>;
+
+export const UpdateLoginAppearanceSchema = z.object({
+  loginBackgroundUrl: LoginBackgroundUrlSchema.nullable(),
+});
+export type UpdateLoginAppearanceInput = z.infer<typeof UpdateLoginAppearanceSchema>;
+
+export const LoginAppearanceResponseSchema = z.object({
+  loginBackgroundUrl: z.string().nullable(),
+});
+export type LoginAppearanceResponse = z.infer<typeof LoginAppearanceResponseSchema>;
+
 const SAFE_HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
 export const DEFAULT_FUZZ_CIRCLE_COLOR = '#f59e0b';
 export const DEFAULT_FUZZED_HALO_COLOR = '#f59e0b';

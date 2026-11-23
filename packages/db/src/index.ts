@@ -439,6 +439,7 @@ const TABLE_CLASSIFICATION: Record<
   group_place_states: { label: 'Geofence States', category: 'system', deletable: false },
   push_vapid_config: { label: 'VAPID Keys (System)', category: 'system', deletable: false },
   push_subscriptions: { label: 'Web Push Subscriptions', category: 'system', deletable: false },
+  server_settings: { label: 'Server Settings', category: 'system', deletable: false },
   spatial_ref_sys: { label: 'PostGIS Spatial Reference', category: 'system', deletable: false },
 };
 
@@ -2077,4 +2078,36 @@ export async function pruneExpiredShareLinks(
     deletedLinks: linksRes.rowCount ?? 0,
     deletedGuests: guestsRes.rowCount ?? 0,
   };
+}
+
+export async function countUsers(pool: pg.Pool): Promise<number> {
+  const res = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM users');
+  return Number.parseInt(res.rows[0]?.count ?? '0', 10) || 0;
+}
+
+export async function getServerSetting(pool: pg.Pool, key: string): Promise<string | null> {
+  const res = await pool.query<{ value: string | null }>(
+    'SELECT value FROM server_settings WHERE key = $1 LIMIT 1',
+    [key],
+  );
+  return res.rows[0]?.value ?? null;
+}
+
+export async function setServerSetting(
+  pool: pg.Pool,
+  key: string,
+  value: string | null,
+  updatedBy?: string | null,
+): Promise<void> {
+  if (value === null) {
+    await pool.query('DELETE FROM server_settings WHERE key = $1', [key]);
+    return;
+  }
+  await pool.query(
+    `INSERT INTO server_settings (key, value, updated_by, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (key)
+     DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+    [key, value, updatedBy ?? null],
+  );
 }

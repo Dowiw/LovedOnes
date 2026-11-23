@@ -187,16 +187,32 @@ describe('@loved-ones/auth-admin-service map regions', () => {
     });
     const adminToken = adminReg.json().accessToken as string;
 
-    const memberReg = await app.inject({
+    const memberReq = await app.inject({
       method: 'POST',
-      url: '/api/auth/register',
+      url: '/api/auth/registration-requests',
+      headers: { 'x-forwarded-for': '203.0.113.41' },
       payload: {
         email: 'member@lovedones.test',
         username: 'Member',
         password: 'SuperSecretPassword123',
       },
     });
-    const memberToken = memberReg.json().accessToken as string;
+    expect(memberReq.statusCode).toBe(201);
+    const approveMember = await app.inject({
+      method: 'POST',
+      url: `/api/admin/registration-requests/${memberReq.json().request.id}/approve`,
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(approveMember.statusCode).toBe(200);
+    const memberLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: {
+        email: 'member@lovedones.test',
+        password: 'SuperSecretPassword123',
+      },
+    });
+    const memberToken = memberLogin.json().accessToken as string;
 
     // Initial regions list includes only primary Berlin region
     const initialRes = await app.inject({ method: 'GET', url: '/api/maps/regions' });

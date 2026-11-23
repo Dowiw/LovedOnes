@@ -110,6 +110,32 @@ describe('@loved-ones/auth-admin-service integration', () => {
               },
             };
           },
+          async clearError() {
+            updaterApplyCount = 0;
+            return {
+              enabled: true,
+              disabledReason: null,
+              phase: 'idle',
+              running: false,
+              branch: 'main',
+              currentCommit: 'be116f1',
+              currentCommitMessage: 'feat(trails): average nearby stationary trail pings',
+              upstreamBranch: 'origin/main',
+              remoteCommit: 'c0ffee1',
+              commitsBehind: 1,
+              pendingCommits: [
+                { sha: 'c0ffee1', message: 'feat: remote system updater', author: 'Admin' },
+              ],
+              updateAvailable: true,
+              workingTreeDirty: false,
+              lastCheckedAt: '2026-11-20T21:35:00.000Z',
+              startedAt: null,
+              finishedAt: null,
+              targetCommit: 'be116f1',
+              error: null,
+              logs: [],
+            };
+          },
         },
       },
       appVersion: {
@@ -140,6 +166,18 @@ describe('@loved-ones/auth-admin-service integration', () => {
   });
 
   it('handles Argon2id registration, first-user HOST_ADMIN, QR invites, RBAC, telemetry, and live log streaming', async () => {
+    // 0. Public login config before bootstrap reports bootstrapRequired: true
+    const preBootstrapConfig = await app.inject({
+      method: 'GET',
+      url: '/api/auth/public-config',
+    });
+    expect(preBootstrapConfig.statusCode).toBe(200);
+    expect(preBootstrapConfig.json()).toMatchObject({
+      bootstrapRequired: true,
+      requireAdminApproval: false,
+      loginBackgroundUrl: null,
+    });
+
     // 1. Register first user -> HOST_ADMIN
     const regAdminRes = await app.inject({
       method: 'POST',
@@ -155,6 +193,18 @@ describe('@loved-ones/auth-admin-service integration', () => {
     expect(adminData.user.role).toBe('HOST_ADMIN');
     expect(adminData.accessToken).toBeTypeOf('string');
     expect(adminData.refreshToken).toBeTypeOf('string');
+
+    // Public config now requires admin approval for new accounts
+    const postBootstrapConfig = await app.inject({
+      method: 'GET',
+      url: '/api/auth/public-config',
+    });
+    expect(postBootstrapConfig.statusCode).toBe(200);
+    expect(postBootstrapConfig.json()).toMatchObject({
+      bootstrapRequired: false,
+      requireAdminApproval: true,
+      loginBackgroundUrl: null,
+    });
 
     // 2. Refresh token flow
     const refreshRes = await app.inject({
@@ -204,8 +254,9 @@ describe('@loved-ones/auth-admin-service integration', () => {
     expect(lookupRes.statusCode).toBe(200);
     expect(lookupRes.json().valid).toBe(true);
 
-    // 6. Second user registers and joins via inviteToken
-    const regMemberRes = await app.inject({
+    // 6. Direct registration after bootstrap is blocked (403 ADMIN_APPROVAL_REQUIRED);
+    //    new user must request an account and be approved by Host Admin
+    const directRegisterBlocked = await app.inject({
       method: 'POST',
       url: '/api/auth/register',
       payload: {
@@ -215,10 +266,42 @@ describe('@loved-ones/auth-admin-service integration', () => {
         inviteToken: invite.inviteToken,
       },
     });
-    expect(regMemberRes.statusCode).toBe(201);
-    const memberData = regMemberRes.json();
+    expect(directRegisterBlocked.statusCode).toBe(403);
+    expect(directRegisterBlocked.json().code).toBe('ADMIN_APPROVAL_REQUIRED');
+
+    const memberReqRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/registration-requests',
+      headers: { 'x-forwarded-for': '203.0.113.5' },
+      payload: {
+        email: 'member@lovedones.test',
+        username: 'FamilyMember',
+        password: 'MemberPassword123',
+        inviteToken: invite.inviteToken,
+      },
+    });
+    expect(memberReqRes.statusCode).toBe(201);
+    const memberReqId = memberReqRes.json().request.id as string;
+
+    const memberApproveRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/registration-requests/${memberReqId}/approve`,
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(memberApproveRes.statusCode).toBe(200);
+    expect(memberApproveRes.json().joinedGroup.groupId).toBe(group.id);
+
+    const memberLoginRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: {
+        email: 'member@lovedones.test',
+        password: 'MemberPassword123',
+      },
+    });
+    expect(memberLoginRes.statusCode).toBe(200);
+    const memberData = memberLoginRes.json();
     expect(memberData.user.role).toBe('USER');
-    expect(memberData.joinedGroup.groupId).toBe(group.id);
 
     // 7. Member updates privacy mode (using SPEC legacy alias FUZZED_1KM -> FUZZED)
     const privacyRes = await app.inject({
@@ -783,5 +866,58 @@ describe('@loved-ones/auth-admin-service integration', () => {
     expect(cfHandshake.statusCode).toBe(200);
     expect(cfHandshake.json().requesterIp).toBe('198.51.100.99');
     expect(cfHandshake.headers['x-ratelimit-limit']).toBeDefined();
+
+    // 19. Host Admin login background photo setting + public config exposure + updater dismiss
+    const memberBgForbidden = await app.inject({
+      method: 'PATCH',
+      url: '/api/admin/login-appearance',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+      payload: { loginBackgroundUrl: 'https://cdn.example.com/bg.jpg' },
+    });
+    expect(memberBgForbidden.statusCode).toBe(403);
+
+    const badSvgBg = await app.inject({
+      method: 'PATCH',
+      url: '/api/admin/login-appearance',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+      payload: { loginBackgroundUrl: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' },
+    });
+    expect(badSvgBg.statusCode).toBe(400);
+
+    const tinyPngDataUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2dIAAAAASUVORK5CYII=';
+    const setBgRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/admin/login-appearance',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+      payload: { loginBackgroundUrl: tinyPngDataUrl },
+    });
+    expect(setBgRes.statusCode).toBe(200);
+    expect(setBgRes.json().loginBackgroundUrl).toBe(tinyPngDataUrl);
+
+    const publicCfgWithBg = await app.inject({
+      method: 'GET',
+      url: '/api/auth/public-config',
+    });
+    expect(publicCfgWithBg.statusCode).toBe(200);
+    expect(publicCfgWithBg.json().loginBackgroundUrl).toBe(tinyPngDataUrl);
+
+    const resetBgRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/admin/login-appearance',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+      payload: { loginBackgroundUrl: null },
+    });
+    expect(resetBgRes.statusCode).toBe(200);
+    expect(resetBgRes.json().loginBackgroundUrl).toBeNull();
+
+    const dismissUpdateRes = await app.inject({
+      method: 'POST',
+      url: '/api/admin/system/update/dismiss',
+      headers: { Authorization: `Bearer ${adminData.accessToken}` },
+    });
+    expect(dismissUpdateRes.statusCode).toBe(200);
+    expect(dismissUpdateRes.json().phase).toBe('idle');
+    expect(dismissUpdateRes.json().error).toBeNull();
   });
 });

@@ -258,3 +258,10 @@ export const locationShareGuests = pgTable('location_share_guests', {
   accuracy: doublePrecision('accuracy'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const serverSettings = pgTable('server_settings', {
+  key: varchar('key', { length: 64 }).primaryKey(),
+  value: text('value'),
+  updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});

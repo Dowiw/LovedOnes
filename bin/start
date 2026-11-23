@@ -724,7 +724,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 eval "set -- ${profile_args} up -d --build ${COMPOSE_ARGS}"
-docker compose "$@"
+DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 docker compose "$@"
 
 echo ""
 echo "LovedOnes is running at http://localhost:${GATEWAY_PORT}"
