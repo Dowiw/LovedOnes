@@ -305,4 +305,251 @@ describe('RoadTrailMatcher', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('snaps tram/transit speeds onto rail lines, skips noisy lateral moving spikes, and only emits spurs for real dwells', async () => {
+    const edges: RoadEdgeFeature[] = [
+      // Straight tram/rail line along 52.5200
+      {
+        kind: 'rail',
+        coords: [
+          [13.4, 52.52],
+          [13.408, 52.52],
+        ],
+      },
+      // Parallel side street south of the corridor with perpendicular spur street
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.403, 52.52],
+          [13.403, 52.5189],
+        ],
+      },
+      {
+        kind: 'minor_road',
+        coords: [
+          [13.4, 52.52],
+          [13.408, 52.52],
+        ],
+      },
+    ];
+
+    const matcher = new RoadTrailMatcher({ tileProvider: createMemoryRoadProvider(edges) });
+    const [tramMatch] = await matcher.matchTrails([
+      {
+        userId: 'tram-rider',
+        username: 'Tram',
+        latitude: 52.52,
+        longitude: 13.4005,
+        recordedAt: '2026-11-22T14:00:00.000Z',
+        speed: 10,
+        accuracy: 12,
+        heading: 90,
+      },
+      {
+        // Noisy coarse moving Wi-Fi jump ~110m south onto the side street (single 15s ping, not a dwell)
+        userId: 'tram-rider',
+        username: 'Tram',
+        latitude: 52.519,
+        longitude: 13.403,
+        recordedAt: '2026-11-22T14:00:15.000Z',
+        speed: 10,
+        accuracy: 95,
+      },
+      {
+        userId: 'tram-rider',
+        username: 'Tram',
+        latitude: 52.52,
+        longitude: 13.406,
+        recordedAt: '2026-11-22T14:00:35.000Z',
+        speed: 10,
+        accuracy: 12,
+        heading: 90,
+      },
+    ]);
+
+    expect(tramMatch.hasRoadMatches).toBe(true);
+    // Moving noisy spike must NOT produce a spur or detour south to 52.5190
+    expect(tramMatch.segments.filter((s) => s.kind === 'spur')).toHaveLength(0);
+    const roadCoords = tramMatch.segments
+      .filter((s) => s.kind === 'road')
+      .flatMap((s) => s.coordinates);
+    expect(roadCoords.length).toBeGreaterThanOrEqual(2);
+    expect(roadCoords.every(([, lat]) => Math.abs(lat - 52.52) < 0.0002)).toBe(true);
+
+    // Rail-only track matches at transit speed (> 4.5 m/s)
+    const railOnlyMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        {
+          kind: 'rail',
+          coords: [
+            [13.4, 52.52],
+            [13.408, 52.52],
+          ],
+        },
+      ]),
+    });
+    const [railSnap] = await railOnlyMatcher.matchTrails([
+      {
+        userId: 'tram-only',
+        username: 'TramOnly',
+        latitude: 52.52005,
+        longitude: 13.401,
+        recordedAt: '2026-11-22T14:10:00.000Z',
+        speed: 11,
+      },
+      {
+        userId: 'tram-only',
+        username: 'TramOnly',
+        latitude: 52.52005,
+        longitude: 13.406,
+        recordedAt: '2026-11-22T14:10:30.000Z',
+        speed: 11,
+      },
+    ]);
+    expect(railSnap.hasRoadMatches).toBe(true);
+    expect(railSnap.segments[0]?.roadKind).toBe('rail');
+
+    // Genuine >90s off-road dwell in a multi-ping trip emits a spur, while moving waypoints do not
+    const dwellMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        {
+          kind: 'minor_road',
+          coords: [
+            [13.4, 52.52],
+            [13.408, 52.52],
+          ],
+        },
+      ]),
+    });
+    const [dwellTrip] = await dwellMatcher.matchTrails([
+      {
+        userId: 'dwell-user',
+        username: 'Dwell',
+        latitude: 52.5204, // ~44m north of road, genuine 10m dwell
+        longitude: 13.401,
+        recordedAt: '2026-11-22T15:00:00.000Z',
+        accuracy: 10,
+      },
+      {
+        userId: 'dwell-user',
+        username: 'Dwell',
+        latitude: 52.52042,
+        longitude: 13.40102,
+        recordedAt: '2026-11-22T15:10:00.000Z',
+        accuracy: 10,
+      },
+      {
+        userId: 'dwell-user',
+        username: 'Dwell',
+        latitude: 52.52002,
+        longitude: 13.404,
+        recordedAt: '2026-11-22T15:12:00.000Z',
+        speed: 8,
+        accuracy: 10,
+      },
+      {
+        userId: 'dwell-user',
+        username: 'Dwell',
+        latitude: 52.52002,
+        longitude: 13.407,
+        recordedAt: '2026-11-22T15:13:00.000Z',
+        speed: 8,
+        accuracy: 10,
+      },
+    ]);
+    expect(dwellTrip.segments.filter((s) => s.kind === 'spur')).toHaveLength(1);
+
+    // Off-angle triangle bounce is dropped purely from PMTiles road/rail alignment even when accuracy is reported crisp (15m),
+    // while a real 90-degree street corner is preserved.
+    const cornerVsSpikeMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        // East-west corridor
+        { kind: 'major_road', coords: [[13.4, 52.52], [13.408, 52.52]] },
+        // Intersecting north-south avenue at 13.408
+        { kind: 'major_road', coords: [[13.408, 52.52], [13.408, 52.524]] },
+      ]),
+    });
+    const [angleMatch] = await cornerVsSpikeMatcher.matchTrails([
+      {
+        userId: 'angle-user',
+        username: 'Angle',
+        latitude: 52.52,
+        longitude: 13.4005,
+        recordedAt: '2026-11-22T16:00:00.000Z',
+        speed: 10,
+        accuracy: 15,
+      },
+      {
+        // Off-angle ~100m north bounce with misreported crisp 15m accuracy
+        userId: 'angle-user',
+        username: 'Angle',
+        latitude: 52.5209,
+        longitude: 13.4035,
+        recordedAt: '2026-11-22T16:00:20.000Z',
+        speed: 10,
+        accuracy: 15,
+      },
+      {
+        // Real corner at (52.52, 13.408)
+        userId: 'angle-user',
+        username: 'Angle',
+        latitude: 52.52,
+        longitude: 13.408,
+        recordedAt: '2026-11-22T16:00:45.000Z',
+        speed: 10,
+        accuracy: 15,
+      },
+      {
+        // Turning north along intersecting street
+        userId: 'angle-user',
+        username: 'Angle',
+        latitude: 52.5235,
+        longitude: 13.408,
+        recordedAt: '2026-11-22T16:01:20.000Z',
+        speed: 10,
+        accuracy: 15,
+      },
+    ]);
+    expect(angleMatch.visits).toHaveLength(3);
+    expect(angleMatch.visits?.some((v) => v.latitude > 52.5205 && v.longitude < 13.406)).toBe(false);
+    expect(angleMatch.visits?.[2]?.latitude).toBeCloseTo(52.5235, 3);
+
+    // Parallel multi-track rail corridor (tracks 5.5m apart, plus 4 parallel footpaths crowding the station)
+    // preserves category diversity and links parallel tracks without falling back to 'direct'.
+    const parallelRailMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        // 4 closely spaced footpaths right at the station platform (0-2m from stop A)
+        { kind: 'path', coords: [[13.4, 52.52000], [13.401, 52.52000]] },
+        { kind: 'path', coords: [[13.4, 52.52001], [13.401, 52.52001]] },
+        { kind: 'path', coords: [[13.4, 52.52002], [13.401, 52.52002]] },
+        { kind: 'path', coords: [[13.4, 52.51999], [13.401, 52.51999]] },
+        // Track 1 (west end at station A, ends at tile boundary 13.405)
+        { kind: 'rail', coords: [[13.4, 52.52004], [13.405, 52.52004]] },
+        // Track 2 (5.5m north of Track 1, continues from 13.405 to station B at 13.410)
+        { kind: 'rail', coords: [[13.405, 52.52009], [13.410, 52.52009]] },
+      ]),
+    });
+    const [railCorridorMatch] = await parallelRailMatcher.matchTrails([
+      {
+        userId: 'rail-user',
+        username: 'Rail',
+        latitude: 52.52001,
+        longitude: 13.4002,
+        recordedAt: '2026-11-22T17:00:00.000Z',
+        speed: 14,
+        accuracy: 12,
+      },
+      {
+        userId: 'rail-user',
+        username: 'Rail',
+        latitude: 52.52009,
+        longitude: 13.4095,
+        recordedAt: '2026-11-22T17:00:45.000Z',
+        speed: 14,
+        accuracy: 12,
+      },
+    ]);
+    expect(railCorridorMatch.hasRoadMatches).toBe(true);
+    expect(railCorridorMatch.segments.some((s) => s.kind === 'road' && s.roadKind === 'rail')).toBe(true);
+  });
 });

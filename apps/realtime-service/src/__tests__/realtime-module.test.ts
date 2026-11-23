@@ -1087,4 +1087,116 @@ describe('RealtimeModule domain interface', () => {
     expect(dup).toBe(0);
     expect(calls).toHaveLength(1);
   });
+
+  it('drops transient coarse lateral Wi-Fi/cell bounces while preserving genuine street turns and stripping FUZZED accuracy/heading', async () => {
+    const filtered = filterAnomalousLocationPoints([
+      {
+        latitude: 52.51,
+        longitude: 13.52,
+        accuracy: 12,
+        recordedAt: '2026-11-22T12:00:00.000Z',
+      },
+      {
+        // Sudden 180m coarse lateral jump south into a supermarket in 15s, then back to main road
+        latitude: 52.5083,
+        longitude: 13.521,
+        accuracy: 110,
+        recordedAt: '2026-11-22T12:00:15.000Z',
+      },
+      {
+        // Fast tram horizontal travel (~340m in 30s) with 120m coarse perpendicular bounce
+        latitude: 52.51,
+        longitude: 13.522,
+        accuracy: 10,
+        recordedAt: '2026-11-22T12:00:30.000Z',
+      },
+      {
+        latitude: 52.5085,
+        longitude: 13.525,
+        accuracy: 120,
+        recordedAt: '2026-11-22T12:00:45.000Z',
+      },
+      {
+        latitude: 52.5099,
+        longitude: 13.5276,
+        accuracy: 12,
+        recordedAt: '2026-11-22T12:01:00.000Z',
+      },
+    ]);
+    expect(filtered).toHaveLength(3);
+    expect(filtered.map((p) => p.longitude)).toEqual([13.52, 13.522, 13.5276]);
+
+    // Real 90-degree turn stays intact
+    const corner = filterAnomalousLocationPoints([
+      {
+        latitude: 52.51,
+        longitude: 13.52,
+        accuracy: 15,
+        recordedAt: '2026-11-22T12:01:00.000Z',
+      },
+      {
+        latitude: 52.51,
+        longitude: 13.522,
+        accuracy: 15,
+        recordedAt: '2026-11-22T12:01:15.000Z',
+      },
+      {
+        latitude: 52.512,
+        longitude: 13.522,
+        accuracy: 15,
+        recordedAt: '2026-11-22T12:01:30.000Z',
+      },
+    ]);
+    expect(corner).toHaveLength(3);
+
+    const harness = createInMemoryRealtimeHarness();
+    await harness.mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.52,
+          longitude: 13.405,
+          accuracy: 9,
+          heading: 92,
+          recordedAt: '2026-11-22T12:05:00.000Z',
+        },
+      ],
+    });
+    const exactPin = harness.locationBroadcasts.find((b) => b.groupId === GROUP_EXACT);
+    const fuzzedPin = harness.locationBroadcasts.find((b) => b.groupId === GROUP_FUZZED);
+    expect(exactPin?.accuracy).toBe(9);
+    expect(exactPin?.heading).toBe(92);
+    expect(fuzzedPin?.accuracy).toBeNull();
+    expect(fuzzedPin?.heading).toBeNull();
+
+    // Single-ping live ingestion bounce guard drops a lone coarse indoor Wi-Fi jump (95m accuracy, 85m jump in 15s)
+    // and a lone impossible single-ping teleport (500m in 3s) before DB insert or Socket.IO broadcast.
+    const countBefore = harness.locationBroadcasts.length;
+    const coarseSingleInserted = await harness.mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.52078,
+          longitude: 13.405,
+          accuracy: 95,
+          speed: 0.3,
+          recordedAt: '2026-11-22T12:05:15.000Z',
+        },
+      ],
+    });
+    expect(coarseSingleInserted).toBe(0);
+    expect(harness.locationBroadcasts).toHaveLength(countBefore);
+
+    const teleportSingleInserted = await harness.mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.525,
+          longitude: 13.405,
+          accuracy: 12,
+          speed: 4,
+          recordedAt: '2026-11-22T12:05:03.000Z',
+        },
+      ],
+    });
+    expect(teleportSingleInserted).toBe(0);
+    expect(harness.locationBroadcasts).toHaveLength(countBefore);
+  });
 });

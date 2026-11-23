@@ -157,6 +157,23 @@ export function isNullIsland(latitude: number, longitude: number): boolean {
   return Math.abs(latitude) < 0.0001 && Math.abs(longitude) < 0.0001;
 }
 
+function crossTrackMeters(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number },
+  c: { latitude: number; longitude: number },
+): number {
+  const cosLat = Math.max(0.15, Math.cos((a.latitude * Math.PI) / 180));
+  const mLat = 111_320;
+  const cx = (c.longitude - a.longitude) * mLat * cosLat;
+  const cy = (c.latitude - a.latitude) * mLat;
+  const bx = (b.longitude - a.longitude) * mLat * cosLat;
+  const by = (b.latitude - a.latitude) * mLat;
+  const lenSq = cx * cx + cy * cy;
+  if (lenSq < 1e-6) return Math.hypot(bx, by);
+  const t = Math.max(0, Math.min(1, (bx * cx + by * cy) / lenSq));
+  return Math.hypot(bx - t * cx, by - t * cy);
+}
+
 /**
  * Drops Null Island (0, 0) glitches, coarse fixes exceeding maxAccuracyMeters,
  * and impossible intra-batch velocity teleports, returning surviving points
@@ -208,6 +225,44 @@ export function filterAnomalousLocationPoints<
     }
     accepted.push(item.pt);
     lastAccepted = { pt: item.pt, ts: item.ts };
+  }
+
+  // Drop transient out-and-back lateral bounces (e.g., coarse Wi-Fi/cell jumps into nearby buildings while moving)
+  if (accepted.length >= 3) {
+    const cleaned: T[] = [accepted[0]!];
+    for (let i = 1; i < accepted.length - 1; i += 1) {
+      const prev = cleaned[cleaned.length - 1]!;
+      const curr = accepted[i]!;
+      const next = accepted[i + 1]!;
+      const tPrev = Date.parse(prev.recordedAt);
+      const tNext = Date.parse(next.recordedAt);
+      const dtWindowSec =
+        Number.isFinite(tPrev) && Number.isFinite(tNext) ? (tNext - tPrev) / 1000 : NaN;
+
+      if (Number.isFinite(dtWindowSec) && dtWindowSec > 0 && dtWindowSec <= 90) {
+        const dAB = haversineMeters(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+        const dBC = haversineMeters(curr.latitude, curr.longitude, next.latitude, next.longitude);
+        const dAC = haversineMeters(prev.latitude, prev.longitude, next.latitude, next.longitude);
+        const currAcc =
+          typeof curr.accuracy === 'number' && Number.isFinite(curr.accuracy) ? curr.accuracy : null;
+        const detourMeters = dAB + dBC - dAC;
+        const detourRatio = (dAB + dBC) / Math.max(dAC, 1);
+        const impliedPathSpeed = (dAB + dBC) / dtWindowSec;
+        const crossTrack = crossTrackMeters(prev, curr, next);
+        const isCoarseLateralBounce =
+          currAcc !== null &&
+          currAcc >= 65 &&
+          ((detourRatio > 2.2 && detourMeters > 110) || (crossTrack > 75 && detourMeters > 60));
+        const isImpossibleLateralSpike =
+          detourRatio > 2.8 && detourMeters > 160 && impliedPathSpeed > 45;
+        if (isCoarseLateralBounce || isImpossibleLateralSpike) {
+          continue;
+        }
+      }
+      cleaned.push(curr);
+    }
+    cleaned.push(accepted[accepted.length - 1]!);
+    return cleaned;
   }
 
   return accepted;
@@ -264,7 +319,9 @@ function toPrivacySafeBroadcast(
     latitude: fuzzed.latitude,
     longitude: fuzzed.longitude,
     altitude: row.altitude,
+    accuracy: fuzzed.isFuzzed ? null : (row.accuracy ?? null),
     speed: row.speed,
+    heading: fuzzed.isFuzzed ? null : (row.heading ?? null),
     batteryLevel: presence?.batteryLevel ?? row.batteryLevel,
     recordedAt: row.recordedAt,
     lastHeartbeatAt: presence?.lastHeartbeatAt ?? null,
@@ -393,14 +450,79 @@ export class RealtimeModule {
       return 0;
     }
 
-    const latest = points[points.length - 1]!;
     const nowIso = new Date(this.now()).toISOString();
     const latestExisting = await this.store.getLatestUserLocation(user.id).catch(() => null);
+
+    // Single-ping & cross-request bounce guard: compare incoming points against the user's latest
+    // persisted fix when it arrived within the last 120s so lone single-ping teleports or coarse
+    // indoor Wi-Fi/cell jumps (>75m accuracy jumping >55m while stationary) are rejected before
+    // live Socket.IO broadcast or PostGIS insertion.
+    let verifiedPoints = points;
+    if (latestExisting) {
+      const existingMs = Date.parse(latestExisting.recordedAt);
+      const firstIncomingMs = Date.parse(points[0]!.recordedAt);
+      const gapSeconds =
+        Number.isFinite(existingMs) && Number.isFinite(firstIncomingMs)
+          ? (firstIncomingMs - existingMs) / 1000
+          : Infinity;
+
+      if (gapSeconds > 0 && gapSeconds <= 120) {
+        const maxSpeed = this.filterOptions.maxJumpSpeedMps ?? DEFAULT_MAX_JUMP_SPEED_MPS;
+        const minJumpDist = this.filterOptions.minJumpDistanceMeters ?? DEFAULT_MIN_JUMP_DISTANCE_METERS;
+        let anchor: LocationPoint = latestExisting;
+        const keptAfterAnchor: LocationPoint[] = [];
+
+        for (const pt of points) {
+          const anchorMs = Date.parse(anchor.recordedAt);
+          const ptMs = Date.parse(pt.recordedAt);
+          const dtSec =
+            Number.isFinite(anchorMs) && Number.isFinite(ptMs) ? (ptMs - anchorMs) / 1000 : Infinity;
+          const distMeters = haversineMeters(
+            anchor.latitude,
+            anchor.longitude,
+            pt.latitude,
+            pt.longitude,
+          );
+          if (dtSec > 0 && dtSec <= 120) {
+            const effectiveMinDist = dtSec <= 30 ? Math.min(minJumpDist, 200) : minJumpDist;
+            const effectiveMaxSpeed = dtSec <= 30 ? Math.min(maxSpeed, 75) : maxSpeed;
+            if (distMeters >= effectiveMinDist && distMeters / dtSec > effectiveMaxSpeed) {
+              continue;
+            }
+            const ptAcc = pt.accuracy;
+            const anchorAcc = anchor.accuracy ?? 15;
+            const ptSpeed = pt.speed ?? 0;
+            const anchorSpeed = anchor.speed ?? 0;
+            if (
+              dtSec <= 60 &&
+              typeof ptAcc === 'number' &&
+              Number.isFinite(ptAcc) &&
+              ptAcc >= 75 &&
+              anchorAcc <= 30 &&
+              ptSpeed <= 2.2 &&
+              anchorSpeed <= 1.8 &&
+              distMeters > Math.max(55, ptAcc * 0.6)
+            ) {
+              continue;
+            }
+          }
+          keptAfterAnchor.push(pt);
+          anchor = pt;
+        }
+
+        verifiedPoints = keptAfterAnchor;
+        if (verifiedPoints.length === 0) {
+          return 0;
+        }
+      }
+    }
+
+    const latest = verifiedPoints[verifiedPoints.length - 1]!;
 
     if (latestExisting) {
       const existingMs = Date.parse(latestExisting.recordedAt);
       const incomingMs = Date.parse(latest.recordedAt);
-      const allWithinStationaryRadius = points.every(
+      const allWithinStationaryRadius = verifiedPoints.every(
         (pt) =>
           haversineMeters(
             latestExisting.latitude,
@@ -425,7 +547,7 @@ export class RealtimeModule {
       }
     }
 
-    const inserted = await this.store.insertLocationBatch(user.id, points);
+    const inserted = await this.store.insertLocationBatch(user.id, verifiedPoints);
     if (!latest || inserted === 0) return inserted;
 
     const existingPresence =
@@ -455,7 +577,7 @@ export class RealtimeModule {
       if (m.role === 'SPECTATOR') continue;
 
       if (m.privacy === 'EXACT') {
-        for (const pt of points) {
+        for (const pt of verifiedPoints) {
           const placeEvents = await this.store.evaluatePlaceTransitions({
             groupId: m.groupId,
             userId: user.id,
@@ -490,7 +612,9 @@ export class RealtimeModule {
         latitude: fuzzed.latitude,
         longitude: fuzzed.longitude,
         altitude: latest.altitude ?? null,
+        accuracy: fuzzed.isFuzzed ? null : (latest.accuracy ?? null),
         speed: latest.speed ?? null,
+        heading: fuzzed.isFuzzed ? null : (latest.heading ?? null),
         batteryLevel: activePresence.batteryLevel,
         recordedAt: latest.recordedAt,
         lastHeartbeatAt: activePresence.lastHeartbeatAt,
@@ -499,6 +623,16 @@ export class RealtimeModule {
         isFuzzed: fuzzed.isFuzzed,
       };
       this.broadcaster.broadcastLocation(m.groupId, broadcast);
+    }
+
+    // Pre-warm the matched trail cache in the background so opening Trails on Web/Mobile is instant
+    if (this.roadMatcher && memberships.length > 0) {
+      setImmediate(() => {
+        for (const m of memberships) {
+          if (m.role === 'SPECTATOR' || m.privacy === 'GHOST') continue;
+          void this.getGroupTrailsWithMatches(user, m.groupId, {}).catch(() => {});
+        }
+      });
     }
 
     return inserted;

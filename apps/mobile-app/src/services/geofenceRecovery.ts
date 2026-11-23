@@ -24,6 +24,7 @@ export interface RecoveryPosition {
     altitude?: number | null;
     accuracy?: number | null;
     speed?: number | null;
+    heading?: number | null;
   };
   timestamp: number;
 }

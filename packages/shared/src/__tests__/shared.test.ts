@@ -1119,4 +1119,192 @@ describe('@loved-ones/shared', () => {
     expect(nodeSnap.snapshot.rssBytes).toBeGreaterThan(0);
     expect(nodeSnap.snapshot.disks.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('preserves per-visit stay durations, distinguishes dwells from waypoints, and matches saved places safely', async () => {
+    const {
+      averageNearbyTrailPings,
+      buildTrailGeoJsonFeatures,
+      formatStayDuration,
+      resolveTrailPointDetails,
+    } = await import('../index.js');
+
+    expect(formatStayDuration(0)).toBe('Passing through');
+    expect(formatStayDuration(45_000)).toBe('< 1m');
+    expect(formatStayDuration(12 * 60_000)).toBe('12m');
+    expect(formatStayDuration(85 * 60_000)).toBe('1h 25m');
+
+    const [trail] = averageNearbyTrailPings([
+      // Morning home dwell: 08:00 -> 08:45 (45m)
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.52,
+        longitude: 13.4,
+        recordedAt: '2026-11-22T08:00:00.000Z',
+        accuracy: 10,
+      },
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.52005,
+        longitude: 13.40005,
+        recordedAt: '2026-11-22T08:45:00.000Z',
+        accuracy: 12,
+      },
+      // Moving waypoint along corridor (single ping, not a dwell)
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.523,
+        longitude: 13.405,
+        recordedAt: '2026-11-22T08:52:00.000Z',
+        speed: 11,
+        accuracy: 15,
+      },
+      // Evening return home dwell: 18:00 -> 18:20 (20m)
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.52002,
+        longitude: 13.40002,
+        recordedAt: '2026-11-22T18:00:00.000Z',
+        accuracy: 10,
+      },
+      {
+        userId: 'u1',
+        username: 'Alice',
+        latitude: 52.52001,
+        longitude: 13.40001,
+        recordedAt: '2026-11-22T18:20:00.000Z',
+        accuracy: 10,
+      },
+    ]);
+
+    expect(trail.visits).toHaveLength(3);
+    expect(trail.visits?.[0]?.isDwell).toBe(true);
+    expect(trail.visits?.[0]?.dwellDurationMs).toBe(45 * 60_000);
+    expect(trail.visits?.[1]?.isDwell).toBe(false);
+    expect(trail.visits?.[1]?.dwellDurationMs).toBe(0);
+    expect(trail.visits?.[2]?.isDwell).toBe(true);
+    expect(trail.visits?.[2]?.dwellDurationMs).toBe(20 * 60_000);
+
+    const geo = buildTrailGeoJsonFeatures({
+      trails: [],
+      matchedTrails: [
+        {
+          userId: 'u1',
+          username: 'Alice',
+          stops: trail.stops,
+          visits: trail.visits,
+          segments: [],
+          hasRoadMatches: false,
+        },
+      ],
+      mode: 'roads',
+      places: [
+        {
+          name: 'Home',
+          latitude: 52.52,
+          longitude: 13.4,
+          radiusMeters: 150,
+          isPrivate: true,
+        },
+      ],
+    });
+    const ptFeatures = geo.features.filter((f) => f.geometry.type === 'Point');
+    expect(ptFeatures).toHaveLength(3);
+    expect(ptFeatures[0]?.properties.stayDurationMs).toBe(45 * 60_000);
+    expect(ptFeatures[0]?.properties.durationLabel).toBe('45m');
+    expect(ptFeatures[0]?.properties.matchedPlaceName).toBe('Home');
+    expect(ptFeatures[0]?.properties.matchedPlaceIsPrivate).toBe(true);
+    expect(ptFeatures[2]?.properties.stayDurationMs).toBe(20 * 60_000);
+    expect(ptFeatures[2]?.properties.durationLabel).toBe('20m');
+
+    // Fast-path O(1) lookup uses pre-computed properties without re-scanning places
+    const fastDetails = resolveTrailPointDetails({
+      latitude: 52.52002,
+      longitude: 13.40002,
+      username: 'Alice',
+      firstRecordedAt: ptFeatures[0]?.properties.firstRecordedAt,
+      lastRecordedAt: ptFeatures[0]?.properties.lastRecordedAt,
+      stayDurationMs: ptFeatures[0]?.properties.stayDurationMs,
+      durationLabel: ptFeatures[0]?.properties.durationLabel,
+      isDwell: ptFeatures[0]?.properties.isDwell,
+      matchedPlaceName: ptFeatures[0]?.properties.matchedPlaceName,
+      matchedPlaceIsPrivate: ptFeatures[0]?.properties.matchedPlaceIsPrivate,
+    });
+    expect(fastDetails.matchedPlaceName).toBe('Home');
+    expect(fastDetails.matchedPlaceIsPrivate).toBe(true);
+    expect(fastDetails.durationLabel).toBe('45m');
+
+    const details = resolveTrailPointDetails({
+      latitude: 52.52002,
+      longitude: 13.40002,
+      username: 'Alice',
+      firstRecordedAt: ptFeatures[0]?.properties.firstRecordedAt,
+      lastRecordedAt: ptFeatures[0]?.properties.lastRecordedAt,
+      stayDurationMs: ptFeatures[0]?.properties.stayDurationMs,
+      isDwell: ptFeatures[0]?.properties.isDwell,
+      places: [
+        {
+          name: 'Home',
+          latitude: 52.52,
+          longitude: 13.4,
+          radiusMeters: 150,
+          isPrivate: true,
+        },
+      ],
+    });
+    expect(details.matchedPlaceName).toBe('Home');
+    expect(details.matchedPlaceIsPrivate).toBe(true);
+    expect(details.durationLabel).toBe('45m');
+
+    // FUZZED points must never leak a saved Place name
+    const fuzzedDetails = resolveTrailPointDetails({
+      latitude: 52.52002,
+      longitude: 13.40002,
+      isFuzzed: true,
+      places: [{ name: 'Home', latitude: 52.52, longitude: 13.4, radiusMeters: 150 }],
+    });
+    expect(fuzzedDetails.matchedPlaceName).toBeNull();
+
+    // Inverse-variance (1 / accuracy^2) weighting keeps a stationary stop pinned to crisp 8m GPS fixes
+    // (<1.2m drift) even when two 75m indoor Wi-Fi drift fixes pull 60m away inside the cluster radius.
+    const [weightedTrail] = averageNearbyTrailPings([
+      {
+        userId: 'u-weight',
+        username: 'Weighted',
+        latitude: 52.516,
+        longitude: 13.36,
+        accuracy: 8,
+        recordedAt: '2026-11-22T12:00:00.000Z',
+      },
+      {
+        userId: 'u-weight',
+        username: 'Weighted',
+        latitude: 52.516,
+        longitude: 13.36,
+        accuracy: 8,
+        recordedAt: '2026-11-22T12:05:00.000Z',
+      },
+      {
+        // 60m north indoor Wi-Fi drift with 75m accuracy (still within 85m cluster radius)
+        userId: 'u-weight',
+        username: 'Weighted',
+        latitude: 52.51654,
+        longitude: 13.36,
+        accuracy: 75,
+        recordedAt: '2026-11-22T12:10:00.000Z',
+      },
+    ]);
+    expect(weightedTrail.stops).toHaveLength(1);
+    const driftFromTrueMeters = haversineMeters(
+      52.516,
+      13.36,
+      weightedTrail.stops[0]!.latitude,
+      weightedTrail.stops[0]!.longitude,
+    );
+    // Unweighted mean would drift 20.0m north; inverse-variance drifts <0.4m!
+    expect(driftFromTrueMeters).toBeLessThan(1.0);
+  });
 });

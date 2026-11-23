@@ -63,6 +63,7 @@ import {
 } from '@loved-ones/shared';
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
 import { BrandMark } from '@/components/BrandMark';
+import { createGeoWarmupGate } from '@/lib/geoWarmup';
 import { MapCanvas, type MapLabelLanguage } from '@/components/MapCanvas';
 import { QrJoinModal } from '@/components/QrJoinModal';
 import {
@@ -1258,9 +1259,20 @@ export default function HomePage() {
     let cancelled = false;
     geoAutoZoomedRef.current = false;
     setGeoStatus('Locating browser GPS...');
+    const warmupGate = createGeoWarmupGate<{
+      latitude: number;
+      longitude: number;
+      altitude: number | null;
+      accuracy: number | null;
+      speed: number | null;
+      heading: number | null;
+      batteryLevel: number | null;
+      recordedAt: string;
+    }>();
 
     const handleGeoPosition = (pos: GeolocationPosition) => {
       if (cancelled) return;
+      const rawHeading = pos.coords.heading;
       const point = {
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
@@ -1269,7 +1281,15 @@ export default function HomePage() {
           typeof pos.coords.accuracy === 'number' && pos.coords.accuracy >= 0
             ? pos.coords.accuracy
             : null,
-        speed: pos.coords.speed && pos.coords.speed >= 0 ? pos.coords.speed : null,
+        speed:
+          pos.coords.speed !== null && pos.coords.speed >= 0 ? pos.coords.speed : null,
+        heading:
+          typeof rawHeading === 'number' &&
+          Number.isFinite(rawHeading) &&
+          rawHeading >= 0 &&
+          rawHeading <= 360
+            ? rawHeading
+            : null,
         batteryLevel: null,
         recordedAt: new Date(pos.timestamp || Date.now()).toISOString(),
       };
@@ -1297,27 +1317,41 @@ export default function HomePage() {
       const accText =
         point.accuracy !== null ? ` (±${Math.round(point.accuracy)}m)` : '';
 
+      const decision = warmupGate.evaluate(point);
+      if (!decision.shouldUpload || !decision.pointToUpload) {
+        setGeoStatus(
+          `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}${accText} · Refining startup accuracy...`,
+        );
+        return;
+      }
+      const uploadPoint = decision.pointToUpload;
+
       if (socketRef.current?.connected) {
         socketRef.current.emit(
           'location:batch',
-          { points: [point] },
+          { points: [uploadPoint] },
           (ack?: { ok: boolean; inserted?: number; error?: string }) => {
             if (cancelled) return;
             if (ack && !ack.ok) {
               setGeoStatus(ack.error ?? 'Failed to upload GPS fix');
-            } else if (ack && ack.inserted === 0 && point.accuracy !== null && point.accuracy > 1000) {
+            } else if (
+              ack &&
+              ack.inserted === 0 &&
+              uploadPoint.accuracy !== null &&
+              uploadPoint.accuracy > 1000
+            ) {
               setGeoStatus(
-                `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}${accText} · Local only (>1km coarse fix)`,
+                `${uploadPoint.latitude.toFixed(4)}, ${uploadPoint.longitude.toFixed(4)}${accText} · Local only (>1km coarse fix)`,
               );
             }
           },
         );
       } else {
-        void apiSendLocationBatch(session.accessToken, [point]).catch(() => { });
+        void apiSendLocationBatch(session.accessToken, [uploadPoint]).catch(() => { });
       }
 
       setGeoStatus(
-        `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}${accText} · ${new Date().toLocaleTimeString()}`,
+        `${uploadPoint.latitude.toFixed(4)}, ${uploadPoint.longitude.toFixed(4)}${accText} · ${new Date().toLocaleTimeString()}`,
       );
     };
 
@@ -1328,13 +1362,13 @@ export default function HomePage() {
 
     navigator.geolocation.getCurrentPosition(handleGeoPosition, () => { }, {
       enableHighAccuracy: true,
-      maximumAge: 10000,
-      timeout: 10000,
+      maximumAge: 0,
+      timeout: 15000,
     });
 
     const id = navigator.geolocation.watchPosition(handleGeoPosition, handleGeoError, {
       enableHighAccuracy: true,
-      maximumAge: 5000,
+      maximumAge: 0,
       timeout: 15000,
     });
     watchIdRef.current = id;

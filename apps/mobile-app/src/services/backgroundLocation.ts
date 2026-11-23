@@ -12,7 +12,10 @@ import {
   type AdaptiveLocationMode,
   BACKGROUND_WATCHDOG_TASK,
   evaluateAdaptiveTrackingTransition,
+  isAdaptiveWarmupActive,
   runWatchdogCheck,
+  shouldTriggerTurnSample,
+  type TurnSampleCandidate,
   WATCHDOG_MINIMUM_INTERVAL_MINUTES,
   type WatchdogAdapter,
 } from './adaptiveTracking';
@@ -53,10 +56,13 @@ interface LocationTaskPayload {
   locations?: Location.LocationObject[];
 }
 
-function buildLocationTaskOptions(mode: AdaptiveLocationMode): Location.LocationTaskOptions {
-  const isIdle = mode === 'idle';
+export function buildLocationTaskOptions(
+  mode: AdaptiveLocationMode,
+  isWarmup = false,
+): Location.LocationTaskOptions {
+  const isIdle = mode === 'idle' && !isWarmup;
   return {
-    accuracy: Location.Accuracy.Balanced,
+    accuracy: isIdle ? Location.Accuracy.Balanced : Location.Accuracy.High,
     timeInterval: isIdle ? IDLE_CHECKIN_INTERVAL_MS : MOVING_CHECKIN_INTERVAL_MS,
     distanceInterval: 0,
     deferredUpdatesInterval: isIdle ? IDLE_CHECKIN_INTERVAL_MS : 30_000,
@@ -72,6 +78,7 @@ function buildLocationTaskOptions(mode: AdaptiveLocationMode): Location.Location
 }
 
 let foregroundSubscription: Location.LocationSubscription | null = null;
+let lastForegroundSample: TurnSampleCandidate | null = null;
 
 async function readBatteryPercent(): Promise<number | null> {
   try {
@@ -107,14 +114,18 @@ export async function sendPresenceHeartbeat(
 
 async function startContinuousLocationUpdatesIfNeeded(
   mode?: AdaptiveLocationMode,
+  forceWarmup = false,
 ): Promise<void> {
   const started = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
   if (!started) {
     const savedState = mode ? null : await getAdaptiveTrackingState().catch(() => null);
-    const targetMode: AdaptiveLocationMode = mode ?? savedState?.mode ?? 'moving';
+    const warmupActive = forceWarmup || isAdaptiveWarmupActive(savedState);
+    const targetMode: AdaptiveLocationMode = warmupActive
+      ? 'moving'
+      : (mode ?? savedState?.mode ?? 'moving');
     await Location.startLocationUpdatesAsync(
       BACKGROUND_LOCATION_TASK,
-      buildLocationTaskOptions(targetMode),
+      buildLocationTaskOptions(targetMode, warmupActive),
     );
   }
 }
@@ -134,7 +145,7 @@ export async function syncAdaptiveTrackingForPosition(
     if (started) {
       await Location.startLocationUpdatesAsync(
         BACKGROUND_LOCATION_TASK,
-        buildLocationTaskOptions(evaluation.nextMode),
+        buildLocationTaskOptions(evaluation.nextMode, evaluation.isWarmup),
       ).catch(() => {});
     }
   }
@@ -149,7 +160,7 @@ const defaultGeofenceAdapter: GeofenceRecoveryAdapter = {
   hasStartedLocationUpdatesAsync: (taskName) => Location.hasStartedLocationUpdatesAsync(taskName),
   startContinuousLocationUpdatesAsync: startContinuousLocationUpdatesIfNeeded,
   getCurrentPositionAsync: () =>
-    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
   getLastKnownPositionAsync: () => Location.getLastKnownPositionAsync(),
   getBackgroundPermissionLevel: async () => (await getLocationPermissionStatus(Location)).level,
   isTrackingEnabled: () => getBackgroundTrackingEnabled(),
@@ -168,13 +179,17 @@ const defaultGeofenceAdapter: GeofenceRecoveryAdapter = {
           altitude: pos.coords.altitude ?? null,
           accuracy: pos.coords.accuracy ?? null,
           altitudeAccuracy: null,
-          heading: null,
+          heading: pos.coords.heading ?? null,
           speed: pos.coords.speed ?? null,
         },
         timestamp: pos.timestamp,
       },
     ]),
 };
+
+function parseValidHeading(raw: number | null | undefined): number | null {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 360 ? raw : null;
+}
 
 async function ingestLocationsAndOpportunisticFlush(
   locations: Location.LocationObject[],
@@ -191,7 +206,8 @@ async function ingestLocationsAndOpportunisticFlush(
       typeof loc.coords.accuracy === 'number' && loc.coords.accuracy >= 0
         ? loc.coords.accuracy
         : null,
-    speed: loc.coords.speed && loc.coords.speed >= 0 ? loc.coords.speed : null,
+    speed: loc.coords.speed !== null && loc.coords.speed >= 0 ? loc.coords.speed : null,
+    heading: parseValidHeading(loc.coords.heading),
     batteryLevel,
     recordedAt: new Date(loc.timestamp || Date.now()).toISOString(),
   }));
@@ -299,7 +315,8 @@ export async function startBackgroundTracking(): Promise<{
     }
 
     await setBackgroundTrackingEnabled(true);
-    await startContinuousLocationUpdatesIfNeeded();
+    await saveAdaptiveTrackingState(null).catch(() => {});
+    await startContinuousLocationUpdatesIfNeeded('moving', true);
     await BackgroundTask.registerTaskAsync(BACKGROUND_WATCHDOG_TASK, {
       minimumInterval: WATCHDOG_MINIMUM_INTERVAL_MINUTES,
     }).catch(() => {});
@@ -331,14 +348,30 @@ export async function startBackgroundTracking(): Promise<{
   await BackgroundTask.unregisterTaskAsync(BACKGROUND_WATCHDOG_TASK).catch(() => {});
 
   if (!foregroundSubscription) {
+    lastForegroundSample = null;
     foregroundSubscription = await Location.watchPositionAsync(
       {
-        accuracy: Location.Accuracy.Balanced,
-        timeInterval: MOVING_CHECKIN_INTERVAL_MS,
+        accuracy: Location.Accuracy.High,
+        timeInterval: 3_000,
         distanceInterval: 0,
       },
       (loc) => {
-        void ingestLocationsAndOpportunisticFlush([loc]);
+        const nowMs = loc.timestamp || Date.now();
+        const cand: TurnSampleCandidate = {
+          heading: parseValidHeading(loc.coords.heading),
+          speed: loc.coords.speed !== null && loc.coords.speed >= 0 ? loc.coords.speed : null,
+          recordedAtMs: nowMs,
+        };
+        const elapsedSinceLast =
+          lastForegroundSample !== null ? nowMs - lastForegroundSample.recordedAtMs : Infinity;
+        if (
+          lastForegroundSample === null ||
+          elapsedSinceLast >= MOVING_CHECKIN_INTERVAL_MS ||
+          shouldTriggerTurnSample(lastForegroundSample, cand)
+        ) {
+          lastForegroundSample = cand;
+          void ingestLocationsAndOpportunisticFlush([loc]);
+        }
       },
     );
   }

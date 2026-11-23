@@ -11,6 +11,8 @@ import {
   BACKGROUND_WATCHDOG_TASK,
   evaluateAdaptiveTrackingTransition,
   runWatchdogCheck,
+  shortestHeadingDeltaDegrees,
+  shouldTriggerTurnSample,
   type WatchdogAdapter,
 } from '../services/adaptiveTracking';
 import {
@@ -967,5 +969,42 @@ describe('@loved-ones/mobile-app', () => {
     });
     expect(status.kind).toBe('idle_at_place');
     expect(status.detailText).toContain('Idle at Dowi Home');
+
+    // 5. Cold-start warmup keeps initial pings in High-accuracy moving mode until warmup completes
+    const w0 = 1_700_100_000_000;
+    const warm1 = evaluateAdaptiveTrackingTransition(null, 52.52, 13.405, w0);
+    expect(warm1.isWarmup).toBe(true);
+    expect(warm1.nextMode).toBe('moving');
+
+    const warm2 = evaluateAdaptiveTrackingTransition(warm1.nextState, 52.52, 13.405, w0 + 10_000);
+    expect(warm2.isWarmup).toBe(true);
+    expect(warm2.nextMode).toBe('moving');
+
+    const warm3 = evaluateAdaptiveTrackingTransition(warm2.nextState, 52.52, 13.405, w0 + 20_000);
+    expect(warm3.isWarmup).toBe(false);
+    expect(warm3.nextMode).toBe('moving');
+
+    // 6. Turn-triggered sampling fires immediately on >=35° street corners while moving (>=1.2 m/s)
+    expect(shortestHeadingDeltaDegrees(350, 15)).toBe(25);
+    expect(shortestHeadingDeltaDegrees(350, 35)).toBe(45);
+    expect(
+      shouldTriggerTurnSample(
+        { heading: 90, speed: 1.5, recordedAtMs: w0 },
+        { heading: 178, speed: 1.6, recordedAtMs: w0 + 4_000 },
+      ),
+    ).toBe(true);
+    // Straight-line motion (<35° delta) or stationary spin (<1.2 m/s) does not trigger early sample
+    expect(
+      shouldTriggerTurnSample(
+        { heading: 90, speed: 1.5, recordedAtMs: w0 },
+        { heading: 102, speed: 1.6, recordedAtMs: w0 + 4_000 },
+      ),
+    ).toBe(false);
+    expect(
+      shouldTriggerTurnSample(
+        { heading: 90, speed: 0.2, recordedAtMs: w0 },
+        { heading: 210, speed: 0.3, recordedAtMs: w0 + 4_000 },
+      ),
+    ).toBe(false);
   });
 });

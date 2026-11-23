@@ -40,6 +40,7 @@ import {
   isSafeAvatarUrl,
   isSafeHexColor,
   parseInviteInput,
+  resolveTrailPointDetails,
   withMinDelay,
   type AppVersionInfo,
   type ChatMessage,
@@ -54,6 +55,7 @@ import {
   type PlaceTransitionEvent,
   type PrivacyMode,
   type TrailDisplayMode,
+  type TrailPointDetails,
 } from '@loved-ones/shared';
 import { ColorPickerSheet } from '../components/ColorPickerSheet';
 import {
@@ -213,6 +215,9 @@ export function MobileMapScreen({
   const [trailDisplayMode, setTrailDisplayMode] = useState<TrailDisplayMode>('roads');
   const [trailBusy, setTrailBusy] = useState(false);
   const [trailMessage, setTrailMessage] = useState<string | null>(null);
+  const [selectedTrailPoint, setSelectedTrailPoint] = useState<
+    (TrailPointDetails & { latitude: number; longitude: number }) | null
+  >(null);
 
   // Places (Private + Group-Shared)
   const [places, setPlaces] = useState<GroupPlace[]>([]);
@@ -967,7 +972,7 @@ export function MobileMapScreen({
 
   async function captureFocusAndSyncPosition(): Promise<{ flushed: number; remaining: number } | null> {
     const pos = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
+      accuracy: Location.Accuracy.High,
     }).catch(() => Location.getLastKnownPositionAsync().catch(() => null));
     if (!pos) return null;
 
@@ -975,6 +980,7 @@ export function MobileMapScreen({
     setSelfCoord(coord);
     cameraRef.current?.flyTo({ center: coord, zoom: 15, duration: 700 });
 
+    const rawHeading = pos.coords.heading;
     await enqueueLocationPoints([
       {
         latitude: pos.coords.latitude,
@@ -984,7 +990,14 @@ export function MobileMapScreen({
           typeof pos.coords.accuracy === 'number' && pos.coords.accuracy >= 0
             ? pos.coords.accuracy
             : null,
-        speed: pos.coords.speed && pos.coords.speed >= 0 ? pos.coords.speed : null,
+        speed: pos.coords.speed !== null && pos.coords.speed >= 0 ? pos.coords.speed : null,
+        heading:
+          typeof rawHeading === 'number' &&
+          Number.isFinite(rawHeading) &&
+          rawHeading >= 0 &&
+          rawHeading <= 360
+            ? rawHeading
+            : null,
         batteryLevel: null,
         recordedAt: new Date(pos.timestamp || Date.now()).toISOString(),
       },
@@ -1135,11 +1148,13 @@ export function MobileMapScreen({
       setMemberTrailPoints([]);
       setMemberMatchedTrails([]);
       setTrailMessage(null);
+      setSelectedTrailPoint(null);
       return;
     }
 
     setTrailBusy(true);
     setTrailMessage(null);
+    setSelectedTrailPoint(null);
     setActiveTrailUserId(member.userId);
     try {
       const to = new Date().toISOString();
@@ -1196,6 +1211,7 @@ export function MobileMapScreen({
       setMemberTrailPoints([]);
       setMemberMatchedTrails([]);
       setTrailMessage(null);
+      setSelectedTrailPoint(null);
     }
     cameraRef.current?.flyTo({
       center: [loc.longitude, loc.latitude],
@@ -1299,7 +1315,7 @@ export function MobileMapScreen({
         return;
       }
       const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
+        accuracy: Location.Accuracy.High,
       });
       setSelfCoord([pos.coords.longitude, pos.coords.latitude]);
       setPlaceDraftCoord({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
@@ -1965,12 +1981,13 @@ export function MobileMapScreen({
       matchedTrails: memberMatchedTrails,
       mode: trailDisplayMode,
       filterUserId: activeTrailUserId,
+      places,
     });
     return {
       type: 'FeatureCollection' as const,
       features,
     };
-  }, [activeTrailUserId, memberTrailPoints, memberMatchedTrails, trailDisplayMode]);
+  }, [activeTrailUserId, memberTrailPoints, memberMatchedTrails, trailDisplayMode, places]);
 
   const showCompassBtn = Math.abs(mapBearing) > 2;
 
@@ -2014,7 +2031,10 @@ export function MobileMapScreen({
           setMapBearing(norm);
         }}
         onPress={(ev) => {
-          if (!pickingPlaceCoords) return;
+          if (!pickingPlaceCoords) {
+            if (selectedTrailPoint) setSelectedTrailPoint(null);
+            return;
+          }
           const [lng, lat] = ev.nativeEvent.lngLat;
           setPlaceDraftCoord({ latitude: lat, longitude: lng });
           setPickingPlaceCoords(false);
@@ -2070,7 +2090,64 @@ export function MobileMapScreen({
             }}
           />
         </GeoJSONSource>
-        <GeoJSONSource id="member-trail-src" data={memberTrailGeoJson}>
+        <GeoJSONSource
+          id="member-trail-src"
+          data={memberTrailGeoJson}
+          onPress={(ev) => {
+            const pointFeat = ev.nativeEvent.features?.find(
+              (f) => f?.geometry?.type === 'Point',
+            );
+            if (!pointFeat || pointFeat.geometry.type !== 'Point') return;
+            ev.stopPropagation();
+            const [lon, lat] = pointFeat.geometry.coordinates as [number, number];
+            const props = (pointFeat.properties ?? {}) as Record<string, unknown>;
+            const details = resolveTrailPointDetails({
+              latitude: lat,
+              longitude: lon,
+              username: typeof props.username === 'string' ? props.username : undefined,
+              firstRecordedAt:
+                typeof props.firstRecordedAt === 'string' ? props.firstRecordedAt : undefined,
+              lastRecordedAt:
+                typeof props.lastRecordedAt === 'string' ? props.lastRecordedAt : undefined,
+              pingCount:
+                typeof props.pingCount === 'number'
+                  ? props.pingCount
+                  : Number(props.pingCount ?? 1) || 1,
+              stayDurationMs:
+                typeof props.stayDurationMs === 'number'
+                  ? props.stayDurationMs
+                  : Number.isFinite(Number(props.stayDurationMs))
+                    ? Number(props.stayDurationMs)
+                    : undefined,
+              durationLabel:
+                typeof props.durationLabel === 'string' ? props.durationLabel : undefined,
+              isDwell:
+                typeof props.isDwell === 'boolean'
+                  ? props.isDwell
+                  : props.isDwell === 'true'
+                    ? true
+                    : props.isDwell === 'false'
+                      ? false
+                      : undefined,
+              isFuzzed:
+                typeof props.isFuzzed === 'boolean'
+                  ? props.isFuzzed
+                  : props.isFuzzed === 'true',
+              matchedPlaceName:
+                typeof props.matchedPlaceName === 'string'
+                  ? props.matchedPlaceName
+                  : props.matchedPlaceName === null
+                    ? null
+                    : undefined,
+              matchedPlaceIsPrivate:
+                typeof props.matchedPlaceIsPrivate === 'boolean'
+                  ? props.matchedPlaceIsPrivate
+                  : props.matchedPlaceIsPrivate === 'true',
+              places,
+            });
+            setSelectedTrailPoint({ ...details, latitude: lat, longitude: lon });
+          }}
+        >
           <Layer
             id="member-trail-line"
             type="line"
@@ -2120,10 +2197,16 @@ export function MobileMapScreen({
             type="circle"
             filter={['==', ['geometry-type'], 'Point']}
             paint={{
-              'circle-radius': 4.5,
+              'circle-radius': [
+                'case',
+                ['boolean', ['get', 'isDwell'], true],
+                ['case', ['>', ['coalesce', ['get', 'pingCount'], 1], 1], 5.5, 4.5],
+                3,
+              ],
               'circle-color': resolvedMapTheme === 'dark' ? '#09090b' : '#ffffff',
               'circle-stroke-color': resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
-              'circle-stroke-width': 2,
+              'circle-stroke-width': ['case', ['boolean', ['get', 'isDwell'], true], 2, 1.25],
+              'circle-opacity': ['case', ['boolean', ['get', 'isDwell'], true], 1, 0.72],
             }}
           />
         </GeoJSONSource>
@@ -2371,6 +2454,48 @@ export function MobileMapScreen({
                     {activeMapJob.message ?? activeMapJob.cityName}
                   </Text>
                 </View>
+              </View>
+            );
+          }
+
+          if (selectedTrailPoint) {
+            const fmtClock = (iso: string | null) => {
+              if (!iso) return 'Unknown time';
+              const d = new Date(iso);
+              return Number.isNaN(d.getTime())
+                ? iso
+                : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            };
+            const timeLabel =
+              selectedTrailPoint.firstRecordedAt &&
+              selectedTrailPoint.lastRecordedAt &&
+              selectedTrailPoint.stayDurationMs >= 60_000
+                ? `${fmtClock(selectedTrailPoint.firstRecordedAt)} – ${fmtClock(selectedTrailPoint.lastRecordedAt)}`
+                : `Recorded ${fmtClock(selectedTrailPoint.firstRecordedAt)}`;
+            const stayText =
+              selectedTrailPoint.stayDurationMs > 0
+                ? `Stayed ${selectedTrailPoint.durationLabel}`
+                : selectedTrailPoint.durationLabel;
+
+            return (
+              <View style={styles.trailPointCard}>
+                <View style={styles.chatToastTextWrap}>
+                  <Text style={styles.trailPointTitle} numberOfLines={1}>
+                    {selectedTrailPoint.matchedPlaceName
+                      ? `At ${selectedTrailPoint.matchedPlaceName}${selectedTrailPoint.matchedPlaceIsPrivate ? ' (Private)' : ''}`
+                      : `${selectedTrailPoint.username} · ${selectedTrailPoint.isDwell ? 'Stop' : 'Waypoint'}`}
+                  </Text>
+                  <Text style={styles.trailPointMeta} numberOfLines={1}>
+                    {timeLabel} · {stayText}
+                    {selectedTrailPoint.pingCount > 1 ? ` · ${selectedTrailPoint.pingCount} pings` : ''}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  hitSlop={10}
+                  onPress={() => setSelectedTrailPoint(null)}
+                >
+                  <Text style={styles.trailPointClose}>Dismiss</Text>
+                </TouchableOpacity>
               </View>
             );
           }
@@ -2666,7 +2791,10 @@ export function MobileMapScreen({
                               styles.trailModePill,
                               trailDisplayMode === mode && styles.trailModePillActive,
                             ]}
-                            onPress={() => setTrailDisplayMode(mode)}
+                            onPress={() => {
+                              setTrailDisplayMode(mode);
+                              setSelectedTrailPoint(null);
+                            }}
                           >
                             <Text
                               style={[
@@ -4711,6 +4839,38 @@ export function createMobileStyles(
     },
     trailModePillTextActive: {
       color: ui.ctaText,
+    },
+    trailPointCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+      backgroundColor: ui.surface,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderWidth: 1,
+      borderColor: ui.border,
+      shadowColor: '#000000',
+      shadowOpacity: 0.16,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 5,
+    },
+    trailPointTitle: {
+      color: ui.ink,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    trailPointMeta: {
+      color: ui.inkMuted,
+      fontSize: 11,
+      marginTop: 2,
+    },
+    trailPointClose: {
+      color: ui.ink,
+      fontSize: 11,
+      fontWeight: '700',
     },
     detailFocusBtn: {
       borderRadius: 10,
