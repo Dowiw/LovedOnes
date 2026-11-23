@@ -572,6 +572,64 @@ interface RoadGraph {
   cellLonDeg: number;
 }
 
+function flatDistMeters(
+  latA: number,
+  lonA: number,
+  latB: number,
+  lonB: number,
+  cosLat: number,
+): number {
+  const dy = (latB - latA) * METERS_PER_DEGREE_LAT;
+  const dx = (lonB - lonA) * METERS_PER_DEGREE_LAT * cosLat;
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * Keeps only road features whose geometry passes within `corridorMeters` of any
+ * visit-to-visit trip chord so multi-tile corridor queries do not insert tens of
+ * thousands of unrelated faraway side streets into `buildRoadGraph`.
+ */
+function filterFeaturesToCorridor(
+  features: readonly RoadEdgeFeature[],
+  visits: readonly TrailStopVisit[],
+  corridorMeters = 450,
+): RoadEdgeFeature[] {
+  if (features.length <= 400 || visits.length === 0) return [...features];
+  const refLat = visits.reduce((s, v) => s + v.latitude, 0) / visits.length;
+  const cosLat = Math.max(0.15, Math.cos((Math.min(85, Math.abs(refLat)) * Math.PI) / 180));
+  const padDegLat = corridorMeters / METERS_PER_DEGREE_LAT;
+  const padDegLon = padDegLat / cosLat;
+
+  // Build compact segment bounding boxes along the trip
+  const legs: Array<{
+    minLat: number;
+    maxLat: number;
+    minLon: number;
+    maxLon: number;
+  }> = [];
+  for (let i = 0; i < visits.length; i += 1) {
+    const a = visits[i];
+    const b = i + 1 < visits.length ? visits[i + 1] : a;
+    legs.push({
+      minLat: Math.min(a.latitude, b.latitude) - padDegLat,
+      maxLat: Math.max(a.latitude, b.latitude) + padDegLat,
+      minLon: Math.min(a.longitude, b.longitude) - padDegLon,
+      maxLon: Math.max(a.longitude, b.longitude) + padDegLon,
+    });
+  }
+
+  return features.filter((feat) => {
+    for (const [lon, lat] of feat.coords) {
+      for (const leg of legs) {
+        if (lat >= leg.minLat && lat <= leg.maxLat && lon >= leg.minLon && lon <= leg.maxLon) {
+          return true;
+        }
+      }
+    }
+    return false;
+  });
+}
+
 function buildRoadGraph(features: readonly RoadEdgeFeature[], refLat: number): RoadGraph {
   const cosLat = Math.max(0.15, Math.cos((Math.min(85, Math.abs(refLat)) * Math.PI) / 180));
   const nodeCellLat = NODE_MERGE_DISTANCE_METERS / METERS_PER_DEGREE_LAT;
@@ -588,7 +646,7 @@ function buildRoadGraph(features: readonly RoadEdgeFeature[], refLat: number): R
         if (!bucket) continue;
         for (const nid of bucket) {
           const existing = nodes[nid];
-          if (haversineMeters(lat, lon, existing.lat, existing.lon) <= NODE_MERGE_DISTANCE_METERS) {
+          if (flatDistMeters(lat, lon, existing.lat, existing.lon, cosLat) <= NODE_MERGE_DISTANCE_METERS) {
             return nid;
           }
         }
@@ -647,7 +705,7 @@ function buildRoadGraph(features: readonly RoadEdgeFeature[], refLat: number): R
 
       const nodeA = nodes[aNode];
       const nodeB = nodes[bNode];
-      const lengthMeters = haversineMeters(nodeA.lat, nodeA.lon, nodeB.lat, nodeB.lon);
+      const lengthMeters = flatDistMeters(nodeA.lat, nodeA.lon, nodeB.lat, nodeB.lon, cosLat);
       if (lengthMeters < 0.2) continue;
 
       while (adj.length < nodes.length) adj.push([]);
@@ -664,12 +722,14 @@ function buildRoadGraph(features: readonly RoadEdgeFeature[], refLat: number): R
   }
 
   // Link adjacent parallel rail tracks (3-10m apart at stations, sidings, and tile boundaries)
-  // and link road/path T-junctions where a side-street vertex terminates on the interior of a
-  // simplified arterial segment (<= 4m perpendicular offset without a shared MVT vertex).
+  // and link dead-end (degree <= 1) road/path T-junctions terminating on simplified arterial
+  // segment interiors (<= 4m perpendicular offset without a shared MVT vertex).
   const initialSegmentCount = segments.length;
   for (let nodeId = 0; nodeId < nodes.length; nodeId += 1) {
-    const node = nodes[nodeId];
     const isRailNode = railNodeSet.has(nodeId);
+    const nodeDegree = adj[nodeId]?.length ?? 0;
+    if (!isRailNode && nodeDegree > 1) continue;
+    const node = nodes[nodeId];
     const cx = Math.floor(node.lat / segCellLat);
     const cy = Math.floor(node.lon / segCellLon);
 
@@ -1060,8 +1120,9 @@ function routeBetweenCandidates(
   const heap: AStarHeapNode[] = [];
   const maxAllowedCost = maxDetourMeters * 2.5;
 
+  const hGoalCosLat = Math.max(0.15, Math.cos((goal.lat * Math.PI) / 180));
   const hToGoal = (lat: number, lon: number) =>
-    haversineMeters(lat, lon, goal.lat, goal.lon) * 0.95;
+    flatDistMeters(lat, lon, goal.lat, goal.lon, hGoalCosLat) * 0.95;
 
   const seedStartEndpoint = (nodeId: number, distFromSnap: number) => {
     const node = graph.nodes[nodeId];
@@ -1412,7 +1473,8 @@ export class RoadTrailMatcher {
     }
 
     const midLat = (paddedBbox.minLat + paddedBbox.maxLat) / 2;
-    const graph = buildRoadGraph(roadFeatures, midLat);
+    const corridorFeatures = filterFeaturesToCorridor(roadFeatures, visits, 450);
+    const graph = buildRoadGraph(corridorFeatures, midLat);
     const rawCandidatesByStop = visits.map((v) => findSnapCandidates(graph, v.latitude, v.longitude));
     const pruned = filterOffAngleTriangleVisits(visits, rawCandidatesByStop);
     const activeVisits = pruned.visits;
@@ -1474,6 +1536,9 @@ export class RoadTrailMatcher {
 
       let brokenAt: number | null = null;
       for (let idx = chainStart + 1; idx <= chainEnd; idx += 1) {
+        if ((idx - chainStart) % 3 === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
         const currVisit = activeVisits[idx];
         const currCands = candidatesByStop[idx];
         const prevRow = dpCost[dpCost.length - 1];
@@ -1490,11 +1555,16 @@ export class RoadTrailMatcher {
         const maxDetour = Math.max(800, straightDist * 3.5 + 500);
         const prevCands = candidatesByStop[idx - 1];
 
-        // Allow skipping 1 non-dwell moving waypoint when it forces an unnatural side-street loop/U-turn
+        const prevAcc =
+          typeof prevVisit.accuracyMeters === 'number' && Number.isFinite(prevVisit.accuracyMeters)
+            ? prevVisit.accuracyMeters
+            : 35;
+        // Allow skipping 1 non-dwell moving waypoint when coarse accuracy or cross-track bend suggests a possible spike
         const canSkipPrev =
           idx >= chainStart + 2 &&
           !prevVisit.isDwell &&
-          !activeVisits[idx - 2].isDwell;
+          !activeVisits[idx - 2].isDwell &&
+          (prevAcc >= 45 || visitCrossTrackMeters(activeVisits[idx - 2], prevVisit, currVisit) >= 30);
         const skipPrevVisit = canSkipPrev ? activeVisits[idx - 2] : null;
         const skipStraightDist = skipPrevVisit
           ? haversineMeters(
@@ -1511,10 +1581,6 @@ export class RoadTrailMatcher {
         const skipCands = canSkipPrev ? candidatesByStop[idx - 2] : [];
         const skipRow = canSkipPrev ? dpCost[dpCost.length - 2] : [];
         const skipBearings = canSkipPrev ? dpBearing[dpBearing.length - 2] : [];
-        const prevAcc =
-          typeof prevVisit.accuracyMeters === 'number' && Number.isFinite(prevVisit.accuracyMeters)
-            ? prevVisit.accuracyMeters
-            : 35;
         const skipPenalty = 45 + Math.max(0, 65 - prevAcc) * 0.55;
 
         const nextRow: number[] = [];
@@ -1892,6 +1958,7 @@ export class RoadTrailMatcher {
       let userHasRoadMatches = false;
 
       for (const trip of trips) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
         const res = await this.matchSingleTrip(trip);
         for (const seg of res.segments) {
           userSegments.push(seg);
