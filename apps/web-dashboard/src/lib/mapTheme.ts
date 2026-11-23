@@ -72,7 +72,7 @@ const LIGHT_MAP_PAINT_OVERRIDES: MapLayerPaintOverride[] = [
   { layerId: 'water-lines', property: 'line-color', value: '#bfe0f0' },
   { layerId: 'buildings', property: 'fill-color', value: '#e6e4dd' },
   { layerId: 'buildings', property: 'fill-outline-color', value: '#d6d3cb' },
-  { layerId: 'roads-rail', property: 'line-color', value: '#cbd5e1' },
+  { layerId: 'roads-rail', property: 'line-color', value: '#94a3b8' },
   { layerId: 'roads-casing', property: 'line-color', value: '#d4d8dd' },
   {
     layerId: 'roads',
@@ -126,7 +126,7 @@ const DARK_MAP_PAINT_OVERRIDES: MapLayerPaintOverride[] = [
   { layerId: 'water-lines', property: 'line-color', value: '#0c1c2c' },
   { layerId: 'buildings', property: 'fill-color', value: '#1c2028' },
   { layerId: 'buildings', property: 'fill-outline-color', value: '#272c37' },
-  { layerId: 'roads-rail', property: 'line-color', value: '#334155' },
+  { layerId: 'roads-rail', property: 'line-color', value: '#64748b' },
   { layerId: 'roads-casing', property: 'line-color', value: '#1f242e' },
   {
     layerId: 'roads',

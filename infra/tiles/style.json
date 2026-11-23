@@ -109,19 +109,6 @@
       }
     },
     {
-      "id": "roads-rail",
-      "type": "line",
-      "source": "openmaptiles",
-      "source-layer": "roads",
-      "filter": ["==", ["get", "kind"], "rail"],
-      "minzoom": 11,
-      "paint": {
-        "line-color": "#cbd5e1",
-        "line-dasharray": [3, 3],
-        "line-width": 1.1
-      }
-    },
-    {
       "id": "roads-casing",
       "type": "line",
       "source": "openmaptiles",
@@ -186,6 +173,19 @@
         "line-color": "#dcdad3",
         "line-dasharray": [2, 2],
         "line-width": 1.0
+      }
+    },
+    {
+      "id": "roads-rail",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "roads",
+      "filter": ["==", ["get", "kind"], "rail"],
+      "minzoom": 11,
+      "paint": {
+        "line-color": "#94a3b8",
+        "line-dasharray": [3, 3],
+        "line-width": 1.3
       }
     },
     {

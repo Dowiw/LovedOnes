@@ -26,9 +26,12 @@ const MAX_SNAP_DISTANCE_METERS = 150;
 const MAX_CANDIDATES_PER_STOP = 6;
 const KIND_DIVERSITY_DISTANCE_METERS = 45;
 const PARALLEL_RAIL_CROSSOVER_METERS = 10;
-const MAX_TILES_PER_TRIP = 36;
+const T_JUNCTION_SNAP_METERS = 4.0;
+const MAX_TILES_PER_TRIP = 64;
+const CORRIDOR_SAMPLE_STEP_METERS = 250;
 const MAX_ASTAR_EXPANDED_NODES = 12_000;
-const TARGET_ROAD_ZOOM = 14;
+const TARGET_ROAD_ZOOM = 15;
+const MIN_RAIL_CAPABLE_ZOOM = 14;
 const NODE_MERGE_DISTANCE_METERS = 2.5;
 const SEGMENT_GRID_CELL_METERS = 80;
 const ARCHIVE_REFRESH_INTERVAL_MS = 15_000;
@@ -43,6 +46,10 @@ export interface RoadEdgeFeature {
 export interface RoadTileProvider {
   getRevisionKey(): Promise<string>;
   getRoadFeaturesForBbox(bbox: BoundingBox): Promise<RoadEdgeFeature[]>;
+  getRoadFeaturesForCorridor?(
+    points: readonly { latitude: number; longitude: number }[],
+    padMeters: number,
+  ): Promise<RoadEdgeFeature[]>;
 }
 
 class NodeFileSource implements Source {
@@ -377,6 +384,111 @@ export class PmtilesRoadTileProvider implements RoadTileProvider {
     this.tileCache.set(key, features);
   }
 
+  private async loadDecodedTile(
+    arch: ArchiveHandle,
+    z: number,
+    x: number,
+    y: number,
+  ): Promise<RoadEdgeFeature[]> {
+    const cacheKey = `${arch.filePath}:${arch.mtimeMs}:${z}/${x}/${y}`;
+    let decoded = this.getCachedTile(cacheKey);
+    if (!decoded) {
+      try {
+        const resp = await arch.pmtiles.getZxy(z, x, y);
+        decoded = resp?.data ? decodeRoadsFromMvtTile(resp.data, z, x, y) : [];
+      } catch {
+        decoded = [];
+      }
+      this.setCachedTile(cacheKey, decoded);
+    }
+    return decoded;
+  }
+
+  private collectCorridorTilesAtZoom(
+    points: readonly { latitude: number; longitude: number }[],
+    padMeters: number,
+    z: number,
+  ): Array<{ x: number; y: number }> {
+    const tileMap = new Map<string, { x: number; y: number }>();
+    const addPaddedPoint = (lat: number, lon: number) => {
+      const cosLat = Math.max(0.15, Math.cos((Math.min(85, Math.abs(lat)) * Math.PI) / 180));
+      const dLat = padMeters / METERS_PER_DEGREE_LAT;
+      const dLon = dLat / cosLat;
+      const minTile = lonLatToTileXY(Math.max(-180, lon - dLon), Math.min(85, lat + dLat), z);
+      const maxTile = lonLatToTileXY(Math.min(180, lon + dLon), Math.max(-85, lat - dLat), z);
+      for (let x = minTile.x; x <= maxTile.x; x += 1) {
+        for (let y = minTile.y; y <= maxTile.y; y += 1) {
+          const key = `${x}:${y}`;
+          if (!tileMap.has(key)) {
+            tileMap.set(key, { x, y });
+          }
+        }
+      }
+    };
+
+    for (let i = 0; i < points.length; i += 1) {
+      const a = points[i];
+      addPaddedPoint(a.latitude, a.longitude);
+      if (i + 1 < points.length) {
+        const b = points[i + 1];
+        const dist = haversineMeters(a.latitude, a.longitude, b.latitude, b.longitude);
+        if (dist > CORRIDOR_SAMPLE_STEP_METERS && dist <= 50_000) {
+          const steps = Math.min(200, Math.ceil(dist / CORRIDOR_SAMPLE_STEP_METERS));
+          for (let s = 1; s < steps; s += 1) {
+            const t = s / steps;
+            addPaddedPoint(
+              a.latitude + t * (b.latitude - a.latitude),
+              a.longitude + t * (b.longitude - a.longitude),
+            );
+          }
+        }
+      }
+    }
+
+    return Array.from(tileMap.values());
+  }
+
+  async getRoadFeaturesForCorridor(
+    points: readonly { latitude: number; longitude: number }[],
+    padMeters: number,
+  ): Promise<RoadEdgeFeature[]> {
+    if (points.length === 0) return [];
+    const bbox = padBoundingBoxMeters(points, padMeters);
+    const archives = await this.ensureArchives();
+    const matching = archives.filter((a) => bboxesOverlap(a.bbox, bbox));
+    if (matching.length === 0) return [];
+
+    const results: RoadEdgeFeature[] = [];
+    for (const arch of matching) {
+      let z = Math.min(arch.header.maxZoom, TARGET_ROAD_ZOOM);
+      z = Math.max(arch.header.minZoom, z);
+      const minRailZoom = Math.max(
+        arch.header.minZoom,
+        Math.min(arch.header.maxZoom, MIN_RAIL_CAPABLE_ZOOM),
+      );
+
+      let tiles = this.collectCorridorTilesAtZoom(points, padMeters, z);
+      while (tiles.length > MAX_TILES_PER_TRIP && z > minRailZoom) {
+        z -= 1;
+        tiles = this.collectCorridorTilesAtZoom(points, padMeters, z);
+      }
+      while (tiles.length > MAX_TILES_PER_TRIP * 3 && z > arch.header.minZoom) {
+        z -= 1;
+        tiles = this.collectCorridorTilesAtZoom(points, padMeters, z);
+      }
+      if (tiles.length > MAX_TILES_PER_TRIP * 3) continue;
+
+      for (const { x, y } of tiles) {
+        const decoded = await this.loadDecodedTile(arch, z, x, y);
+        for (const feat of decoded) {
+          results.push(feat);
+        }
+      }
+    }
+
+    return results;
+  }
+
   async getRoadFeaturesForBbox(bbox: BoundingBox): Promise<RoadEdgeFeature[]> {
     const archives = await this.ensureArchives();
     const matching = archives.filter((a) => bboxesOverlap(a.bbox, bbox));
@@ -386,31 +498,31 @@ export class PmtilesRoadTileProvider implements RoadTileProvider {
     for (const arch of matching) {
       let z = Math.min(arch.header.maxZoom, TARGET_ROAD_ZOOM);
       z = Math.max(arch.header.minZoom, z);
+      const minRailZoom = Math.max(
+        arch.header.minZoom,
+        Math.min(arch.header.maxZoom, MIN_RAIL_CAPABLE_ZOOM),
+      );
 
       let minTile = lonLatToTileXY(bbox.minLon, bbox.maxLat, z);
       let maxTile = lonLatToTileXY(bbox.maxLon, bbox.minLat, z);
       let count = (maxTile.x - minTile.x + 1) * (maxTile.y - minTile.y + 1);
-      while (count > MAX_TILES_PER_TRIP && z > arch.header.minZoom) {
+      while (count > MAX_TILES_PER_TRIP && z > minRailZoom) {
         z -= 1;
         minTile = lonLatToTileXY(bbox.minLon, bbox.maxLat, z);
         maxTile = lonLatToTileXY(bbox.maxLon, bbox.minLat, z);
         count = (maxTile.x - minTile.x + 1) * (maxTile.y - minTile.y + 1);
       }
-      if (count > MAX_TILES_PER_TRIP) continue;
+      while (count > MAX_TILES_PER_TRIP * 3 && z > arch.header.minZoom) {
+        z -= 1;
+        minTile = lonLatToTileXY(bbox.minLon, bbox.maxLat, z);
+        maxTile = lonLatToTileXY(bbox.maxLon, bbox.minLat, z);
+        count = (maxTile.x - minTile.x + 1) * (maxTile.y - minTile.y + 1);
+      }
+      if (count > MAX_TILES_PER_TRIP * 3) continue;
 
       for (let x = minTile.x; x <= maxTile.x; x += 1) {
         for (let y = minTile.y; y <= maxTile.y; y += 1) {
-          const cacheKey = `${arch.filePath}:${arch.mtimeMs}:${z}/${x}/${y}`;
-          let decoded = this.getCachedTile(cacheKey);
-          if (!decoded) {
-            try {
-              const resp = await arch.pmtiles.getZxy(z, x, y);
-              decoded = resp?.data ? decodeRoadsFromMvtTile(resp.data, z, x, y) : [];
-            } catch {
-              decoded = [];
-            }
-            this.setCachedTile(cacheKey, decoded);
-          }
+          const decoded = await this.loadDecodedTile(arch, z, x, y);
           for (const feat of decoded) {
             results.push(feat);
           }
@@ -552,42 +664,49 @@ function buildRoadGraph(features: readonly RoadEdgeFeature[], refLat: number): R
   }
 
   // Link adjacent parallel rail tracks (3-10m apart at stations, sidings, and tile boundaries)
-  // by projecting each rail node onto nearby parallel rail segments in segGrid.
-  if (railNodeSet.size > 1) {
-    for (const rNodeId of railNodeSet) {
-      const rNode = nodes[rNodeId];
-      const cx = Math.floor(rNode.lat / segCellLat);
-      const cy = Math.floor(rNode.lon / segCellLon);
+  // and link road/path T-junctions where a side-street vertex terminates on the interior of a
+  // simplified arterial segment (<= 4m perpendicular offset without a shared MVT vertex).
+  const initialSegmentCount = segments.length;
+  for (let nodeId = 0; nodeId < nodes.length; nodeId += 1) {
+    const node = nodes[nodeId];
+    const isRailNode = railNodeSet.has(nodeId);
+    const cx = Math.floor(node.lat / segCellLat);
+    const cy = Math.floor(node.lon / segCellLon);
 
-      for (let dx = -1; dx <= 1; dx += 1) {
-        for (let dy = -1; dy <= 1; dy += 1) {
-          const segIds = segGrid.get(`${cx + dx}:${cy + dy}`);
-          if (!segIds) continue;
-          for (const segId of segIds) {
-            const seg = segments[segId];
-            if (seg.kind !== 'rail' || seg.aNode === rNodeId || seg.bNode === rNodeId) continue;
-            const aNode = nodes[seg.aNode];
-            const bNode = nodes[seg.bNode];
-            const proj = projectPointOntoSegment(rNode.lat, rNode.lon, aNode, bNode);
-            if (proj.distMeters > PARALLEL_RAIL_CROSSOVER_METERS) continue;
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const segIds = segGrid.get(`${cx + dx}:${cy + dy}`);
+        if (!segIds) continue;
+        for (const segId of segIds) {
+          if (segId >= initialSegmentCount) continue;
+          const seg = segments[segId];
+          if (seg.aNode === nodeId || seg.bNode === nodeId) continue;
 
-            const crossoverPenalty = proj.distMeters * 1.4 + 4;
-            for (const [targetId, alongDist] of [
-              [seg.aNode, proj.t * seg.lengthMeters],
-              [seg.bNode, (1 - proj.t) * seg.lengthMeters],
-            ] as const) {
-              if (targetId === rNodeId) continue;
-              const lo = Math.min(rNodeId, targetId);
-              const hi = Math.max(rNodeId, targetId);
-              const dedupKey = `${lo}:${hi}:rail`;
-              if (edgeDedup.has(dedupKey)) continue;
-              edgeDedup.add(dedupKey);
-              const totalLen = alongDist + crossoverPenalty;
-              const newSegId = segments.length;
-              segments.push({ id: newSegId, aNode: rNodeId, bNode: targetId, lengthMeters: totalLen, kind: 'rail' });
-              adj[rNodeId].push({ to: targetId, segmentId: newSegId, lengthMeters: totalLen, kind: 'rail' });
-              adj[targetId].push({ to: rNodeId, segmentId: newSegId, lengthMeters: totalLen, kind: 'rail' });
-            }
+          const isRailSeg = seg.kind === 'rail';
+          if (isRailNode !== isRailSeg) continue;
+
+          const maxSnapDist = isRailSeg ? PARALLEL_RAIL_CROSSOVER_METERS : T_JUNCTION_SNAP_METERS;
+          const aNode = nodes[seg.aNode];
+          const bNode = nodes[seg.bNode];
+          const proj = projectPointOntoSegment(node.lat, node.lon, aNode, bNode);
+          if (proj.distMeters > maxSnapDist) continue;
+
+          const crossoverPenalty = isRailSeg ? proj.distMeters * 1.4 + 4 : proj.distMeters;
+          for (const [targetId, alongDist] of [
+            [seg.aNode, proj.t * seg.lengthMeters],
+            [seg.bNode, (1 - proj.t) * seg.lengthMeters],
+          ] as const) {
+            if (targetId === nodeId) continue;
+            const lo = Math.min(nodeId, targetId);
+            const hi = Math.max(nodeId, targetId);
+            const dedupKey = `${lo}:${hi}:${seg.kind}`;
+            if (edgeDedup.has(dedupKey)) continue;
+            edgeDedup.add(dedupKey);
+            const totalLen = Math.max(0.5, alongDist + crossoverPenalty);
+            const newSegId = segments.length;
+            segments.push({ id: newSegId, aNode: nodeId, bNode: targetId, lengthMeters: totalLen, kind: seg.kind });
+            adj[nodeId].push({ to: targetId, segmentId: newSegId, lengthMeters: totalLen, kind: seg.kind });
+            adj[targetId].push({ to: nodeId, segmentId: newSegId, lengthMeters: totalLen, kind: seg.kind });
           }
         }
       }
@@ -788,9 +907,16 @@ function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCan
  * use footpaths/side streets, driving uses roads, and transit speeds can follow rail/tram tracks.
  */
 function roadCostFactor(kind: string, speedMps: number | null): number {
+  if (speedMps !== null && speedMps <= 1.8) {
+    if (kind === 'path') return 1.0;
+    if (kind === 'rail') return 2.8;
+    if (kind === 'highway') return 2.2;
+    if (kind === 'major_road' || kind === 'medium_road') return 1.15;
+    return 1.05;
+  }
   if (speedMps !== null && speedMps <= 2.5) {
     if (kind === 'path') return 1.0;
-    if (kind === 'rail') return 4.5;
+    if (kind === 'rail') return 1.35;
     if (kind === 'highway') return 2.2;
     if (kind === 'major_road' || kind === 'medium_road') return 1.15;
     return 1.05;
@@ -798,13 +924,13 @@ function roadCostFactor(kind: string, speedMps: number | null): number {
   if (speedMps !== null && speedMps > 4.5) {
     if (kind === 'highway') return 0.95;
     if (kind === 'major_road' || kind === 'medium_road') return 1.0;
-    if (kind === 'rail') return 1.02;
+    if (kind === 'rail') return 1.0;
     if (kind === 'path') return 3.5;
     return 1.15;
   }
   if (kind === 'highway') return 1.2;
   if (kind === 'path') return 1.35;
-  if (kind === 'rail') return 1.8;
+  if (kind === 'rail') return 1.05;
   return 1.0;
 }
 
@@ -884,10 +1010,14 @@ function routeBetweenCandidates(
   speedMps: number | null,
   maxDetourMeters: number,
 ): RoutedLegResult | null {
+  const isRailToRail = start.kind === 'rail' && goal.kind === 'rail';
+  const effectiveEdgeCostFactor = (kind: string) =>
+    isRailToRail && kind === 'rail' ? 1.0 : roadCostFactor(kind, speedMps);
+
   if (start.segmentId === goal.segmentId) {
     const dist = haversineMeters(start.lat, start.lon, goal.lat, goal.lon);
     return {
-      cost: dist * roadCostFactor(start.kind, speedMps),
+      cost: dist * effectiveEdgeCostFactor(start.kind),
       distanceMeters: dist,
       coordinates: [
         [Number(start.lon.toFixed(6)), Number(start.lat.toFixed(6))],
@@ -915,7 +1045,7 @@ function routeBetweenCandidates(
 
   const seedStartEndpoint = (nodeId: number, distFromSnap: number) => {
     const node = graph.nodes[nodeId];
-    const edgeCost = distFromSnap * roadCostFactor(startSeg.kind, speedMps);
+    const edgeCost = distFromSnap * effectiveEdgeCostFactor(startSeg.kind);
     const prev = gScore.get(nodeId);
     if (prev === undefined || edgeCost < prev) {
       gScore.set(nodeId, edgeCost);
@@ -949,7 +1079,7 @@ function routeBetweenCandidates(
         cur.nodeId === goalSeg.aNode
           ? goal.t * goalSeg.lengthMeters
           : (1 - goal.t) * goalSeg.lengthMeters;
-      const nextCost = curCost + remDist * roadCostFactor(goalSeg.kind, speedMps);
+      const nextCost = curCost + remDist * effectiveEdgeCostFactor(goalSeg.kind);
       const nextDist = curDist + remDist;
       const prevGoalCost = gScore.get(VIRTUAL_GOAL);
       if (nextDist <= maxDetourMeters && (prevGoalCost === undefined || nextCost < prevGoalCost)) {
@@ -966,7 +1096,7 @@ function routeBetweenCandidates(
       if (closed.has(edge.to)) continue;
       const nextDist = curDist + edge.lengthMeters;
       if (nextDist > maxDetourMeters) continue;
-      const nextCost = curCost + edge.lengthMeters * roadCostFactor(edge.kind, speedMps);
+      const nextCost = curCost + edge.lengthMeters * effectiveEdgeCostFactor(edge.kind);
       if (nextCost > maxAllowedCost) continue;
       const prevCost = gScore.get(edge.to);
       if (prevCost === undefined || nextCost < prevCost) {
@@ -1237,7 +1367,9 @@ export class RoadTrailMatcher {
     }
 
     const paddedBbox = padBoundingBoxMeters(visits, 500);
-    const roadFeatures = await this.tileProvider.getRoadFeaturesForBbox(paddedBbox);
+    const roadFeatures = this.tileProvider.getRoadFeaturesForCorridor
+      ? await this.tileProvider.getRoadFeaturesForCorridor(visits, 500)
+      : await this.tileProvider.getRoadFeaturesForBbox(paddedBbox);
     if (roadFeatures.length === 0) {
       return {
         segments: [
@@ -1385,7 +1517,8 @@ export class RoadTrailMatcher {
             );
             let modeTransferPenalty = 0;
             if (!routed && (prevCand.kind === 'rail') !== (currCand.kind === 'rail')) {
-              // Station-to-street or street-to-station transfer at prevVisit: pick the lowest-cost co-located candidate
+              // Station-to-street or street-to-station transfer at prevVisit or currVisit:
+              // pick the lowest-cost co-located candidate across both endpoints.
               let bestAltScore = Infinity;
               for (let altIdx = 0; altIdx < prevCands.length; altIdx += 1) {
                 const altCand = prevCands[altIdx];
@@ -1404,6 +1537,30 @@ export class RoadTrailMatcher {
                       coordinates: mergeTrailCoordinates([
                         [[Number(prevCand.lon.toFixed(6)), Number(prevCand.lat.toFixed(6))]],
                         altRouted.coordinates,
+                      ]),
+                      dominantRoadKind: altRouted.dominantRoadKind,
+                    };
+                    modeTransferPenalty = 45 + transferDist * 0.8;
+                  }
+                }
+              }
+              for (let altIdx = 0; altIdx < currCands.length; altIdx += 1) {
+                const altCand = currCands[altIdx];
+                if ((altCand.kind === 'rail') !== (prevCand.kind === 'rail')) continue;
+                const transferDist = haversineMeters(currCand.lat, currCand.lon, altCand.lat, altCand.lon);
+                if (transferDist > 45) continue;
+                const altRouted = routeBetweenCandidates(graph, prevCand, altCand, speedMps, maxDetour);
+                if (altRouted) {
+                  const altDetour = Math.max(0, altRouted.distanceMeters + transferDist - straightDist);
+                  const altScore = altRouted.cost * 0.35 + altDetour * 0.35 + transferDist * 1.3;
+                  if (altScore < bestAltScore) {
+                    bestAltScore = altScore;
+                    routed = {
+                      cost: altRouted.cost + transferDist * 1.5,
+                      distanceMeters: altRouted.distanceMeters + transferDist,
+                      coordinates: mergeTrailCoordinates([
+                        altRouted.coordinates,
+                        [[Number(currCand.lon.toFixed(6)), Number(currCand.lat.toFixed(6))]],
                       ]),
                       dominantRoadKind: altRouted.dominantRoadKind,
                     };
