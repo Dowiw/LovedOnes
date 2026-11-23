@@ -10,6 +10,61 @@ export const WATCHDOG_MINIMUM_INTERVAL_MINUTES = 15;
 export const STATIONARY_DWELL_BEFORE_IDLE_MS = 60_000;
 export const DEFAULT_WARMUP_PING_COUNT = 3;
 export const DEFAULT_WARMUP_WINDOW_MS = 30_000;
+export const TURN_TRIGGER_HEADING_DELTA_DEG = 35;
+export const TURN_TRIGGER_MIN_SPEED_MPS = 1.2;
+export const TURN_TRIGGER_MIN_INTERVAL_MS = 3_000;
+
+export interface TurnSampleCandidate {
+  heading?: number | null;
+  speed?: number | null;
+  recordedAtMs: number;
+}
+
+/**
+ * Returns shortest circular angular difference in degrees [0, 180] between two compass bearings.
+ */
+export function shortestHeadingDeltaDegrees(headingA: number, headingB: number): number {
+  const diff = Math.abs(headingA - headingB) % 360;
+  return diff > 180 ? 360 - diff : diff;
+}
+
+/**
+ * Evaluates whether a moving device has turned sharply enough (`|Δheading| >= 35°`
+ * at `speed >= 1.2 m/s` and `dt >= 3s`) to flush an immediate corner sample so street
+ * intersections are anchored at the vertex instead of cutting diagonally across blocks.
+ */
+export function shouldTriggerTurnSample(
+  previousSample: TurnSampleCandidate | null,
+  currentSample: TurnSampleCandidate,
+  minHeadingDeltaDeg = TURN_TRIGGER_HEADING_DELTA_DEG,
+  minSpeedMps = TURN_TRIGGER_MIN_SPEED_MPS,
+  minIntervalMs = TURN_TRIGGER_MIN_INTERVAL_MS,
+): boolean {
+  if (!previousSample) return false;
+  const prevHeading = previousSample.heading;
+  const currHeading = currentSample.heading;
+  const currSpeed = currentSample.speed;
+  if (
+    typeof prevHeading !== 'number' ||
+    !Number.isFinite(prevHeading) ||
+    prevHeading < 0 ||
+    prevHeading > 360 ||
+    typeof currHeading !== 'number' ||
+    !Number.isFinite(currHeading) ||
+    currHeading < 0 ||
+    currHeading > 360 ||
+    typeof currSpeed !== 'number' ||
+    !Number.isFinite(currSpeed) ||
+    currSpeed < minSpeedMps
+  ) {
+    return false;
+  }
+  const elapsedMs = currentSample.recordedAtMs - previousSample.recordedAtMs;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < minIntervalMs) {
+    return false;
+  }
+  return shortestHeadingDeltaDegrees(prevHeading, currHeading) >= minHeadingDeltaDeg;
+}
 
 export type AdaptiveLocationMode = 'moving' | 'idle';
 

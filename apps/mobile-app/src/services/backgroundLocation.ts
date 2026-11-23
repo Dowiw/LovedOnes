@@ -14,6 +14,8 @@ import {
   evaluateAdaptiveTrackingTransition,
   isAdaptiveWarmupActive,
   runWatchdogCheck,
+  shouldTriggerTurnSample,
+  type TurnSampleCandidate,
   WATCHDOG_MINIMUM_INTERVAL_MINUTES,
   type WatchdogAdapter,
 } from './adaptiveTracking';
@@ -76,6 +78,7 @@ export function buildLocationTaskOptions(
 }
 
 let foregroundSubscription: Location.LocationSubscription | null = null;
+let lastForegroundSample: TurnSampleCandidate | null = null;
 
 async function readBatteryPercent(): Promise<number | null> {
   try {
@@ -345,14 +348,30 @@ export async function startBackgroundTracking(): Promise<{
   await BackgroundTask.unregisterTaskAsync(BACKGROUND_WATCHDOG_TASK).catch(() => {});
 
   if (!foregroundSubscription) {
+    lastForegroundSample = null;
     foregroundSubscription = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.High,
-        timeInterval: MOVING_CHECKIN_INTERVAL_MS,
+        timeInterval: 3_000,
         distanceInterval: 0,
       },
       (loc) => {
-        void ingestLocationsAndOpportunisticFlush([loc]);
+        const nowMs = loc.timestamp || Date.now();
+        const cand: TurnSampleCandidate = {
+          heading: parseValidHeading(loc.coords.heading),
+          speed: loc.coords.speed !== null && loc.coords.speed >= 0 ? loc.coords.speed : null,
+          recordedAtMs: nowMs,
+        };
+        const elapsedSinceLast =
+          lastForegroundSample !== null ? nowMs - lastForegroundSample.recordedAtMs : Infinity;
+        if (
+          lastForegroundSample === null ||
+          elapsedSinceLast >= MOVING_CHECKIN_INTERVAL_MS ||
+          shouldTriggerTurnSample(lastForegroundSample, cand)
+        ) {
+          lastForegroundSample = cand;
+          void ingestLocationsAndOpportunisticFlush([loc]);
+        }
       },
     );
   }

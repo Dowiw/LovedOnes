@@ -1981,12 +1981,13 @@ export function MobileMapScreen({
       matchedTrails: memberMatchedTrails,
       mode: trailDisplayMode,
       filterUserId: activeTrailUserId,
+      places,
     });
     return {
       type: 'FeatureCollection' as const,
       features,
     };
-  }, [activeTrailUserId, memberTrailPoints, memberMatchedTrails, trailDisplayMode]);
+  }, [activeTrailUserId, memberTrailPoints, memberMatchedTrails, trailDisplayMode, places]);
 
   const showCompassBtn = Math.abs(mapBearing) > 2;
 
@@ -2118,6 +2119,8 @@ export function MobileMapScreen({
                   : Number.isFinite(Number(props.stayDurationMs))
                     ? Number(props.stayDurationMs)
                     : undefined,
+              durationLabel:
+                typeof props.durationLabel === 'string' ? props.durationLabel : undefined,
               isDwell:
                 typeof props.isDwell === 'boolean'
                   ? props.isDwell
@@ -2130,6 +2133,16 @@ export function MobileMapScreen({
                 typeof props.isFuzzed === 'boolean'
                   ? props.isFuzzed
                   : props.isFuzzed === 'true',
+              matchedPlaceName:
+                typeof props.matchedPlaceName === 'string'
+                  ? props.matchedPlaceName
+                  : props.matchedPlaceName === null
+                    ? null
+                    : undefined,
+              matchedPlaceIsPrivate:
+                typeof props.matchedPlaceIsPrivate === 'boolean'
+                  ? props.matchedPlaceIsPrivate
+                  : props.matchedPlaceIsPrivate === 'true',
               places,
             });
             setSelectedTrailPoint({ ...details, latitude: lat, longitude: lon });

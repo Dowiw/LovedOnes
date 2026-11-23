@@ -1271,6 +1271,7 @@ export function MapCanvas({
             trails,
             matchedTrails,
             mode: trailMode,
+            places,
           })
         : { features: [] };
 
@@ -1379,6 +1380,8 @@ export function MapCanvas({
               : Number.isFinite(Number(props.stayDurationMs))
                 ? Number(props.stayDurationMs)
                 : undefined,
+          durationLabel:
+            typeof props.durationLabel === 'string' ? props.durationLabel : undefined,
           isDwell:
             typeof props.isDwell === 'boolean'
               ? props.isDwell
@@ -1391,6 +1394,16 @@ export function MapCanvas({
             typeof props.isFuzzed === 'boolean'
               ? props.isFuzzed
               : props.isFuzzed === 'true',
+          matchedPlaceName:
+            typeof props.matchedPlaceName === 'string'
+              ? props.matchedPlaceName
+              : props.matchedPlaceName === null
+                ? null
+                : undefined,
+          matchedPlaceIsPrivate:
+            typeof props.matchedPlaceIsPrivate === 'boolean'
+              ? props.matchedPlaceIsPrivate
+              : props.matchedPlaceIsPrivate === 'true',
           places: placesRef.current,
         });
 

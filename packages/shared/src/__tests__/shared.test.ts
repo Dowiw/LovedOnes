@@ -1201,11 +1201,41 @@ describe('@loved-ones/shared', () => {
         },
       ],
       mode: 'roads',
+      places: [
+        {
+          name: 'Home',
+          latitude: 52.52,
+          longitude: 13.4,
+          radiusMeters: 150,
+          isPrivate: true,
+        },
+      ],
     });
     const ptFeatures = geo.features.filter((f) => f.geometry.type === 'Point');
     expect(ptFeatures).toHaveLength(3);
     expect(ptFeatures[0]?.properties.stayDurationMs).toBe(45 * 60_000);
+    expect(ptFeatures[0]?.properties.durationLabel).toBe('45m');
+    expect(ptFeatures[0]?.properties.matchedPlaceName).toBe('Home');
+    expect(ptFeatures[0]?.properties.matchedPlaceIsPrivate).toBe(true);
     expect(ptFeatures[2]?.properties.stayDurationMs).toBe(20 * 60_000);
+    expect(ptFeatures[2]?.properties.durationLabel).toBe('20m');
+
+    // Fast-path O(1) lookup uses pre-computed properties without re-scanning places
+    const fastDetails = resolveTrailPointDetails({
+      latitude: 52.52002,
+      longitude: 13.40002,
+      username: 'Alice',
+      firstRecordedAt: ptFeatures[0]?.properties.firstRecordedAt,
+      lastRecordedAt: ptFeatures[0]?.properties.lastRecordedAt,
+      stayDurationMs: ptFeatures[0]?.properties.stayDurationMs,
+      durationLabel: ptFeatures[0]?.properties.durationLabel,
+      isDwell: ptFeatures[0]?.properties.isDwell,
+      matchedPlaceName: ptFeatures[0]?.properties.matchedPlaceName,
+      matchedPlaceIsPrivate: ptFeatures[0]?.properties.matchedPlaceIsPrivate,
+    });
+    expect(fastDetails.matchedPlaceName).toBe('Home');
+    expect(fastDetails.matchedPlaceIsPrivate).toBe(true);
+    expect(fastDetails.durationLabel).toBe('45m');
 
     const details = resolveTrailPointDetails({
       latitude: 52.52002,
@@ -1237,5 +1267,44 @@ describe('@loved-ones/shared', () => {
       places: [{ name: 'Home', latitude: 52.52, longitude: 13.4, radiusMeters: 150 }],
     });
     expect(fuzzedDetails.matchedPlaceName).toBeNull();
+
+    // Inverse-variance (1 / accuracy^2) weighting keeps a stationary stop pinned to crisp 8m GPS fixes
+    // (<1.2m drift) even when two 75m indoor Wi-Fi drift fixes pull 60m away inside the cluster radius.
+    const [weightedTrail] = averageNearbyTrailPings([
+      {
+        userId: 'u-weight',
+        username: 'Weighted',
+        latitude: 52.516,
+        longitude: 13.36,
+        accuracy: 8,
+        recordedAt: '2026-11-22T12:00:00.000Z',
+      },
+      {
+        userId: 'u-weight',
+        username: 'Weighted',
+        latitude: 52.516,
+        longitude: 13.36,
+        accuracy: 8,
+        recordedAt: '2026-11-22T12:05:00.000Z',
+      },
+      {
+        // 60m north indoor Wi-Fi drift with 75m accuracy (still within 85m cluster radius)
+        userId: 'u-weight',
+        username: 'Weighted',
+        latitude: 52.51654,
+        longitude: 13.36,
+        accuracy: 75,
+        recordedAt: '2026-11-22T12:10:00.000Z',
+      },
+    ]);
+    expect(weightedTrail.stops).toHaveLength(1);
+    const driftFromTrueMeters = haversineMeters(
+      52.516,
+      13.36,
+      weightedTrail.stops[0]!.latitude,
+      weightedTrail.stops[0]!.longitude,
+    );
+    // Unweighted mean would drift 20.0m north; inverse-variance drifts <0.4m!
+    expect(driftFromTrueMeters).toBeLessThan(1.0);
   });
 });

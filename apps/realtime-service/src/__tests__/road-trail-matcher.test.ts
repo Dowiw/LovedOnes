@@ -513,5 +513,43 @@ describe('RoadTrailMatcher', () => {
     expect(angleMatch.visits).toHaveLength(3);
     expect(angleMatch.visits?.some((v) => v.latitude > 52.5205 && v.longitude < 13.406)).toBe(false);
     expect(angleMatch.visits?.[2]?.latitude).toBeCloseTo(52.5235, 3);
+
+    // Parallel multi-track rail corridor (tracks 5.5m apart, plus 4 parallel footpaths crowding the station)
+    // preserves category diversity and links parallel tracks without falling back to 'direct'.
+    const parallelRailMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        // 4 closely spaced footpaths right at the station platform (0-2m from stop A)
+        { kind: 'path', coords: [[13.4, 52.52000], [13.401, 52.52000]] },
+        { kind: 'path', coords: [[13.4, 52.52001], [13.401, 52.52001]] },
+        { kind: 'path', coords: [[13.4, 52.52002], [13.401, 52.52002]] },
+        { kind: 'path', coords: [[13.4, 52.51999], [13.401, 52.51999]] },
+        // Track 1 (west end at station A, ends at tile boundary 13.405)
+        { kind: 'rail', coords: [[13.4, 52.52004], [13.405, 52.52004]] },
+        // Track 2 (5.5m north of Track 1, continues from 13.405 to station B at 13.410)
+        { kind: 'rail', coords: [[13.405, 52.52009], [13.410, 52.52009]] },
+      ]),
+    });
+    const [railCorridorMatch] = await parallelRailMatcher.matchTrails([
+      {
+        userId: 'rail-user',
+        username: 'Rail',
+        latitude: 52.52001,
+        longitude: 13.4002,
+        recordedAt: '2026-11-22T17:00:00.000Z',
+        speed: 14,
+        accuracy: 12,
+      },
+      {
+        userId: 'rail-user',
+        username: 'Rail',
+        latitude: 52.52009,
+        longitude: 13.4095,
+        recordedAt: '2026-11-22T17:00:45.000Z',
+        speed: 14,
+        accuracy: 12,
+      },
+    ]);
+    expect(railCorridorMatch.hasRoadMatches).toBe(true);
+    expect(railCorridorMatch.segments.some((s) => s.kind === 'road' && s.roadKind === 'rail')).toBe(true);
   });
 });

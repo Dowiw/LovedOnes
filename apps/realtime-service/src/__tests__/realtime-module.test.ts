@@ -1167,5 +1167,36 @@ describe('RealtimeModule domain interface', () => {
     expect(exactPin?.heading).toBe(92);
     expect(fuzzedPin?.accuracy).toBeNull();
     expect(fuzzedPin?.heading).toBeNull();
+
+    // Single-ping live ingestion bounce guard drops a lone coarse indoor Wi-Fi jump (95m accuracy, 85m jump in 15s)
+    // and a lone impossible single-ping teleport (500m in 3s) before DB insert or Socket.IO broadcast.
+    const countBefore = harness.locationBroadcasts.length;
+    const coarseSingleInserted = await harness.mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.52078,
+          longitude: 13.405,
+          accuracy: 95,
+          speed: 0.3,
+          recordedAt: '2026-11-22T12:05:15.000Z',
+        },
+      ],
+    });
+    expect(coarseSingleInserted).toBe(0);
+    expect(harness.locationBroadcasts).toHaveLength(countBefore);
+
+    const teleportSingleInserted = await harness.mod.ingestLocationBatch(alice, {
+      points: [
+        {
+          latitude: 52.525,
+          longitude: 13.405,
+          accuracy: 12,
+          speed: 4,
+          recordedAt: '2026-11-22T12:05:03.000Z',
+        },
+      ],
+    });
+    expect(teleportSingleInserted).toBe(0);
+    expect(harness.locationBroadcasts).toHaveLength(countBefore);
   });
 });

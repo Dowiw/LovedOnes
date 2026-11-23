@@ -23,7 +23,9 @@ import {
 
 const METERS_PER_DEGREE_LAT = 111_320;
 const MAX_SNAP_DISTANCE_METERS = 150;
-const MAX_CANDIDATES_PER_STOP = 4;
+const MAX_CANDIDATES_PER_STOP = 6;
+const KIND_DIVERSITY_DISTANCE_METERS = 45;
+const PARALLEL_RAIL_CROSSOVER_METERS = 10;
 const MAX_TILES_PER_TRIP = 36;
 const MAX_ASTAR_EXPANDED_NODES = 12_000;
 const TARGET_ROAD_ZOOM = 14;
@@ -512,6 +514,8 @@ function buildRoadGraph(features: readonly RoadEdgeFeature[], refLat: number): R
     }
   };
 
+  const railNodeSet = new Set<number>();
+
   for (const feat of features) {
     for (let i = 0; i < feat.coords.length - 1; i += 1) {
       const [lonA, latA] = feat.coords[i];
@@ -540,6 +544,53 @@ function buildRoadGraph(features: readonly RoadEdgeFeature[], refLat: number): R
       adj[aNode].push({ to: bNode, segmentId: segId, lengthMeters, kind: feat.kind });
       adj[bNode].push({ to: aNode, segmentId: segId, lengthMeters, kind: feat.kind });
       addSegToGrid(segId, nodeA, nodeB);
+      if (feat.kind === 'rail') {
+        railNodeSet.add(aNode);
+        railNodeSet.add(bNode);
+      }
+    }
+  }
+
+  // Link adjacent parallel rail tracks (3-10m apart at stations, sidings, and tile boundaries)
+  // by projecting each rail node onto nearby parallel rail segments in segGrid.
+  if (railNodeSet.size > 1) {
+    for (const rNodeId of railNodeSet) {
+      const rNode = nodes[rNodeId];
+      const cx = Math.floor(rNode.lat / segCellLat);
+      const cy = Math.floor(rNode.lon / segCellLon);
+
+      for (let dx = -1; dx <= 1; dx += 1) {
+        for (let dy = -1; dy <= 1; dy += 1) {
+          const segIds = segGrid.get(`${cx + dx}:${cy + dy}`);
+          if (!segIds) continue;
+          for (const segId of segIds) {
+            const seg = segments[segId];
+            if (seg.kind !== 'rail' || seg.aNode === rNodeId || seg.bNode === rNodeId) continue;
+            const aNode = nodes[seg.aNode];
+            const bNode = nodes[seg.bNode];
+            const proj = projectPointOntoSegment(rNode.lat, rNode.lon, aNode, bNode);
+            if (proj.distMeters > PARALLEL_RAIL_CROSSOVER_METERS) continue;
+
+            const crossoverPenalty = proj.distMeters * 1.4 + 4;
+            for (const [targetId, alongDist] of [
+              [seg.aNode, proj.t * seg.lengthMeters],
+              [seg.bNode, (1 - proj.t) * seg.lengthMeters],
+            ] as const) {
+              if (targetId === rNodeId) continue;
+              const lo = Math.min(rNodeId, targetId);
+              const hi = Math.max(rNodeId, targetId);
+              const dedupKey = `${lo}:${hi}:rail`;
+              if (edgeDedup.has(dedupKey)) continue;
+              edgeDedup.add(dedupKey);
+              const totalLen = alongDist + crossoverPenalty;
+              const newSegId = segments.length;
+              segments.push({ id: newSegId, aNode: rNodeId, bNode: targetId, lengthMeters: totalLen, kind: 'rail' });
+              adj[rNodeId].push({ to: targetId, segmentId: newSegId, lengthMeters: totalLen, kind: 'rail' });
+              adj[targetId].push({ to: rNodeId, segmentId: newSegId, lengthMeters: totalLen, kind: 'rail' });
+            }
+          }
+        }
+      }
     }
   }
 
@@ -631,6 +682,12 @@ function projectPointOntoSegment(
   };
 }
 
+function candidateCategory(kind: string): 'rail' | 'path' | 'road' {
+  if (kind === 'rail') return 'rail';
+  if (kind === 'path') return 'path';
+  return 'road';
+}
+
 function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCandidate[] {
   if (graph.segments.length === 0) return [];
   const radiusLatCells = Math.ceil(MAX_SNAP_DISTANCE_METERS / SEGMENT_GRID_CELL_METERS) + 1;
@@ -667,7 +724,63 @@ function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCan
   }
 
   rawCandidates.sort((a, b) => a.distMeters - b.distMeters);
-  return rawCandidates.slice(0, MAX_CANDIDATES_PER_STOP);
+
+  // Deduplicate abutting segments that share a graph vertex and project to essentially the same point (<= 2.2m)
+  // or identical co-linear parallel footpaths within 3.5m, while keeping distinct parallel rail tracks.
+  const deduped: SnapCandidate[] = [];
+  for (const cand of rawCandidates) {
+    const seg = graph.segments[cand.segmentId];
+    const cat = candidateCategory(cand.kind);
+    const isRedundant = deduped.some((existing) => {
+      if (candidateCategory(existing.kind) !== cat) return false;
+      const exSeg = graph.segments[existing.segmentId];
+      const sharesNode =
+        seg.aNode === exSeg.aNode ||
+        seg.aNode === exSeg.bNode ||
+        seg.bNode === exSeg.aNode ||
+        seg.bNode === exSeg.bNode;
+      const projDist = haversineMeters(existing.lat, existing.lon, cand.lat, cand.lon);
+      if (sharesNode && projDist <= 2.2 && undirectedAngleDiffDeg(existing.bearingDeg, cand.bearingDeg) <= 12) {
+        return true;
+      }
+      if (cat === 'path' && projDist <= 3.5 && undirectedAngleDiffDeg(existing.bearingDeg, cand.bearingDeg) <= 10) {
+        return true;
+      }
+      return false;
+    });
+    if (!isRedundant) {
+      deduped.push(cand);
+    }
+  }
+
+  // Reserve up to 2 closest slots per distinct category ('rail', 'road', 'path') within 45m
+  // so 6 parallel station rail tracks never crowd out the intersecting street or sidewalk.
+  const selected: SnapCandidate[] = [];
+  const selectedIds = new Set<number>();
+  const categoryCounts = new Map<'rail' | 'path' | 'road', number>();
+
+  for (const cand of deduped) {
+    if (cand.distMeters > KIND_DIVERSITY_DISTANCE_METERS) break;
+    const cat = candidateCategory(cand.kind);
+    const count = categoryCounts.get(cat) ?? 0;
+    if (count < 2) {
+      categoryCounts.set(cat, count + 1);
+      selected.push(cand);
+      selectedIds.add(cand.segmentId);
+      if (selected.length >= MAX_CANDIDATES_PER_STOP) break;
+    }
+  }
+
+  for (const cand of deduped) {
+    if (selected.length >= MAX_CANDIDATES_PER_STOP) break;
+    if (!selectedIds.has(cand.segmentId)) {
+      selected.push(cand);
+      selectedIds.add(cand.segmentId);
+    }
+  }
+
+  selected.sort((a, b) => a.distMeters - b.distMeters);
+  return selected;
 }
 
 /**
@@ -1001,14 +1114,19 @@ function filterRelevantMovingVisits(visits: readonly TrailStopVisit[]): TrailSto
   return kept;
 }
 
-function minCandidateBearingError(bearingDeg: number, candidates: readonly SnapCandidate[]): number | null {
+function minCandidateBearingError(
+  bearingDeg: number,
+  candidates: readonly SnapCandidate[],
+  maxDistMeters = Infinity,
+): number | null {
   if (candidates.length === 0) return null;
   let best = Infinity;
   for (const c of candidates) {
+    if (c.distMeters > maxDistMeters) continue;
     const err = undirectedAngleDiffDeg(bearingDeg, c.bearingDeg);
     if (err < best) best = err;
   }
-  return best;
+  return Number.isFinite(best) ? best : null;
 }
 
 /**
@@ -1044,10 +1162,10 @@ function filterOffAngleTriangleVisits(
         const bearingAC = segmentBearingDeg(prev.latitude, prev.longitude, next.latitude, next.longitude);
         const turnAngleAtB = directedAngleDiffDeg(bearingAB, bearingBC);
 
-        const chordAlignA = minCandidateBearingError(bearingAC, prevCands);
-        const chordAlignC = minCandidateBearingError(bearingAC, nextCands);
-        const legABAlign = minCandidateBearingError(bearingAB, [...prevCands, ...currCands]);
-        const legBCAlign = minCandidateBearingError(bearingBC, [...currCands, ...nextCands]);
+        const chordAlignA = minCandidateBearingError(bearingAC, prevCands, 25);
+        const chordAlignC = minCandidateBearingError(bearingAC, nextCands, 25);
+        const legABAlign = minCandidateBearingError(bearingAB, currCands, 25);
+        const legBCAlign = minCandidateBearingError(bearingBC, currCands, 25);
 
         const chordMatchesRoad =
           chordAlignA !== null && chordAlignC !== null && chordAlignA <= 18 && chordAlignC <= 18;
@@ -1176,7 +1294,19 @@ export class RoadTrailMatcher {
       const dpBearing: Array<Array<number | null>> = [];
 
       const firstCands = candidatesByStop[chainStart];
-      dpCost.push(firstCands.map((c) => emissionCost(c, activeVisits[chainStart], activeVisits[chainStart].maxSpeedMps)));
+      const firstVisit = activeVisits[chainStart];
+      const secondVisit = activeVisits[chainStart + 1];
+      const firstStraightDist = haversineMeters(
+        firstVisit.latitude,
+        firstVisit.longitude,
+        secondVisit.latitude,
+        secondVisit.longitude,
+      );
+      const firstDepartureSpeedMps =
+        firstVisit.maxSpeedMps !== null && firstVisit.maxSpeedMps > 0.5
+          ? firstVisit.maxSpeedMps
+          : estimateLegSpeedMps(firstVisit, secondVisit, firstStraightDist);
+      dpCost.push(firstCands.map((c) => emissionCost(c, firstVisit, firstDepartureSpeedMps)));
       dpPrevCand.push(firstCands.map(() => -1));
       dpPrevStepOffset.push(firstCands.map(() => 0));
       dpRoute.push(firstCands.map(() => null));
@@ -1245,13 +1375,43 @@ export class RoadTrailMatcher {
 
           for (let pi = 0; pi < prevCands.length; pi += 1) {
             if (!Number.isFinite(prevRow[pi])) continue;
-            const routed = routeBetweenCandidates(
+            const prevCand = prevCands[pi];
+            let routed = routeBetweenCandidates(
               graph,
-              prevCands[pi],
+              prevCand,
               currCand,
               speedMps,
               maxDetour,
             );
+            let modeTransferPenalty = 0;
+            if (!routed && (prevCand.kind === 'rail') !== (currCand.kind === 'rail')) {
+              // Station-to-street or street-to-station transfer at prevVisit: pick the lowest-cost co-located candidate
+              let bestAltScore = Infinity;
+              for (let altIdx = 0; altIdx < prevCands.length; altIdx += 1) {
+                const altCand = prevCands[altIdx];
+                if ((altCand.kind === 'rail') !== (currCand.kind === 'rail')) continue;
+                const transferDist = haversineMeters(prevCand.lat, prevCand.lon, altCand.lat, altCand.lon);
+                if (transferDist > 45) continue;
+                const altRouted = routeBetweenCandidates(graph, altCand, currCand, speedMps, maxDetour);
+                if (altRouted) {
+                  const altDetour = Math.max(0, altRouted.distanceMeters + transferDist - straightDist);
+                  const altScore = altRouted.cost * 0.35 + altDetour * 0.35 + transferDist * 1.3;
+                  if (altScore < bestAltScore) {
+                    bestAltScore = altScore;
+                    routed = {
+                      cost: altRouted.cost + transferDist * 1.5,
+                      distanceMeters: altRouted.distanceMeters + transferDist,
+                      coordinates: mergeTrailCoordinates([
+                        [[Number(prevCand.lon.toFixed(6)), Number(prevCand.lat.toFixed(6))]],
+                        altRouted.coordinates,
+                      ]),
+                      dominantRoadKind: altRouted.dominantRoadKind,
+                    };
+                    modeTransferPenalty = 45 + transferDist * 0.8;
+                  }
+                }
+              }
+            }
             if (!routed) continue;
             const detourPenalty = Math.max(0, routed.distanceMeters - straightDist) * 0.35;
             let turnPenalty = 0;
@@ -1263,7 +1423,12 @@ export class RoadTrailMatcher {
               else if (turnDeg > 75) turnPenalty = (turnDeg - 75) * 0.3;
             }
             const total =
-              prevRow[pi] + routed.cost * 0.35 + detourPenalty + turnPenalty + emission;
+              prevRow[pi] +
+              routed.cost * 0.35 +
+              detourPenalty +
+              turnPenalty +
+              modeTransferPenalty +
+              emission;
             if (total < bestTotal) {
               bestTotal = total;
               bestPrevIdx = pi;
