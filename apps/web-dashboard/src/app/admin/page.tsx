@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle,
@@ -12,12 +12,15 @@ import {
   Cpu,
   Database,
   HardDrive,
+  Image as ImageIcon,
+  Link2,
   Loader2,
   QrCode,
   Radio,
   RefreshCw,
   Terminal,
   Trash2,
+  Upload,
   UserPlus,
   X,
 } from 'lucide-react';
@@ -25,6 +28,7 @@ import {
   DEFAULT_EXACT_HALO_COLOR,
   formatCountdownRemaining,
   isSafeAvatarUrl,
+  isSafeLoginBackgroundUrl,
   type MapDownloadJob,
   type MapRegion,
   type RegistrationRequestItem,
@@ -44,19 +48,70 @@ import {
   apiDeleteMapRegion,
   apiDeleteUserAccount,
   apiDenyRegistrationRequest,
+  apiDismissSystemUpdateError,
   apiFetchGroups,
+  apiFetchLoginAppearance,
   apiFetchMapJobs,
   apiFetchMapRegions,
   apiFetchRegistrationRequests,
   apiFetchSystemUpdateStatus,
   apiFetchTelemetry,
   apiTriggerSystemUpdate,
+  apiUpdateLoginAppearance,
   formatBytes,
   GroupItem,
   loadSession,
   saveSession,
   StoredSession,
 } from '@/lib/api';
+
+const MAX_LOGIN_BG_WIDTH = 1600;
+const MAX_LOGIN_BG_HEIGHT = 1200;
+
+async function resizeLoginBackgroundFile(file: File): Promise<string> {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('Could not decode image file'));
+      el.src = objectUrl;
+    });
+
+    const natW = img.naturalWidth || img.width;
+    const natH = img.naturalHeight || img.height;
+    if (!Number.isFinite(natW) || !Number.isFinite(natH) || natW <= 0 || natH <= 0) {
+      throw new Error('Invalid image dimensions');
+    }
+
+    const scale = Math.min(1, MAX_LOGIN_BG_WIDTH / natW, MAX_LOGIN_BG_HEIGHT / natH);
+    const targetW = Math.max(1, Math.round(natW * scale));
+    const targetH = Math.max(1, Math.round(natH * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Canvas 2D context unavailable');
+    }
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+
+    let dataUrl = canvas.toDataURL('image/webp', 0.84);
+    if (!dataUrl.startsWith('data:image/webp') || !isSafeLoginBackgroundUrl(dataUrl)) {
+      dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+    }
+    if (!isSafeLoginBackgroundUrl(dataUrl)) {
+      dataUrl = canvas.toDataURL('image/jpeg', 0.68);
+    }
+    if (!isSafeLoginBackgroundUrl(dataUrl)) {
+      throw new Error('Processed photo exceeds the 1.5 MB limit. Try a smaller image.');
+    }
+    return dataUrl;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 export default function AdminDashboardPage() {
   const [session, setSession] = useState<StoredSession | null>(null);
@@ -72,9 +127,17 @@ export default function AdminDashboardPage() {
   const [updateStatus, setUpdateStatus] = useState<SystemUpdateStatus | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [startingUpdate, setStartingUpdate] = useState(false);
+  const [dismissingUpdateError, setDismissingUpdateError] = useState(false);
   const [confirmUpdateMode, setConfirmUpdateMode] = useState<'pull' | 'rebuild' | null>(null);
   const [reconnectingDuringUpdate, setReconnectingDuringUpdate] = useState(false);
   const [showUpdateLogs, setShowUpdateLogs] = useState(false);
+  const [loginBackgroundUrl, setLoginBackgroundUrl] = useState<string | null>(null);
+  const [loginBgUrlInput, setLoginBgUrlInput] = useState('');
+  const [showLoginBgUrlInput, setShowLoginBgUrlInput] = useState(false);
+  const [savingLoginBg, setSavingLoginBg] = useState(false);
+  const [loginBgFeedback, setLoginBgFeedback] = useState<string | null>(null);
+  const [loginBgError, setLoginBgError] = useState<string | null>(null);
+  const loginBgFileInputRef = useRef<HTMLInputElement | null>(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,13 +152,14 @@ export default function AdminDashboardPage() {
 
   const refreshData = useCallback(async (token: string) => {
     try {
-      const [stats, grpList, regionsData, jobs, sysUpdate, regReqs] = await Promise.all([
+      const [stats, grpList, regionsData, jobs, sysUpdate, regReqs, appearance] = await Promise.all([
         apiFetchTelemetry(token),
         apiFetchGroups(token),
         apiFetchMapRegions(),
         apiFetchMapJobs(token),
         apiFetchSystemUpdateStatus(token, false).catch(() => null),
         apiFetchRegistrationRequests(token).catch(() => null),
+        apiFetchLoginAppearance(token).catch(() => null),
       ]);
       setTelemetry(stats);
       setGroups(grpList);
@@ -107,6 +171,9 @@ export default function AdminDashboardPage() {
       if (sysUpdate) {
         setUpdateStatus(sysUpdate);
         setReconnectingDuringUpdate(false);
+      }
+      if (appearance) {
+        setLoginBackgroundUrl(appearance.loginBackgroundUrl);
       }
       setError(null);
     } catch (err) {
@@ -171,6 +238,78 @@ export default function AdminDashboardPage() {
       setCheckingUpdate(false);
     }
   }, [session]);
+
+  const handleDismissUpdateError = useCallback(async () => {
+    if (!session) return;
+    setDismissingUpdateError(true);
+    try {
+      const next = await apiDismissSystemUpdateError(session.accessToken);
+      setUpdateStatus(next);
+      setShowUpdateLogs(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to dismiss system update status');
+    } finally {
+      setDismissingUpdateError(false);
+    }
+  }, [session]);
+
+  const handleSaveLoginBackground = useCallback(
+    async (nextUrl: string | null) => {
+      if (!session) return;
+      setSavingLoginBg(true);
+      setLoginBgError(null);
+      setLoginBgFeedback(null);
+      try {
+        const res = await apiUpdateLoginAppearance(session.accessToken, nextUrl);
+        setLoginBackgroundUrl(res.loginBackgroundUrl);
+        setShowLoginBgUrlInput(false);
+        setLoginBgUrlInput('');
+        setLoginBgFeedback(
+          res.loginBackgroundUrl ? 'Login background photo updated.' : 'Reset to default background.',
+        );
+      } catch (err) {
+        setLoginBgError(
+          err instanceof Error ? err.message : 'Failed to update login screen background',
+        );
+      } finally {
+        setSavingLoginBg(false);
+      }
+    },
+    [session],
+  );
+
+  const handleSelectLoginBgFile = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      setSavingLoginBg(true);
+      setLoginBgError(null);
+      setLoginBgFeedback(null);
+      try {
+        const dataUrl = await resizeLoginBackgroundFile(file);
+        await handleSaveLoginBackground(dataUrl);
+      } catch (err) {
+        setLoginBgError(err instanceof Error ? err.message : 'Could not process image file');
+        setSavingLoginBg(false);
+      }
+    },
+    [handleSaveLoginBackground],
+  );
+
+  const handleApplyLoginBgUrl = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const trimmed = loginBgUrlInput.trim();
+      if (!isSafeLoginBackgroundUrl(trimmed)) {
+        setLoginBgError('Enter a valid http:// or https:// image URL.');
+        return;
+      }
+      await handleSaveLoginBackground(trimmed);
+    },
+    [loginBgUrlInput, handleSaveLoginBackground],
+  );
 
   const handleTriggerUpdate = useCallback(
     async (rebuildEvenIfCurrent: boolean) => {
@@ -343,8 +482,8 @@ export default function AdminDashboardPage() {
 
           {registrationRequests.length === 0 ? (
             <div className="px-5 py-5 text-xs text-zinc-500 dark:text-zinc-400">
-              No pending or recent account requests yet. New mobile onboarding requests appear here
-              with a 24-hour countdown timer.
+              No pending or recent account requests yet. New website and mobile account requests
+              appear here with a 24-hour countdown timer.
             </div>
           ) : (
             <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -616,8 +755,21 @@ export default function AdminDashboardPage() {
           )}
 
           {updateStatus?.error && !updateStatus.running && (
-            <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300">
-              {updateStatus.error}
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300">
+              <span className="min-w-0 break-words">{updateStatus.error}</span>
+              <button
+                type="button"
+                disabled={dismissingUpdateError}
+                onClick={() => void handleDismissUpdateError()}
+                className="lo-press inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-300/70 bg-white/80 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-white disabled:opacity-60 dark:border-rose-500/40 dark:bg-rose-950/80 dark:text-rose-200 dark:hover:bg-rose-900"
+              >
+                {dismissingUpdateError ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <X className="h-3 w-3" />
+                )}
+                Dismiss
+              </button>
             </div>
           )}
 
@@ -657,6 +809,129 @@ export default function AdminDashboardPage() {
                 {updateStatus.logs.join('\n')}
               </pre>
             )}
+        </section>
+
+        <section className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
+                <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                  Login Screen Background
+                </h2>
+              </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Choose a custom photo displayed behind the sign-in and invite cards. Photos are
+                automatically resized for fast loading.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={loginBgFileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(e) => void handleSelectLoginBgFile(e)}
+                className="hidden"
+              />
+              <button
+                type="button"
+                disabled={savingLoginBg}
+                onClick={() => loginBgFileInputRef.current?.click()}
+                className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                {savingLoginBg ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
+                {loginBackgroundUrl ? 'Change Photo' : 'Upload Photo'}
+              </button>
+              <button
+                type="button"
+                disabled={savingLoginBg}
+                onClick={() => {
+                  setShowLoginBgUrlInput((v) => !v);
+                  setLoginBgError(null);
+                  setLoginBgFeedback(null);
+                }}
+                className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-white"
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                Image URL
+              </button>
+              {loginBackgroundUrl && (
+                <button
+                  type="button"
+                  disabled={savingLoginBg}
+                  onClick={() => void handleSaveLoginBackground(null)}
+                  className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Reset Default
+                </button>
+              )}
+            </div>
+          </div>
+
+          {showLoginBgUrlInput && (
+            <form onSubmit={(e) => void handleApplyLoginBgUrl(e)} className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                type="url"
+                required
+                value={loginBgUrlInput}
+                onChange={(e) => setLoginBgUrlInput(e.target.value)}
+                placeholder="https://example.com/photo.jpg"
+                className="min-w-[220px] flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+              />
+              <button
+                type="submit"
+                disabled={savingLoginBg}
+                className="lo-press rounded-lg bg-zinc-950 px-3.5 py-2 text-xs font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                Apply URL
+              </button>
+            </form>
+          )}
+
+          {loginBgError && (
+            <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300">
+              {loginBgError}
+            </div>
+          )}
+
+          {loginBgFeedback && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-950/50 dark:text-emerald-300">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              <span>{loginBgFeedback}</span>
+            </div>
+          )}
+
+          <div className="relative mt-4 flex h-44 w-full items-center justify-center overflow-hidden rounded-xl border border-zinc-200/80 bg-[#f4f4f5] dark:border-zinc-800 dark:bg-zinc-950">
+            {isSafeLoginBackgroundUrl(loginBackgroundUrl) ? (
+              <>
+                <img
+                  src={loginBackgroundUrl}
+                  alt="Login screen background preview"
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-black/15 to-black/35 dark:from-zinc-950/45 dark:via-zinc-950/35 dark:to-zinc-950/60" />
+              </>
+            ) : (
+              <>
+                <div className="pointer-events-none absolute -left-10 -top-10 h-32 w-32 rounded-full bg-zinc-300/50 blur-2xl dark:bg-zinc-800/40" />
+                <div className="pointer-events-none absolute -bottom-10 -right-10 h-32 w-32 rounded-full bg-zinc-200/70 blur-2xl dark:bg-zinc-800/30" />
+              </>
+            )}
+            <div className="relative w-48 rounded-lg border border-white/75 bg-white/85 px-4 py-3 text-center shadow-lg backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-900/85">
+              <div className="text-xs font-bold text-zinc-900 dark:text-zinc-50">LovedOnes</div>
+              <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">
+                {loginBackgroundUrl ? 'Custom background active' : 'Default monochrome background'}
+              </div>
+              <div className="mt-2 h-2 w-full rounded bg-zinc-200/80 dark:bg-zinc-800" />
+              <div className="mt-1.5 h-4 w-full rounded bg-zinc-900 dark:bg-zinc-100" />
+            </div>
+          </div>
         </section>
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

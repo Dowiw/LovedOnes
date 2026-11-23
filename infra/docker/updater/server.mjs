@@ -13,6 +13,14 @@ const JWT_SECRET =
 const ALLOW_REMOTE = process.env.ALLOW_REMOTE_SYSTEM_UPDATE !== 'false';
 const DOCKER_SOCKET = '/var/run/docker.sock';
 const MAX_LOG_LINES = 120;
+const BUILD_TIMEOUT_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.SYSTEM_UPDATE_BUILD_TIMEOUT_MS ?? '1800000', 10) || 1_800_000,
+);
+const UP_TIMEOUT_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.SYSTEM_UPDATE_UP_TIMEOUT_MS ?? '600000', 10) || 600_000,
+);
 
 function computeUpdaterSecret() {
   return createHmac('sha256', JWT_SECRET)
@@ -83,12 +91,20 @@ function runCommand(cmd, args, options = {}) {
     let stdout = '';
     let stderr = '';
     let killedByTimeout = false;
+    let forceKillTimer = null;
     const timeoutMs = options.timeoutMs ?? 0;
     const timer =
       timeoutMs > 0
         ? setTimeout(() => {
             killedByTimeout = true;
             child.kill('SIGTERM');
+            forceKillTimer = setTimeout(() => {
+              try {
+                child.kill('SIGKILL');
+              } catch {
+                // process already exited
+              }
+            }, 5_000);
           }, timeoutMs)
         : null;
 
@@ -104,10 +120,12 @@ function runCommand(cmd, args, options = {}) {
     });
     child.on('error', (err) => {
       if (timer) clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       reject(err);
     });
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       if (killedByTimeout) {
         reject(new Error(`${cmd} timed out after ${timeoutMs}ms`));
         return;
@@ -348,6 +366,25 @@ async function buildStatusResponse(refresh = false) {
     }
   }
 
+  if (
+    !job.running &&
+    job.phase === 'failed' &&
+    gitInfo.currentCommit &&
+    job.targetCommit &&
+    job.targetCommit !== gitInfo.currentCommit &&
+    gitInfo.commitsBehind === 0
+  ) {
+    // Host was updated manually past the failed commit; clear stale failure banner
+    job = {
+      ...job,
+      phase: 'idle',
+      error: null,
+      logs: [],
+      targetCommit: gitInfo.currentCommit,
+    };
+    writeState(job);
+  }
+
   return {
     enabled: ALLOW_REMOTE,
     disabledReason: ALLOW_REMOTE
@@ -439,6 +476,12 @@ async function triggerUpdate(rebuildEvenIfCurrent) {
       `ACTIVE_PROFILES=${hostCtx.activeProfiles.join(',')}`,
       `UPDATE_JOB_ID=${jobId}`,
       `DO_GIT_PULL=${current.updateAvailable ? '1' : '0'}`,
+      `SYSTEM_UPDATE_BUILD_TIMEOUT_MS=${BUILD_TIMEOUT_MS}`,
+      `SYSTEM_UPDATE_UP_TIMEOUT_MS=${UP_TIMEOUT_MS}`,
+      'DOCKER_BUILDKIT=1',
+      'COMPOSE_DOCKER_CLI_BUILD=1',
+      'BUILDKIT_PROGRESS=plain',
+      'COMPOSE_PARALLEL_LIMIT=1',
       'COMPOSE_INTERACTIVE_NO_CLI=1',
     ],
     HostConfig: {
@@ -509,31 +552,40 @@ async function runDetachedWorker() {
     }
 
     state.phase = 'building';
-    appendLogLines(state, 'Building web-dashboard image...');
-    const webBuild = await runCommand('docker', [...composeBase, 'build', 'web-dashboard'], {
-      cwd: repoDir,
-      timeoutMs: 900_000,
-      onOutput: (chunk) => appendLogLines(state, chunk),
-    });
-    if (webBuild.code !== 0) {
-      throw new Error(`docker compose build web-dashboard failed (exit ${webBuild.code})`);
-    }
+    const buildServices = [
+      'auth-admin-service',
+      'realtime-service',
+      'web-dashboard',
+      'system-updater',
+      ...(profiles.includes('standalone-maps') ? ['map-service'] : []),
+    ];
+    const buildEnv = {
+      DOCKER_BUILDKIT: '1',
+      COMPOSE_DOCKER_CLI_BUILD: '1',
+      BUILDKIT_PROGRESS: 'plain',
+      COMPOSE_PARALLEL_LIMIT: '1',
+    };
 
-    appendLogLines(state, 'Building remaining service images...');
-    const allBuild = await runCommand('docker', [...composeBase, 'build'], {
-      cwd: repoDir,
-      timeoutMs: 900_000,
-      onOutput: (chunk) => appendLogLines(state, chunk),
-    });
-    if (allBuild.code !== 0) {
-      throw new Error(`docker compose build failed (exit ${allBuild.code})`);
+    for (let i = 0; i < buildServices.length; i += 1) {
+      const svc = buildServices[i];
+      appendLogLines(state, `[${i + 1}/${buildServices.length}] Building ${svc} image...`);
+      const svcBuild = await runCommand('docker', [...composeBase, 'build', svc], {
+        cwd: repoDir,
+        env: buildEnv,
+        timeoutMs: BUILD_TIMEOUT_MS,
+        onOutput: (chunk) => appendLogLines(state, chunk),
+      });
+      if (svcBuild.code !== 0) {
+        throw new Error(`docker compose build ${svc} failed (exit ${svcBuild.code})`);
+      }
     }
 
     state.phase = 'restarting';
     appendLogLines(state, 'Recreating updated containers and waiting for healthchecks...');
     const upRes = await runCommand('docker', [...composeBase, 'up', '-d', '--no-build', '--wait'], {
       cwd: repoDir,
-      timeoutMs: 600_000,
+      env: buildEnv,
+      timeoutMs: UP_TIMEOUT_MS,
       onOutput: (chunk) => appendLogLines(state, chunk),
     });
     if (upRes.code !== 0) {
@@ -615,6 +667,29 @@ if (process.argv.includes('--worker')) {
         const body = await readJsonBody(req);
         const result = await triggerUpdate(Boolean(body?.rebuildEvenIfCurrent));
         sendJson(res, result.statusCode, result.body);
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/clear') {
+        const current = await buildStatusResponse(false);
+        if (current.running) {
+          sendJson(res, 409, { error: 'Cannot clear update status while an update is running' });
+          return;
+        }
+        const persisted = readState();
+        writeState({
+          jobId: null,
+          phase: 'idle',
+          running: false,
+          startedAt: null,
+          finishedAt: null,
+          targetCommit: current.currentCommit,
+          error: null,
+          logs: [],
+          lastCheckedAt: persisted?.lastCheckedAt ?? current.lastCheckedAt ?? null,
+        });
+        const cleared = await buildStatusResponse(false);
+        sendJson(res, 200, cleared);
         return;
       }
 

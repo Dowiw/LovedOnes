@@ -15,6 +15,7 @@ import type {
   PlaceTransitionEvent,
   PrivacyMode,
   PublicLocationShareSnapshot,
+  PublicLoginConfig,
   QrInvitePayload,
   RegistrationRequestItem,
   ResourceLimitsSettings,
@@ -337,6 +338,65 @@ export async function apiRegister(input: {
     method: 'POST',
     body: JSON.stringify(input),
   });
+}
+
+export async function apiFetchPublicConfig(): Promise<PublicLoginConfig> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson<PublicLoginConfig>(`${authBase}/api/auth/public-config`, {
+    cache: 'no-store',
+  });
+}
+
+export async function apiCreateRegistrationRequest(input: {
+  email: string;
+  username: string;
+  password: string;
+  inviteToken?: string;
+}): Promise<{ request: RegistrationRequestItem }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestJson<{ request: RegistrationRequestItem }>(
+    `${authBase}/api/auth/registration-requests`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function apiFetchRegistrationRequestStatus(
+  requestId?: string,
+): Promise<{ request: RegistrationRequestItem | null }> {
+  const { authBase } = getServiceBaseUrls();
+  const qs = requestId ? `?id=${encodeURIComponent(requestId)}` : '';
+  return requestJson<{ request: RegistrationRequestItem | null }>(
+    `${authBase}/api/auth/registration-requests/status${qs}`,
+    { cache: 'no-store' },
+  );
+}
+
+export async function apiFetchLoginAppearance(
+  accessToken: string,
+): Promise<{ loginBackgroundUrl: string | null }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ loginBackgroundUrl: string | null }>(
+    `${authBase}/api/admin/login-appearance`,
+    accessToken,
+  );
+}
+
+export async function apiUpdateLoginAppearance(
+  accessToken: string,
+  loginBackgroundUrl: string | null,
+): Promise<{ loginBackgroundUrl: string | null }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ loginBackgroundUrl: string | null }>(
+    `${authBase}/api/admin/login-appearance`,
+    accessToken,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ loginBackgroundUrl }),
+    },
+  );
 }
 
 export async function apiGetMe(accessToken: string): Promise<{ user: AuthUser }> {
@@ -925,6 +985,17 @@ export async function apiTriggerSystemUpdate(
     method: 'POST',
     body: JSON.stringify({ rebuildEvenIfCurrent: Boolean(options.rebuildEvenIfCurrent) }),
   });
+}
+
+export async function apiDismissSystemUpdateError(
+  accessToken: string,
+): Promise<SystemUpdateStatus> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<SystemUpdateStatus>(
+    `${authBase}/api/admin/system/update/dismiss`,
+    accessToken,
+    { method: 'POST' },
+  );
 }
 
 export async function apiFetchAppVersion(

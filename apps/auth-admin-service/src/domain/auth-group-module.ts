@@ -231,6 +231,7 @@ export interface AuthGroupModuleOptions {
   emailSender?: EmailSender;
   publicServerUrl?: string;
   passwordHasher?: PasswordHasher;
+  requireAdminApproval?: boolean;
   now?: () => number;
 }
 
@@ -302,6 +303,7 @@ export class AuthGroupModule {
   private readonly emailSender?: EmailSender;
   private readonly publicServerUrl: string;
   private readonly passwordHasher: PasswordHasher;
+  private readonly requireAdminApproval: boolean;
   private readonly now: () => number;
   private readonly fallbackChallenges = new Map<
     string,
@@ -315,6 +317,7 @@ export class AuthGroupModule {
     this.emailSender = options.emailSender;
     this.publicServerUrl = options.publicServerUrl ?? 'http://localhost:8080';
     this.passwordHasher = options.passwordHasher ?? defaultPasswordHasher;
+    this.requireAdminApproval = options.requireAdminApproval ?? true;
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -426,6 +429,13 @@ export class AuthGroupModule {
         }
 
         const existingCount = await tx.countAccounts();
+        if (existingCount > 0 && this.requireAdminApproval) {
+          throw new DomainError(
+            403,
+            'New accounts require Host Admin approval. Please submit an account request and wait for approval.',
+            { code: 'ADMIN_APPROVAL_REQUIRED' },
+          );
+        }
         const assignedSystemRole: SystemRole = existingCount === 0 ? 'HOST_ADMIN' : 'USER';
 
         const account = await tx.insertAccount({

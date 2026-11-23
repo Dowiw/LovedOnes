@@ -2802,7 +2802,7 @@ export function MobileMapScreen({
                                 trailDisplayMode === mode && styles.trailModePillTextActive,
                               ]}
                             >
-                              {mode === 'roads' ? 'Roads' : 'Raw'}
+                              {mode === 'roads' ? 'Clean' : 'Raw'}
                             </Text>
                           </TouchableOpacity>
                         ))}

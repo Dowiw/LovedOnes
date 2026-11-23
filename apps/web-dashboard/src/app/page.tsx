@@ -8,7 +8,9 @@ import {
   Bell,
   BellOff,
   Check,
+  CheckCircle2,
   ChevronDown,
+  Clock,
   CloudDownload,
   Compass,
   Copy,
@@ -42,9 +44,11 @@ import {
 } from 'lucide-react';
 import {
   buildExternalMapsUrls,
+  formatCountdownRemaining,
   haversineMeters,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
+  isSafeLoginBackgroundUrl,
   resolveMemberPresenceStatus,
   withMinDelay,
   type AppVersionInfo,
@@ -59,6 +63,8 @@ import {
   type MemberPresenceUpdate,
   type PlaceTransitionEvent,
   type PrivacyMode,
+  type PublicLoginConfig,
+  type RegistrationRequestItem,
   type TrailDisplayMode,
 } from '@loved-ones/shared';
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
@@ -72,6 +78,7 @@ import {
   apiCreateGroup,
   apiCreatePlace,
   apiCreateLocationRequest,
+  apiCreateRegistrationRequest,
   apiCreateShareLink,
   apiCreateTrackerToken,
   apiDeletePlace,
@@ -85,6 +92,8 @@ import {
   apiFetchLocationRequests,
   apiFetchMapJobs,
   apiFetchMapRegions,
+  apiFetchPublicConfig,
+  apiFetchRegistrationRequestStatus,
   apiGetMe,
   apiGetTrackerTokenStatus,
   apiJoinInvite,
@@ -180,6 +189,9 @@ export default function HomePage() {
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [removedToast, setRemovedToast] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
+  const [publicConfig, setPublicConfig] = useState<PublicLoginConfig | null>(null);
+  const [pendingRequest, setPendingRequest] = useState<RegistrationRequestItem | null>(null);
+  const [pendingNowMs, setPendingNowMs] = useState<number>(() => Date.now());
 
   const [forgotMode, setForgotMode] = useState(false);
   const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request');
@@ -1394,12 +1406,99 @@ export default function HomePage() {
     }
   }, [session, groupsLoaded, groups.length, invitePromptDismissed, joinQrOpen]);
 
+  const PENDING_REG_STORAGE_KEY = 'lovedones_pending_reg_request_v1';
+
+  useEffect(() => {
+    if (session) return;
+    let cancelled = false;
+    void apiFetchPublicConfig()
+      .then((cfg) => {
+        if (!cancelled) setPublicConfig(cfg);
+      })
+      .catch(() => {});
+
+    let savedId: string | undefined;
+    try {
+      savedId = window.localStorage.getItem(PENDING_REG_STORAGE_KEY) || undefined;
+    } catch {
+      savedId = undefined;
+    }
+    void apiFetchRegistrationRequestStatus(savedId)
+      .then((res) => {
+        if (cancelled || !res.request) return;
+        if (res.request.status === 'PENDING') {
+          setPendingRequest(res.request);
+        } else if (savedId) {
+          setPendingRequest(res.request);
+          try {
+            window.localStorage.removeItem(PENDING_REG_STORAGE_KEY);
+          } catch {
+            // ignore storage errors
+          }
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (session || !pendingRequest || pendingRequest.status !== 'PENDING') return;
+    const countdownTimer = window.setInterval(() => setPendingNowMs(Date.now()), 1000);
+    const pollTimer = window.setInterval(() => {
+      void apiFetchRegistrationRequestStatus(pendingRequest.id)
+        .then((res) => {
+          if (!res.request) return;
+          setPendingRequest(res.request);
+          if (res.request.status !== 'PENDING') {
+            try {
+              window.localStorage.removeItem(PENDING_REG_STORAGE_KEY);
+            } catch {
+              // ignore storage errors
+            }
+            if (res.request.status === 'APPROVED') {
+              setEmail(res.request.email);
+            }
+          }
+        })
+        .catch(() => {});
+    }, 4000);
+    return () => {
+      window.clearInterval(countdownTimer);
+      window.clearInterval(pollTimer);
+    };
+  }, [session, pendingRequest]);
+
   async function handleAuthSubmit(e: React.FormEvent) {
     e.preventDefault();
     setAuthError(null);
+    setAuthNotice(null);
     setAuthLoading(true);
     try {
       const boundToken = preAuthInvite?.token;
+      const requireApproval = publicConfig ? publicConfig.requireAdminApproval : true;
+      if (authMode === 'register' && requireApproval) {
+        const res = await withMinDelay(() =>
+          apiCreateRegistrationRequest({
+            email,
+            username,
+            password,
+            ...(boundToken ? { inviteToken: boundToken } : {}),
+          }),
+        );
+        setPendingRequest(res.request);
+        setPendingNowMs(Date.now());
+        setPreAuthInvite(null);
+        try {
+          window.localStorage.setItem(PENDING_REG_STORAGE_KEY, res.request.id);
+        } catch {
+          // ignore storage errors
+        }
+        return;
+      }
+
       const nextSession = await withMinDelay(async () => {
         const authed =
           authMode === 'login'
@@ -1418,6 +1517,7 @@ export default function HomePage() {
       });
 
       setPreAuthInvite(null);
+      setPendingRequest(null);
       setInvitePromptDismissed(Boolean(boundToken));
       setGroupsLoaded(false);
       saveSession(nextSession);
@@ -1707,10 +1807,29 @@ export default function HomePage() {
   }
 
   if (!session) {
+    const loginBgUrl = isSafeLoginBackgroundUrl(publicConfig?.loginBackgroundUrl)
+      ? publicConfig.loginBackgroundUrl
+      : null;
+    const isBootstrap = publicConfig?.bootstrapRequired === true;
+
     return (
       <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#f4f4f5] pb-[calc(1.5rem+var(--lo-safe-bottom,0px))] pl-[calc(1rem+var(--lo-safe-left,0px))] pr-[calc(1rem+var(--lo-safe-right,0px))] pt-[calc(1.5rem+var(--lo-safe-top,0px))] dark:bg-zinc-950">
-        <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl dark:bg-zinc-800/30" />
-        <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl dark:bg-zinc-800/20" />
+        {loginBgUrl ? (
+          <>
+            <img
+              src={loginBgUrl}
+              alt=""
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+            />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/25 via-black/15 to-black/40 dark:from-zinc-950/55 dark:via-zinc-950/45 dark:to-zinc-950/70" />
+          </>
+        ) : (
+          <>
+            <div className="lo-orb-drift pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-zinc-300/40 blur-3xl dark:bg-zinc-800/30" />
+            <div className="lo-orb-drift pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-zinc-200/60 blur-3xl dark:bg-zinc-800/20" />
+          </>
+        )}
 
         {removedToast && (
           <div
@@ -1956,9 +2075,95 @@ export default function HomePage() {
                       : 'text-zinc-600 dark:text-zinc-400 dark:hover:text-zinc-200'
                   }`}
                 >
-                  Create account
+                  {isBootstrap ? 'Create account' : 'Request account'}
                 </button>
               </div>
+
+              {pendingRequest && (
+                <div
+                  className={`mb-4 rounded-xl border p-4 text-xs ${
+                    pendingRequest.status === 'APPROVED'
+                      ? 'border-emerald-200 bg-emerald-50/90 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-950/60 dark:text-emerald-200'
+                      : pendingRequest.status === 'DENIED'
+                        ? 'border-rose-200 bg-rose-50/90 text-rose-800 dark:border-rose-500/30 dark:bg-rose-950/60 dark:text-rose-200'
+                        : 'border-amber-200 bg-amber-50/90 text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/50 dark:text-amber-200'
+                  }`}
+                >
+                  {pendingRequest.status === 'PENDING' ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 font-semibold">
+                        <Clock className="h-4 w-4 shrink-0" />
+                        <span>Waiting for Host Admin Approval</span>
+                      </div>
+                      <p className="leading-relaxed opacity-90">
+                        Your account request for{' '}
+                        <span className="font-semibold">{pendingRequest.username}</span> (
+                        {pendingRequest.email}) has been sent. You can sign in as soon as the Host
+                        Admin accepts it.
+                      </p>
+                      <div className="flex items-center justify-between pt-1 font-mono text-[11px] opacity-80">
+                        <span>
+                          Expires in {formatCountdownRemaining(pendingRequest.expiresAt, pendingNowMs)}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Checking...
+                        </span>
+                      </div>
+                    </div>
+                  ) : pendingRequest.status === 'APPROVED' ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 font-semibold">
+                        <CheckCircle2 className="h-4 w-4 shrink-0" />
+                        <span>Account Approved!</span>
+                      </div>
+                      <p className="leading-relaxed opacity-90">
+                        Your account ({pendingRequest.email}) has been accepted by the Host Admin.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmail(pendingRequest.email);
+                          setAuthMode('login');
+                          setPendingRequest(null);
+                        }}
+                        className="lo-press rounded-lg bg-emerald-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-800 dark:bg-emerald-500 dark:text-zinc-950 dark:hover:bg-emerald-400"
+                      >
+                        Sign in now
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1">
+                        <div className="font-semibold">
+                          {pendingRequest.status === 'DENIED'
+                            ? 'Account Request Declined'
+                            : 'Account Request Expired'}
+                        </div>
+                        <p className="opacity-90">
+                          {pendingRequest.status === 'DENIED'
+                            ? 'Your account request was declined by the Host Admin.'
+                            : 'Your previous account request expired after 24 hours. You may submit a new request.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPendingRequest(null)}
+                        className="rounded p-1 opacity-75 hover:opacity-100"
+                        aria-label="Dismiss status"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {authMode === 'register' && !isBootstrap && !pendingRequest && (
+                <div className="mb-3.5 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-[11px] leading-relaxed text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/70 dark:text-zinc-300">
+                  New accounts require Host Admin approval before you can sign in.
+                </div>
+              )}
 
               <form onSubmit={handleAuthSubmit} className="space-y-3.5">
                 <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
@@ -2028,10 +2233,14 @@ export default function HomePage() {
                     {authLoading
                       ? authMode === 'login'
                         ? 'Signing in...'
-                        : 'Creating account...'
+                        : isBootstrap
+                          ? 'Creating account...'
+                          : 'Sending request...'
                       : authMode === 'login'
                         ? 'Continue'
-                        : 'Create account'}
+                        : isBootstrap
+                          ? 'Create Host Admin account'
+                          : 'Request account'}
                   </span>
                 </button>
 
@@ -2083,7 +2292,9 @@ export default function HomePage() {
           </div>
 
           <p className="mt-3 text-center text-[11px] text-zinc-400 dark:text-zinc-500">
-            First registered account automatically becomes Host Admin.
+            {isBootstrap
+              ? 'First registered account automatically becomes Host Admin.'
+              : 'New accounts are activated after Host Admin approval.'}
           </p>
         </div>
 
@@ -3829,7 +4040,7 @@ export default function HomePage() {
           <div className="lo-float-in flex items-center gap-0.5 rounded-lg border border-zinc-200/80 bg-white/95 p-0.5 text-[10px] font-semibold shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-[11px]">
             {(
               [
-                ['roads', 'Roads'],
+                ['roads', 'Clean'],
                 ['raw', 'Raw'],
               ] as const
             ).map(([mode, label]) => (

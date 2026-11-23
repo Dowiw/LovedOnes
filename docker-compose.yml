@@ -237,6 +237,10 @@ services:
       STATE_FILE: /var/log/app/system-update.json
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-key-minimum-32-characters-long}
       ALLOW_REMOTE_SYSTEM_UPDATE: ${ALLOW_REMOTE_SYSTEM_UPDATE:-true}
+      SYSTEM_UPDATE_BUILD_TIMEOUT_MS: ${SYSTEM_UPDATE_BUILD_TIMEOUT_MS:-1800000}
+      SYSTEM_UPDATE_UP_TIMEOUT_MS: ${SYSTEM_UPDATE_UP_TIMEOUT_MS:-600000}
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
     volumes:
       - .:/repo
       - ./logs:/var/log/app

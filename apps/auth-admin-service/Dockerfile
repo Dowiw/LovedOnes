@@ -1,5 +1,6 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
+ENV PNPM_STORE_DIR=/pnpm/store
 RUN apk add --no-cache python3 make g++
 RUN corepack enable && corepack prepare pnpm@11.15.0 --activate
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
@@ -10,7 +11,8 @@ COPY apps/realtime-service/package.json ./apps/realtime-service/
 COPY apps/web-dashboard/package.json ./apps/web-dashboard/
 COPY apps/map-service/package.json ./apps/map-service/
 COPY apps/mobile-app/package.json apps/mobile-app/app.json ./apps/mobile-app/
-RUN pnpm install --frozen-lockfile --filter @loved-ones/auth-admin-service...
+RUN --mount=type=cache,id=lovedones-pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --filter @loved-ones/auth-admin-service... --store-dir /pnpm/store
 COPY packages/shared ./packages/shared
 COPY packages/db ./packages/db
 COPY apps/auth-admin-service ./apps/auth-admin-service

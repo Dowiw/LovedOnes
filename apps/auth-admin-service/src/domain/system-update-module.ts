@@ -13,6 +13,7 @@ export interface SystemUpdateDriver {
     statusCode: number;
     status: SystemUpdateStatus;
   }>;
+  clearError?(): Promise<SystemUpdateStatus>;
 }
 
 export interface SystemUpdateModuleOptions {
@@ -145,6 +146,30 @@ class HttpSystemUpdateDriver implements SystemUpdateDriver {
       status: SystemUpdateStatusSchema.parse(payload),
     };
   }
+
+  async clearError(): Promise<SystemUpdateStatus> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/clear`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      throw new DomainError(503, 'System updater service is unavailable');
+    }
+
+    const payload = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) {
+      throw new DomainError(
+        res.status >= 500 ? 502 : res.status,
+        payload.error ?? `Failed to clear system update status (${res.status})`,
+      );
+    }
+    return SystemUpdateStatusSchema.parse(payload);
+  }
 }
 
 /**
@@ -202,5 +227,21 @@ export class SystemUpdateModule {
       );
     }
     return this.driver.applyUpdate(parsed.data);
+  }
+
+  async dismissError(): Promise<SystemUpdateStatus> {
+    if (!this.allowRemoteUpdate) {
+      throw new DomainError(403, 'Remote system updates are disabled on this server');
+    }
+    if (!this.driver) {
+      throw new DomainError(
+        503,
+        'Remote system updater sidecar is not configured in this runtime',
+      );
+    }
+    if (!this.driver.clearError) {
+      return this.driver.getStatus(false);
+    }
+    return this.driver.clearError();
   }
 }

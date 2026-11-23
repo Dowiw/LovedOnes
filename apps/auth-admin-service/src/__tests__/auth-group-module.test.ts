@@ -267,7 +267,11 @@ const fastHasher: PasswordHasher = {
   },
 };
 
-function createTestHarness(publicServerUrl = 'https://track.example.com', nowMs = 1_700_000_000_000) {
+function createTestHarness(
+  publicServerUrl = 'https://track.example.com',
+  nowMs = 1_700_000_000_000,
+  options?: { requireAdminApproval?: boolean },
+) {
   let currentMs = nowMs;
   const store = createInMemoryAuthGroupStore();
   const savedSessions: string[] = [];
@@ -300,6 +304,7 @@ function createTestHarness(publicServerUrl = 'https://track.example.com', nowMs 
     tokenService,
     publicServerUrl,
     passwordHasher: fastHasher,
+    requireAdminApproval: options?.requireAdminApproval ?? false,
     now: () => currentMs,
   });
 
@@ -316,6 +321,28 @@ function createTestHarness(publicServerUrl = 'https://track.example.com', nowMs 
 }
 
 describe('AuthGroupModule domain interface', () => {
+  it('blocks direct registration after the first HOST_ADMIN when requireAdminApproval is enabled (default)', async () => {
+    const { mod } = createTestHarness(undefined, undefined, { requireAdminApproval: true });
+
+    const first = await mod.register({
+      email: 'host@example.com',
+      username: 'Host',
+      password: 'Password1234',
+    });
+    expect(first.user.role).toBe('HOST_ADMIN');
+
+    await expect(
+      mod.register({
+        email: 'member@example.com',
+        username: 'Member',
+        password: 'Password1234',
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      details: { code: 'ADMIN_APPROVAL_REQUIRED' },
+    });
+  });
+
   it('promotes first account to HOST_ADMIN, assigns USER to second, and rejects duplicate email', async () => {
     const { mod } = createTestHarness();
 
