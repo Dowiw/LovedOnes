@@ -1211,7 +1211,9 @@ describe('@loved-ones/shared', () => {
         },
       ],
     });
-    const ptFeatures = geo.features.filter((f) => f.geometry.type === 'Point');
+    const ptFeatures = geo.features.filter(
+      (f) => f.geometry.type === 'Point' && f.properties.kind === 'stop',
+    );
     expect(ptFeatures).toHaveLength(3);
     expect(ptFeatures[0]?.properties.stayDurationMs).toBe(45 * 60_000);
     expect(ptFeatures[0]?.properties.durationLabel).toBe('45m');
@@ -1306,5 +1308,65 @@ describe('@loved-ones/shared', () => {
     );
     // Unweighted mean would drift 20.0m north; inverse-variance drifts <0.4m!
     expect(driftFromTrueMeters).toBeLessThan(1.0);
+
+    // Chronological node-to-node chevrons show outbound travel direction (~90° East)
+    // and mark overlapping return-pass chevrons (~270° West) with isReturnPass + right-hand offset.
+    const roundTripGeo = buildTrailGeoJsonFeatures({
+      trails: [],
+      matchedTrails: [
+        {
+          userId: 'rt-user',
+          username: 'RoundTrip',
+          stops: [
+            {
+              userId: 'rt-user',
+              username: 'RoundTrip',
+              latitude: 52.52,
+              longitude: 13.4,
+              pingCount: 1,
+              firstRecordedAt: '2026-11-23T09:00:00.000Z',
+              lastRecordedAt: '2026-11-23T09:00:00.000Z',
+              isFuzzed: false,
+            },
+            {
+              userId: 'rt-user',
+              username: 'RoundTrip',
+              latitude: 52.52,
+              longitude: 13.404,
+              pingCount: 1,
+              firstRecordedAt: '2026-11-23T09:05:00.000Z',
+              lastRecordedAt: '2026-11-23T09:10:00.000Z',
+              isFuzzed: false,
+            },
+          ],
+          hasRoadMatches: true,
+          segments: [
+            {
+              // Outbound ~270m east then return ~270m west along the exact same street
+              kind: 'road',
+              coordinates: [
+                [13.4, 52.52],
+                [13.404, 52.52],
+                [13.4, 52.52],
+              ],
+            },
+          ],
+        },
+      ],
+      mode: 'roads',
+    });
+    const chevrons = roundTripGeo.features.filter((f) => f.properties.kind === 'chevron');
+    expect(chevrons.length).toBeGreaterThanOrEqual(4);
+    const eastChevrons = chevrons.filter(
+      (c) => Math.abs((c.properties.bearingDeg ?? 0) - 90) < 5,
+    );
+    const westChevrons = chevrons.filter(
+      (c) => Math.abs((c.properties.bearingDeg ?? 0) - 270) < 5,
+    );
+    expect(eastChevrons.length).toBeGreaterThanOrEqual(2);
+    expect(westChevrons.length).toBeGreaterThanOrEqual(2);
+    // Outbound progress precedes return progress chronologically
+    expect(eastChevrons[0]!.properties.progress!).toBeLessThan(westChevrons[0]!.properties.progress!);
+    expect(westChevrons.some((c) => c.properties.isReturnPass === true)).toBe(true);
   });
 });

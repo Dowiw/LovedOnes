@@ -2095,7 +2095,7 @@ export function MobileMapScreen({
           data={memberTrailGeoJson}
           onPress={(ev) => {
             const pointFeat = ev.nativeEvent.features?.find(
-              (f) => f?.geometry?.type === 'Point',
+              (f) => f?.geometry?.type === 'Point' && f?.properties?.kind !== 'chevron',
             );
             if (!pointFeat || pointFeat.geometry.type !== 'Point') return;
             ev.stopPropagation();
@@ -2193,9 +2193,30 @@ export function MobileMapScreen({
             }}
           />
           <Layer
+            id="member-trail-chevrons"
+            type="symbol"
+            filter={['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'chevron']]}
+            layout={{
+              'text-field': '›',
+              'text-font': ['PlusJakartaSans-SemiBold'],
+              'text-size': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 15, 17, 17],
+              'text-rotate': ['-', ['coalesce', ['get', 'bearingDeg'], 0], 90],
+              'text-rotation-alignment': 'map',
+              'text-keep-upright': false,
+              'text-allow-overlap': true,
+              'text-ignore-placement': true,
+            }}
+            paint={{
+              'text-color': resolvedMapTheme === 'dark' ? '#09090b' : '#ffffff',
+              'text-halo-color': resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+              'text-halo-width': 1.2,
+              'text-opacity': ['interpolate', ['linear'], ['coalesce', ['get', 'progress'], 1], 0, 0.72, 1, 0.98],
+            }}
+          />
+          <Layer
             id="member-trail-points"
             type="circle"
-            filter={['==', ['geometry-type'], 'Point']}
+            filter={['all', ['==', ['geometry-type'], 'Point'], ['!=', ['get', 'kind'], 'chevron']]}
             paint={{
               'circle-radius': [
                 'case',
