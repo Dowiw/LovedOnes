@@ -1001,6 +1001,76 @@ function filterRelevantMovingVisits(visits: readonly TrailStopVisit[]): TrailSto
   return kept;
 }
 
+function minCandidateBearingError(bearingDeg: number, candidates: readonly SnapCandidate[]): number | null {
+  if (candidates.length === 0) return null;
+  let best = Infinity;
+  for (const c of candidates) {
+    const err = undirectedAngleDiffDeg(bearingDeg, c.bearingDeg);
+    if (err < best) best = err;
+  }
+  return best;
+}
+
+/**
+ * Uses the PMTiles road/rail vector bearings at (A, B, C) to drop off-angle
+ * triangle spikes even when GPS `accuracy` is missing or misreported: if chord
+ * A->C aligns closely with the underlying road/rail graph at both ends while B
+ * juts off-corridor and legs A->B / B->C cut across map geometry, B is noise.
+ */
+function filterOffAngleTriangleVisits(
+  visits: readonly TrailStopVisit[],
+  candidatesByStop: readonly SnapCandidate[][],
+): { visits: TrailStopVisit[]; candidatesByStop: SnapCandidate[][] } {
+  if (visits.length < 3) {
+    return { visits: [...visits], candidatesByStop: [...candidatesByStop] };
+  }
+
+  const keptVisits: TrailStopVisit[] = [visits[0]];
+  const keptCands: SnapCandidate[][] = [candidatesByStop[0]];
+
+  for (let i = 1; i < visits.length - 1; i += 1) {
+    const prev = keptVisits[keptVisits.length - 1];
+    const prevCands = keptCands[keptCands.length - 1];
+    const curr = visits[i];
+    const currCands = candidatesByStop[i];
+    const next = visits[i + 1];
+    const nextCands = candidatesByStop[i + 1];
+
+    if (!curr.isDwell) {
+      const crossTrack = visitCrossTrackMeters(prev, curr, next);
+      if (crossTrack > 55) {
+        const bearingAB = segmentBearingDeg(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+        const bearingBC = segmentBearingDeg(curr.latitude, curr.longitude, next.latitude, next.longitude);
+        const bearingAC = segmentBearingDeg(prev.latitude, prev.longitude, next.latitude, next.longitude);
+        const turnAngleAtB = directedAngleDiffDeg(bearingAB, bearingBC);
+
+        const chordAlignA = minCandidateBearingError(bearingAC, prevCands);
+        const chordAlignC = minCandidateBearingError(bearingAC, nextCands);
+        const legABAlign = minCandidateBearingError(bearingAB, [...prevCands, ...currCands]);
+        const legBCAlign = minCandidateBearingError(bearingBC, [...currCands, ...nextCands]);
+
+        const chordMatchesRoad =
+          chordAlignA !== null && chordAlignC !== null && chordAlignA <= 18 && chordAlignC <= 18;
+        const legsCutAcrossMap =
+          (legABAlign ?? 90) > 25 && (legBCAlign ?? 90) > 25;
+        const sharpOffAngleReversal =
+          turnAngleAtB >= 80 && ((legABAlign ?? 90) > 22 || (legBCAlign ?? 90) > 22);
+
+        if (chordMatchesRoad && turnAngleAtB >= 35 && (legsCutAcrossMap || sharpOffAngleReversal)) {
+          continue;
+        }
+      }
+    }
+
+    keptVisits.push(curr);
+    keptCands.push(currCands);
+  }
+
+  keptVisits.push(visits[visits.length - 1]);
+  keptCands.push(candidatesByStop[visits.length - 1]);
+  return { visits: keptVisits, candidatesByStop: keptCands };
+}
+
 export class RoadTrailMatcher {
   private readonly tileProvider: RoadTileProvider;
   private readonly ownsProvider: boolean;
@@ -1065,24 +1135,31 @@ export class RoadTrailMatcher {
 
     const midLat = (paddedBbox.minLat + paddedBbox.maxLat) / 2;
     const graph = buildRoadGraph(roadFeatures, midLat);
-    const candidatesByStop = visits.map((v) => findSnapCandidates(graph, v.latitude, v.longitude));
+    const rawCandidatesByStop = visits.map((v) => findSnapCandidates(graph, v.latitude, v.longitude));
+    const pruned = filterOffAngleTriangleVisits(visits, rawCandidatesByStop);
+    const activeVisits = pruned.visits;
+    const candidatesByStop = pruned.candidatesByStop;
+
+    if (activeVisits.length < 2) {
+      return { segments: [], visits: activeVisits, hasRoadMatches: false };
+    }
 
     // Viterbi DP across candidate snaps per stop, supporting turn-angle penalties and 1-step outlier skipping.
-    const chosenCandidate: Array<SnapCandidate | null> = new Array(visits.length).fill(null);
-    const skippedVisit = new Array<boolean>(visits.length).fill(false);
+    const chosenCandidate: Array<SnapCandidate | null> = new Array(activeVisits.length).fill(null);
+    const skippedVisit = new Array<boolean>(activeVisits.length).fill(false);
     const legRoutes: Array<{ route: RoutedLegResult; nextIdx: number } | null> = new Array(
-      visits.length,
+      activeVisits.length,
     ).fill(null);
 
     let chainStart = 0;
-    while (chainStart < visits.length) {
+    while (chainStart < activeVisits.length) {
       if (candidatesByStop[chainStart].length === 0) {
         chainStart += 1;
         continue;
       }
 
       let chainEnd = chainStart;
-      while (chainEnd + 1 < visits.length && candidatesByStop[chainEnd + 1].length > 0) {
+      while (chainEnd + 1 < activeVisits.length && candidatesByStop[chainEnd + 1].length > 0) {
         chainEnd += 1;
       }
 
@@ -1099,7 +1176,7 @@ export class RoadTrailMatcher {
       const dpBearing: Array<Array<number | null>> = [];
 
       const firstCands = candidatesByStop[chainStart];
-      dpCost.push(firstCands.map((c) => emissionCost(c, visits[chainStart], visits[chainStart].maxSpeedMps)));
+      dpCost.push(firstCands.map((c) => emissionCost(c, activeVisits[chainStart], activeVisits[chainStart].maxSpeedMps)));
       dpPrevCand.push(firstCands.map(() => -1));
       dpPrevStepOffset.push(firstCands.map(() => 0));
       dpRoute.push(firstCands.map(() => null));
@@ -1107,12 +1184,12 @@ export class RoadTrailMatcher {
 
       let brokenAt: number | null = null;
       for (let idx = chainStart + 1; idx <= chainEnd; idx += 1) {
-        const currVisit = visits[idx];
+        const currVisit = activeVisits[idx];
         const currCands = candidatesByStop[idx];
         const prevRow = dpCost[dpCost.length - 1];
         const prevBearings = dpBearing[dpBearing.length - 1];
 
-        const prevVisit = visits[idx - 1];
+        const prevVisit = activeVisits[idx - 1];
         const straightDist = haversineMeters(
           prevVisit.latitude,
           prevVisit.longitude,
@@ -1127,8 +1204,8 @@ export class RoadTrailMatcher {
         const canSkipPrev =
           idx >= chainStart + 2 &&
           !prevVisit.isDwell &&
-          !visits[idx - 2].isDwell;
-        const skipPrevVisit = canSkipPrev ? visits[idx - 2] : null;
+          !activeVisits[idx - 2].isDwell;
+        const skipPrevVisit = canSkipPrev ? activeVisits[idx - 2] : null;
         const skipStraightDist = skipPrevVisit
           ? haversineMeters(
               skipPrevVisit.latitude,
@@ -1308,7 +1385,7 @@ export class RoadTrailMatcher {
     };
 
     const maybeAddSpur = (visit: TrailStopVisit, snapped: SnapCandidate | null) => {
-      if (!snapped || (!visit.isDwell && visits.length > 2)) return;
+      if (!snapped || (!visit.isDwell && activeVisits.length > 2)) return;
       const offset = haversineMeters(visit.latitude, visit.longitude, snapped.lat, snapped.lon);
       if (offset <= this.spurThresholdMeters) return;
       const sLon = Number(snapped.lon.toFixed(6));
@@ -1326,26 +1403,26 @@ export class RoadTrailMatcher {
     };
 
     let i = 0;
-    while (i < visits.length - 1) {
+    while (i < activeVisits.length - 1) {
       if (skippedVisit[i]) {
         i += 1;
         continue;
       }
       const legEntry = legRoutes[i];
       if (legEntry && legEntry.route.coordinates.length >= 2) {
-        maybeAddSpur(visits[i], chosenCandidate[i]);
+        maybeAddSpur(activeVisits[i], chosenCandidate[i]);
         pendingRoadCoords.push(legEntry.route.coordinates);
         pendingRoadKind = pendingRoadKind ?? legEntry.route.dominantRoadKind;
-        maybeAddSpur(visits[legEntry.nextIdx], chosenCandidate[legEntry.nextIdx]);
+        maybeAddSpur(activeVisits[legEntry.nextIdx], chosenCandidate[legEntry.nextIdx]);
         i = legEntry.nextIdx;
       } else {
         flushRoad();
         let nextIdx = i + 1;
-        while (nextIdx < visits.length - 1 && skippedVisit[nextIdx]) {
+        while (nextIdx < activeVisits.length - 1 && skippedVisit[nextIdx]) {
           nextIdx += 1;
         }
-        const a = visits[i];
-        const b = visits[nextIdx];
+        const a = activeVisits[i];
+        const b = activeVisits[nextIdx];
         segments.push({
           kind: 'direct',
           coordinates: [
@@ -1359,9 +1436,9 @@ export class RoadTrailMatcher {
     flushRoad();
 
     const keptVisits: TrailStopVisit[] = [];
-    for (let idx = 0; idx < visits.length; idx += 1) {
+    for (let idx = 0; idx < activeVisits.length; idx += 1) {
       if (skippedVisit[idx]) continue;
-      const v = visits[idx];
+      const v = activeVisits[idx];
       const snapped = chosenCandidate[idx];
       if (snapped && !v.isDwell) {
         keptVisits.push({

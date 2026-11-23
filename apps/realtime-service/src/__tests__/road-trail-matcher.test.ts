@@ -458,5 +458,60 @@ describe('RoadTrailMatcher', () => {
       },
     ]);
     expect(dwellTrip.segments.filter((s) => s.kind === 'spur')).toHaveLength(1);
+
+    // Off-angle triangle bounce is dropped purely from PMTiles road/rail alignment even when accuracy is reported crisp (15m),
+    // while a real 90-degree street corner is preserved.
+    const cornerVsSpikeMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        // East-west corridor
+        { kind: 'major_road', coords: [[13.4, 52.52], [13.408, 52.52]] },
+        // Intersecting north-south avenue at 13.408
+        { kind: 'major_road', coords: [[13.408, 52.52], [13.408, 52.524]] },
+      ]),
+    });
+    const [angleMatch] = await cornerVsSpikeMatcher.matchTrails([
+      {
+        userId: 'angle-user',
+        username: 'Angle',
+        latitude: 52.52,
+        longitude: 13.4005,
+        recordedAt: '2026-11-22T16:00:00.000Z',
+        speed: 10,
+        accuracy: 15,
+      },
+      {
+        // Off-angle ~100m north bounce with misreported crisp 15m accuracy
+        userId: 'angle-user',
+        username: 'Angle',
+        latitude: 52.5209,
+        longitude: 13.4035,
+        recordedAt: '2026-11-22T16:00:20.000Z',
+        speed: 10,
+        accuracy: 15,
+      },
+      {
+        // Real corner at (52.52, 13.408)
+        userId: 'angle-user',
+        username: 'Angle',
+        latitude: 52.52,
+        longitude: 13.408,
+        recordedAt: '2026-11-22T16:00:45.000Z',
+        speed: 10,
+        accuracy: 15,
+      },
+      {
+        // Turning north along intersecting street
+        userId: 'angle-user',
+        username: 'Angle',
+        latitude: 52.5235,
+        longitude: 13.408,
+        recordedAt: '2026-11-22T16:01:20.000Z',
+        speed: 10,
+        accuracy: 15,
+      },
+    ]);
+    expect(angleMatch.visits).toHaveLength(3);
+    expect(angleMatch.visits?.some((v) => v.latitude > 52.5205 && v.longitude < 13.406)).toBe(false);
+    expect(angleMatch.visits?.[2]?.latitude).toBeCloseTo(52.5235, 3);
   });
 });
