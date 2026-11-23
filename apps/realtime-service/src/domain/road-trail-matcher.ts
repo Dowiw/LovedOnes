@@ -31,7 +31,7 @@ const NODE_MERGE_DISTANCE_METERS = 2.5;
 const SEGMENT_GRID_CELL_METERS = 80;
 const ARCHIVE_REFRESH_INTERVAL_MS = 15_000;
 const EXCLUDED_ROAD_KINDS = new Set(['ferry']);
-const MAX_COARSE_MOVING_ACCURACY_METERS = 150;
+const MAX_COARSE_MOVING_ACCURACY_METERS = 85;
 
 export interface RoadEdgeFeature {
   coords: [number, number][];
@@ -960,6 +960,47 @@ export interface RoadTrailMatcherOptions {
  * regional `.pmtiles` archives using bounded A* + Viterbi map matching, while
  * leaving FUZZED trails direct and bridging >15 m off-road offsets with spurs.
  */
+function visitCrossTrackMeters(a: TrailStopVisit, b: TrailStopVisit, c: TrailStopVisit): number {
+  const cosLat = Math.max(0.15, Math.cos((a.latitude * Math.PI) / 180));
+  const cx = (c.longitude - a.longitude) * METERS_PER_DEGREE_LAT * cosLat;
+  const cy = (c.latitude - a.latitude) * METERS_PER_DEGREE_LAT;
+  const bx = (b.longitude - a.longitude) * METERS_PER_DEGREE_LAT * cosLat;
+  const by = (b.latitude - a.latitude) * METERS_PER_DEGREE_LAT;
+  const lenSq = cx * cx + cy * cy;
+  if (lenSq < 1e-6) return Math.hypot(bx, by);
+  const t = Math.max(0, Math.min(1, (bx * cx + by * cy) / lenSq));
+  return Math.hypot(bx - t * cx, by - t * cy);
+}
+
+/**
+ * Anchors on stationary dwells and trip endpoints, removing intermediate
+ * coarse moving waypoints that jump off the local corridor chord without
+ * contributing genuine path progression toward the next anchor.
+ */
+function filterRelevantMovingVisits(visits: readonly TrailStopVisit[]): TrailStopVisit[] {
+  if (visits.length < 3) return [...visits];
+  const kept: TrailStopVisit[] = [visits[0]];
+  for (let i = 1; i < visits.length - 1; i += 1) {
+    const prev = kept[kept.length - 1];
+    const curr = visits[i];
+    const next = visits[i + 1];
+    if (!curr.isDwell) {
+      const acc = curr.accuracyMeters;
+      const crossTrack = visitCrossTrackMeters(prev, curr, next);
+      const dAB = haversineMeters(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+      const dBC = haversineMeters(curr.latitude, curr.longitude, next.latitude, next.longitude);
+      const dAC = haversineMeters(prev.latitude, prev.longitude, next.latitude, next.longitude);
+      const detour = dAB + dBC - dAC;
+      if (typeof acc === 'number' && Number.isFinite(acc) && acc >= 65 && crossTrack > 70 && detour > 55) {
+        continue;
+      }
+    }
+    kept.push(curr);
+  }
+  kept.push(visits[visits.length - 1]);
+  return kept;
+}
+
 export class RoadTrailMatcher {
   private readonly tileProvider: RoadTileProvider;
   private readonly ownsProvider: boolean;
@@ -983,11 +1024,12 @@ export class RoadTrailMatcher {
     this.maxCachedResults = options.maxCachedResults ?? 128;
   }
 
-  private async matchSingleTrip(visits: readonly TrailStopVisit[]): Promise<{
+  private async matchSingleTrip(rawVisits: readonly TrailStopVisit[]): Promise<{
     segments: TrailPathSegment[];
     visits: TrailStopVisit[];
     hasRoadMatches: boolean;
   }> {
+    const visits = filterRelevantMovingVisits(rawVisits);
     if (visits.length < 2) {
       return { segments: [], visits: [...visits], hasRoadMatches: false };
     }

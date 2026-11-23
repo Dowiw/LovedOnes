@@ -157,6 +157,23 @@ export function isNullIsland(latitude: number, longitude: number): boolean {
   return Math.abs(latitude) < 0.0001 && Math.abs(longitude) < 0.0001;
 }
 
+function crossTrackMeters(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number },
+  c: { latitude: number; longitude: number },
+): number {
+  const cosLat = Math.max(0.15, Math.cos((a.latitude * Math.PI) / 180));
+  const mLat = 111_320;
+  const cx = (c.longitude - a.longitude) * mLat * cosLat;
+  const cy = (c.latitude - a.latitude) * mLat;
+  const bx = (b.longitude - a.longitude) * mLat * cosLat;
+  const by = (b.latitude - a.latitude) * mLat;
+  const lenSq = cx * cx + cy * cy;
+  if (lenSq < 1e-6) return Math.hypot(bx, by);
+  const t = Math.max(0, Math.min(1, (bx * cx + by * cy) / lenSq));
+  return Math.hypot(bx - t * cx, by - t * cy);
+}
+
 /**
  * Drops Null Island (0, 0) glitches, coarse fixes exceeding maxAccuracyMeters,
  * and impossible intra-batch velocity teleports, returning surviving points
@@ -231,8 +248,11 @@ export function filterAnomalousLocationPoints<
         const detourMeters = dAB + dBC - dAC;
         const detourRatio = (dAB + dBC) / Math.max(dAC, 1);
         const impliedPathSpeed = (dAB + dBC) / dtWindowSec;
+        const crossTrack = crossTrackMeters(prev, curr, next);
         const isCoarseLateralBounce =
-          currAcc !== null && currAcc >= 65 && detourRatio > 2.2 && detourMeters > 110;
+          currAcc !== null &&
+          currAcc >= 65 &&
+          ((detourRatio > 2.2 && detourMeters > 110) || (crossTrack > 75 && detourMeters > 60));
         const isImpossibleLateralSpike =
           detourRatio > 2.8 && detourMeters > 160 && impliedPathSpeed > 45;
         if (isCoarseLateralBounce || isImpossibleLateralSpike) {

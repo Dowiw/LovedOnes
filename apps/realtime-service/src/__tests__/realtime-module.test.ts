@@ -1104,14 +1104,27 @@ describe('RealtimeModule domain interface', () => {
         recordedAt: '2026-11-22T12:00:15.000Z',
       },
       {
+        // Fast tram horizontal travel (~340m in 30s) with 120m coarse perpendicular bounce
         latitude: 52.51,
         longitude: 13.522,
         accuracy: 10,
         recordedAt: '2026-11-22T12:00:30.000Z',
       },
+      {
+        latitude: 52.5085,
+        longitude: 13.525,
+        accuracy: 120,
+        recordedAt: '2026-11-22T12:00:45.000Z',
+      },
+      {
+        latitude: 52.5099,
+        longitude: 13.5276,
+        accuracy: 12,
+        recordedAt: '2026-11-22T12:01:00.000Z',
+      },
     ]);
-    expect(filtered).toHaveLength(2);
-    expect(filtered.map((p) => p.longitude)).toEqual([13.52, 13.522]);
+    expect(filtered).toHaveLength(3);
+    expect(filtered.map((p) => p.longitude)).toEqual([13.52, 13.522, 13.5276]);
 
     // Real 90-degree turn stays intact
     const corner = filterAnomalousLocationPoints([
