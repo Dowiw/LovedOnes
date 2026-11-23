@@ -366,6 +366,8 @@ export class RealtimeModule {
   private readonly onPlaceTransition?: (event: PlaceTransitionEvent) => void;
   private readonly roadMatcher?: RoadTrailMatcher;
   private readonly onLocationIngested?: (userId: string, inserted: number) => Promise<void>;
+  private readonly lastTrailPrewarmByGroup = new Map<string, number>();
+  private readonly prewarmInFlightByGroup = new Set<string>();
 
   constructor(options: RealtimeModuleOptions) {
     this.store = options.store;
@@ -625,14 +627,30 @@ export class RealtimeModule {
       this.broadcaster.broadcastLocation(m.groupId, broadcast);
     }
 
-    // Pre-warm the matched trail cache in the background so opening Trails on Web/Mobile is instant
+    // Coalesce background trail cache pre-warming to at most once every 45s per group so
+    // frequent tracker batches never saturate low-power CPUs or delay live /locations queries.
     if (this.roadMatcher && memberships.length > 0) {
-      setImmediate(() => {
-        for (const m of memberships) {
-          if (m.role === 'SPECTATOR' || m.privacy === 'GHOST') continue;
-          void this.getGroupTrailsWithMatches(user, m.groupId, {}).catch(() => {});
+      const nowMs = this.now();
+      for (const m of memberships) {
+        if (m.role === 'SPECTATOR' || m.privacy === 'GHOST') continue;
+        const lastPrewarm = this.lastTrailPrewarmByGroup.get(m.groupId) ?? 0;
+        if (
+          this.prewarmInFlightByGroup.has(m.groupId) ||
+          nowMs - lastPrewarm < 45_000
+        ) {
+          continue;
         }
-      });
+        this.lastTrailPrewarmByGroup.set(m.groupId, nowMs);
+        this.prewarmInFlightByGroup.add(m.groupId);
+        const timer = setTimeout(() => {
+          void this.getGroupTrailsWithMatches(user, m.groupId, {})
+            .catch(() => {})
+            .finally(() => {
+              this.prewarmInFlightByGroup.delete(m.groupId);
+            });
+        }, 150);
+        if (typeof timer.unref === 'function') timer.unref();
+      }
     }
 
     return inserted;

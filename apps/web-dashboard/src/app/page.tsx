@@ -942,6 +942,9 @@ export default function HomePage() {
     socket.on('connect', () => {
       if (activeGroup) {
         socket.emit('group:join', activeGroup.id);
+        void apiFetchGroupLocations(session.accessToken, activeGroup.id)
+          .then(setLocations)
+          .catch(() => {});
       }
       void apiFetchAppVersion(WEB_APP_VERSION, 'web')
         .then((info) => {
@@ -1195,9 +1198,21 @@ export default function HomePage() {
       prev && otherMembers.some((m) => m.userId === prev) ? prev : otherMembers[0]?.userId ?? '',
     );
 
-    void apiFetchGroupLocations(session.accessToken, activeGroup.id)
-      .then(setLocations)
-      .catch(() => setLocations([]));
+    let cancelled = false;
+    let locationsRetryTimer: number | null = null;
+    const loadLocations = (attempt = 0) => {
+      void apiFetchGroupLocations(session.accessToken, activeGroup.id)
+        .then((locs) => {
+          if (!cancelled) setLocations(locs);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (attempt < 2) {
+            locationsRetryTimer = window.setTimeout(() => loadLocations(attempt + 1), 2000);
+          }
+        });
+    };
+    loadLocations();
     void apiFetchGroupMessages(session.accessToken, activeGroup.id)
       .then(setMessages)
       .catch(() => setMessages([]));
@@ -1213,13 +1228,24 @@ export default function HomePage() {
     setPlaceScopeGroupId(activeGroup.myRole === 'ADMIN' ? activeGroup.id : 'private');
     void apiFetchAccessiblePlaces(session.accessToken, activeGroup.id)
       .then((res) => {
-        setPlaces(res.places);
-        setPlaceTransitions(res.recentTransitions);
+        if (!cancelled) {
+          setPlaces(res.places);
+          setPlaceTransitions(res.recentTransitions);
+        }
       })
       .catch(() => {
-        setPlaces([]);
-        setPlaceTransitions([]);
+        if (!cancelled) {
+          setPlaces([]);
+          setPlaceTransitions([]);
+        }
       });
+
+    return () => {
+      cancelled = true;
+      if (locationsRetryTimer !== null) {
+        window.clearTimeout(locationsRetryTimer);
+      }
+    };
   }, [session, activeGroup]);
 
   // Load 24h trails when user switches map view to Trails

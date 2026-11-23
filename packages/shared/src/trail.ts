@@ -84,7 +84,7 @@ export interface TrailGeoJsonFeature {
     | { type: 'LineString'; coordinates: [number, number][] }
     | { type: 'Point'; coordinates: [number, number] };
   properties: {
-    kind: 'stop' | TrailSegmentKind;
+    kind: 'stop' | 'chevron' | TrailSegmentKind;
     userId: string;
     username: string;
     pingCount?: number;
@@ -97,6 +97,10 @@ export interface TrailGeoJsonFeature {
     matchedPlaceName?: string | null;
     matchedPlaceIsPrivate?: boolean;
     roadKind?: string;
+    bearingDeg?: number;
+    progress?: number;
+    isReturnPass?: boolean;
+    segmentOrder?: number;
   };
 }
 
@@ -924,6 +928,170 @@ function appendUserPointFeatures(
   return count;
 }
 
+function computeCompassBearingDeg(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const cosLat = Math.max(0.15, Math.cos((((lat1 + lat2) * 0.5) * Math.PI) / 180));
+  const dx = (lon2 - lon1) * cosLat;
+  const dy = lat2 - lat1;
+  if (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12) return 0;
+  const deg = (Math.atan2(dx, dy) * 180) / Math.PI;
+  return Number((((deg % 360) + 360) % 360).toFixed(1));
+}
+
+function directedBearingDiffDeg(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360;
+  return diff > 180 ? 360 - diff : diff;
+}
+
+const CHEVRON_SPACING_METERS = 130;
+const CHEVRON_MIN_SEGMENT_METERS = 42;
+const CHEVRON_STOP_CLEARANCE_METERS = 26;
+const CHEVRON_SAME_DIR_CLEARANCE_METERS = 85;
+const CHEVRON_OPPOSITE_STAGGER_METERS = 34;
+
+/**
+ * Generates chronological inline directional chevron Point features along a user's
+ * trail segments from earlier nodes to later nodes, staggering return-pass arrows
+ * into open gaps along the line so outbound and return directions read cleanly without clutter.
+ */
+function appendTrailChevronFeatures(
+  features: TrailGeoJsonFeature[],
+  userId: string,
+  username: string,
+  lineSegments: readonly { kind: TrailSegmentKind; coordinates: readonly [number, number][] }[],
+  stopCoords: readonly [number, number][],
+): void {
+  const routedSegments = lineSegments.filter(
+    (s) => (s.kind === 'road' || s.kind === 'direct') && s.coordinates.length >= 2,
+  );
+  if (routedSegments.length === 0) return;
+
+  const segTotals: number[] = [];
+  let grandTotalMeters = 0;
+  for (const seg of routedSegments) {
+    let segLen = 0;
+    for (let i = 0; i < seg.coordinates.length - 1; i += 1) {
+      const [lonA, latA] = seg.coordinates[i];
+      const [lonB, latB] = seg.coordinates[i + 1];
+      segLen += haversineMeters(latA, lonA, latB, lonB);
+    }
+    segTotals.push(segLen);
+    grandTotalMeters += segLen;
+  }
+  if (grandTotalMeters < CHEVRON_MIN_SEGMENT_METERS) return;
+
+  const placed: Array<{ lon: number; lat: number; bearingDeg: number }> = [];
+  let cumulativeBaseMeters = 0;
+  let segmentOrder = 0;
+
+  for (let sIdx = 0; sIdx < routedSegments.length; sIdx += 1) {
+    const seg = routedSegments[sIdx];
+    const segLen = segTotals[sIdx];
+    if (segLen < CHEVRON_MIN_SEGMENT_METERS) {
+      cumulativeBaseMeters += segLen;
+      continue;
+    }
+
+    const targetsMeters: number[] = [];
+    if (segLen < CHEVRON_SPACING_METERS * 1.4) {
+      targetsMeters.push(segLen * 0.5);
+    } else {
+      for (let d = CHEVRON_SPACING_METERS * 0.45; d <= segLen - 20; d += CHEVRON_SPACING_METERS) {
+        targetsMeters.push(d);
+      }
+    }
+
+    // Walk vertices chronologically and sample each target arc-length, staggering
+    // opposite-direction passes cleanly into open gaps along the polyline.
+    let targetIdx = 0;
+    let walkedMeters = 0;
+    let staggerOffsetMeters = 0;
+    for (let i = 0; i < seg.coordinates.length - 1 && targetIdx < targetsMeters.length; i += 1) {
+      const [lonA, latA] = seg.coordinates[i];
+      const [lonB, latB] = seg.coordinates[i + 1];
+      const edgeLen = haversineMeters(latA, lonA, latB, lonB);
+      if (edgeLen < 1) continue;
+
+      while (
+        targetIdx < targetsMeters.length &&
+        targetsMeters[targetIdx] + staggerOffsetMeters <= walkedMeters + edgeLen
+      ) {
+        const sampleDistAlongSeg = targetsMeters[targetIdx] + staggerOffsetMeters;
+        const localDist = Math.max(0, sampleDistAlongSeg - walkedMeters);
+        const frac = localDist / edgeLen;
+        const sampleLon = lonA + frac * (lonB - lonA);
+        const sampleLat = latA + frac * (latB - latA);
+        const bearingDeg = computeCompassBearingDeg(latA, lonA, latB, lonB);
+
+        const nearStop = stopCoords.some(
+          ([sLon, sLat]) => haversineMeters(sampleLat, sampleLon, sLat, sLon) < CHEVRON_STOP_CLEARANCE_METERS,
+        );
+        const overlapsSameDir = placed.some(
+          (p) =>
+            haversineMeters(sampleLat, sampleLon, p.lat, p.lon) < CHEVRON_SAME_DIR_CLEARANCE_METERS &&
+            directedBearingDiffDeg(bearingDeg, p.bearingDeg) <= 45,
+        );
+        const collidesOpposite = placed.some(
+          (p) =>
+            haversineMeters(sampleLat, sampleLon, p.lat, p.lon) < CHEVRON_OPPOSITE_STAGGER_METERS &&
+            directedBearingDiffDeg(bearingDeg, p.bearingDeg) >= 115,
+        );
+
+        // If a return chevron lands right on top of an outbound chevron, stagger it ~40m along the line
+        if (!nearStop && !overlapsSameDir && collidesOpposite && staggerOffsetMeters === 0) {
+          staggerOffsetMeters = 40;
+          if (targetsMeters[targetIdx] + staggerOffsetMeters <= walkedMeters + edgeLen) {
+            continue;
+          }
+          break;
+        }
+
+        if (!nearStop && !overlapsSameDir && !collidesOpposite) {
+          const progress = Number(
+            Math.max(
+              0,
+              Math.min(1, (cumulativeBaseMeters + sampleDistAlongSeg) / grandTotalMeters),
+            ).toFixed(3),
+          );
+          const hasEarlierOpposite = placed.some(
+            (p) =>
+              haversineMeters(sampleLat, sampleLon, p.lat, p.lon) < CHEVRON_SAME_DIR_CLEARANCE_METERS &&
+              directedBearingDiffDeg(bearingDeg, p.bearingDeg) >= 115,
+          );
+          placed.push({ lon: sampleLon, lat: sampleLat, bearingDeg });
+          features.push({
+            type: 'Feature',
+            geometry: {
+              type: 'Point',
+              coordinates: [roundCoord(sampleLon), roundCoord(sampleLat)],
+            },
+            properties: {
+              kind: 'chevron',
+              userId,
+              username,
+              bearingDeg,
+              progress,
+              isReturnPass: hasEarlierOpposite,
+              segmentOrder,
+            },
+          });
+          segmentOrder += 1;
+        }
+        staggerOffsetMeters = 0;
+        targetIdx += 1;
+      }
+
+      walkedMeters += edgeLen;
+    }
+
+    cumulativeBaseMeters += segLen;
+  }
+}
+
 /**
  * Converts either road-snapped `MatchedUserTrail[]` or raw `TrailPingLike[]`
  * into MapLibre-ready GeoJSON Point/LineString features shared across web and mobile.
@@ -947,6 +1115,7 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
   if (usableMatched && usableMatched.length > 0) {
     for (const userTrail of usableMatched) {
       if (userTrail.hasRoadMatches) hasRoadMatches = true;
+      const beforeFeatureCount = features.length;
       stopsCount += appendUserPointFeatures(
         features,
         userTrail.userId,
@@ -955,8 +1124,16 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
         userTrail.visits,
         options.places,
       );
+      const stopCoords: [number, number][] = [];
+      for (let idx = beforeFeatureCount; idx < features.length; idx += 1) {
+        const g = features[idx].geometry;
+        if (g.type === 'Point') stopCoords.push(g.coordinates);
+      }
+
+      const lineSegs: TrailPathSegment[] = [];
       for (const seg of userTrail.segments) {
         if (seg.coordinates.length < 2) continue;
+        lineSegs.push(seg);
         features.push({
           type: 'Feature',
           geometry: { type: 'LineString', coordinates: seg.coordinates },
@@ -968,6 +1145,13 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
           },
         });
       }
+      appendTrailChevronFeatures(
+        features,
+        userTrail.userId,
+        userTrail.username,
+        lineSegs,
+        stopCoords,
+      );
     }
     return { features, stopsCount, hasRoadMatches };
   }
@@ -981,6 +1165,7 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
 
   const compacted = averageNearbyTrailPings(rawFiltered);
   for (const userTrail of compacted) {
+    const beforeFeatureCount = features.length;
     stopsCount += appendUserPointFeatures(
       features,
       userTrail.userId,
@@ -989,6 +1174,12 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
       userTrail.visits,
       options.places,
     );
+    const stopCoords: [number, number][] = [];
+    for (let idx = beforeFeatureCount; idx < features.length; idx += 1) {
+      const g = features[idx].geometry;
+      if (g.type === 'Point') stopCoords.push(g.coordinates);
+    }
+
     if (userTrail.pathCoordinates.length >= 2) {
       features.push({
         type: 'Feature',
@@ -999,6 +1190,13 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
           username: userTrail.username,
         },
       });
+      appendTrailChevronFeatures(
+        features,
+        userTrail.userId,
+        userTrail.username,
+        [{ kind: 'direct', coordinates: userTrail.pathCoordinates }],
+        stopCoords,
+      );
     }
   }
 

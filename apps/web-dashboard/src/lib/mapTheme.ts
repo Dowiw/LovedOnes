@@ -72,7 +72,7 @@ const LIGHT_MAP_PAINT_OVERRIDES: MapLayerPaintOverride[] = [
   { layerId: 'water-lines', property: 'line-color', value: '#bfe0f0' },
   { layerId: 'buildings', property: 'fill-color', value: '#e6e4dd' },
   { layerId: 'buildings', property: 'fill-outline-color', value: '#d6d3cb' },
-  { layerId: 'roads-rail', property: 'line-color', value: '#cbd5e1' },
+  { layerId: 'roads-rail', property: 'line-color', value: '#94a3b8' },
   { layerId: 'roads-casing', property: 'line-color', value: '#d4d8dd' },
   {
     layerId: 'roads',
@@ -110,6 +110,8 @@ const LIGHT_MAP_PAINT_OVERRIDES: MapLayerPaintOverride[] = [
   { layerId: 'lovedones-trails-line', property: 'line-color', value: '#18181b' },
   { layerId: 'lovedones-trails-direct-line', property: 'line-color', value: '#18181b' },
   { layerId: 'lovedones-trails-spur-line', property: 'line-color', value: '#52525b' },
+  { layerId: 'lovedones-trails-chevrons', property: 'icon-color', value: '#ffffff' },
+  { layerId: 'lovedones-trails-chevrons', property: 'icon-halo-color', value: '#18181b' },
   { layerId: 'lovedones-trails-pts', property: 'circle-color', value: '#ffffff' },
   { layerId: 'lovedones-trails-pts', property: 'circle-stroke-color', value: '#18181b' },
 ];
@@ -126,7 +128,7 @@ const DARK_MAP_PAINT_OVERRIDES: MapLayerPaintOverride[] = [
   { layerId: 'water-lines', property: 'line-color', value: '#0c1c2c' },
   { layerId: 'buildings', property: 'fill-color', value: '#1c2028' },
   { layerId: 'buildings', property: 'fill-outline-color', value: '#272c37' },
-  { layerId: 'roads-rail', property: 'line-color', value: '#334155' },
+  { layerId: 'roads-rail', property: 'line-color', value: '#64748b' },
   { layerId: 'roads-casing', property: 'line-color', value: '#1f242e' },
   {
     layerId: 'roads',
@@ -164,6 +166,8 @@ const DARK_MAP_PAINT_OVERRIDES: MapLayerPaintOverride[] = [
   { layerId: 'lovedones-trails-line', property: 'line-color', value: '#f4f4f5' },
   { layerId: 'lovedones-trails-direct-line', property: 'line-color', value: '#f4f4f5' },
   { layerId: 'lovedones-trails-spur-line', property: 'line-color', value: '#a1a1aa' },
+  { layerId: 'lovedones-trails-chevrons', property: 'icon-color', value: '#09090b' },
+  { layerId: 'lovedones-trails-chevrons', property: 'icon-halo-color', value: '#f4f4f5' },
   { layerId: 'lovedones-trails-pts', property: 'circle-color', value: '#09090b' },
   { layerId: 'lovedones-trails-pts', property: 'circle-stroke-color', value: '#f4f4f5' },
 ];

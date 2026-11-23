@@ -551,5 +551,147 @@ describe('RoadTrailMatcher', () => {
     ]);
     expect(railCorridorMatch.hasRoadMatches).toBe(true);
     expect(railCorridorMatch.segments.some((s) => s.kind === 'road' && s.roadKind === 'rail')).toBe(true);
+
+    // T-junction interior linking: side street terminating 0.4m from the interior of a simplified
+    // long major_road segment (whose vertices are 300m apart) connects cleanly without a detour loop.
+    const tJunctionMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        // Simplified north-south arterial road with vertices only at 52.520 and 52.526 (~667m apart)
+        { kind: 'major_road', coords: [[13.405, 52.520], [13.405, 52.526]] },
+        // Side street approaching from the west and terminating at (13.404995, 52.523) (~0.34m from interior)
+        { kind: 'minor_road', coords: [[13.400, 52.523], [13.404995, 52.523]] },
+      ]),
+    });
+    const [tJunctionMatch] = await tJunctionMatcher.matchTrails([
+      {
+        userId: 'tj-user',
+        username: 'Junction',
+        latitude: 52.523,
+        longitude: 13.4005,
+        recordedAt: '2026-11-22T18:00:00.000Z',
+        speed: 7,
+        accuracy: 10,
+      },
+      {
+        userId: 'tj-user',
+        username: 'Junction',
+        latitude: 52.5255,
+        longitude: 13.405,
+        recordedAt: '2026-11-22T18:01:30.000Z',
+        speed: 7,
+        accuracy: 10,
+      },
+    ]);
+    expect(tJunctionMatch.hasRoadMatches).toBe(true);
+    expect(tJunctionMatch.segments.filter((s) => s.kind === 'direct')).toHaveLength(0);
+    expect(tJunctionMatch.segments[0].coordinates.length).toBeGreaterThanOrEqual(3);
+
+    // Destination station transfer (rail -> minor_road at currVisit) and rail continuity during stop delays:
+    const destTransferMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        // Curved rail line from (13.400, 52.520) -> (13.403, 52.522) -> (13.406, 52.520)
+        {
+          kind: 'rail',
+          coords: [
+            [13.400, 52.520],
+            [13.403, 52.522],
+            [13.406, 52.520],
+          ],
+        },
+        // Disconnected local street at destination stop (20m south of rail terminus)
+        {
+          kind: 'minor_road',
+          coords: [
+            [13.406, 52.51982],
+            [13.408, 52.51982],
+          ],
+        },
+      ]),
+    });
+    const [destTransferMatch] = await destTransferMatcher.matchTrails([
+      {
+        userId: 'tram-user',
+        username: 'Transit',
+        latitude: 52.520,
+        longitude: 13.4001,
+        recordedAt: '2026-11-22T19:00:00.000Z',
+        accuracy: 10,
+      },
+      {
+        // Stop right by the local street 20m off the rail terminus after a 150s stop-to-stop interval (~3.2 m/s average)
+        userId: 'tram-user',
+        username: 'Transit',
+        latitude: 52.51983,
+        longitude: 13.40605,
+        recordedAt: '2026-11-22T19:02:30.000Z',
+        accuracy: 10,
+      },
+    ]);
+    expect(destTransferMatch.hasRoadMatches).toBe(true);
+    expect(destTransferMatch.segments.filter((s) => s.kind === 'direct')).toHaveLength(0);
+    expect(destTransferMatch.segments[0].roadKind).toBe('rail');
+
+    // Transport-mode inertia: when already moving along a tram/rail line, an intermediate moving
+    // ping that drifts slightly closer to an adjacent minor_road stays on the rail corridor
+    // instead of hopping onto the road for one point and back onto the tram.
+    const modeInertiaMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        // Tram track along lat 52.5200
+        {
+          kind: 'rail',
+          coords: [
+            [13.400, 52.5200],
+            [13.405, 52.5200],
+            [13.410, 52.5200],
+          ],
+        },
+        // Parallel minor_road 16m north (lat 52.52014) that touches at the ends
+        {
+          kind: 'minor_road',
+          coords: [
+            [13.400, 52.5200],
+            [13.400, 52.52014],
+            [13.405, 52.52014],
+            [13.410, 52.52014],
+            [13.410, 52.5200],
+          ],
+        },
+      ]),
+    });
+    const [inertiaMatch] = await modeInertiaMatcher.matchTrails([
+      {
+        userId: 'inertia-user',
+        username: 'TramRider',
+        latitude: 52.5200,
+        longitude: 13.4002,
+        recordedAt: '2026-11-22T20:00:00.000Z',
+        speed: 8,
+        accuracy: 15,
+      },
+      {
+        // Intermediate moving ping drifted 12m north toward minor_road (4m from minor_road, 12m from rail)
+        userId: 'inertia-user',
+        username: 'TramRider',
+        latitude: 52.52011,
+        longitude: 13.4050,
+        recordedAt: '2026-11-22T20:00:45.000Z',
+        speed: 8,
+        accuracy: 15,
+      },
+      {
+        userId: 'inertia-user',
+        username: 'TramRider',
+        latitude: 52.5200,
+        longitude: 13.4098,
+        recordedAt: '2026-11-22T20:01:30.000Z',
+        speed: 8,
+        accuracy: 15,
+      },
+    ]);
+    expect(inertiaMatch.hasRoadMatches).toBe(true);
+    expect(inertiaMatch.segments).toHaveLength(1);
+    expect(inertiaMatch.segments[0].roadKind).toBe('rail');
+    // Middle visit should snap to the rail line (52.5200) rather than hopping to minor_road (52.52014)
+    expect(inertiaMatch.visits?.[1]?.latitude).toBeCloseTo(52.5200, 4);
   });
 });

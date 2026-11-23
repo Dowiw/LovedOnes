@@ -188,7 +188,63 @@ const TRAIL_SOURCE_ID = 'lovedones-trails-src';
 const TRAIL_LINE_LAYER_ID = 'lovedones-trails-line';
 const TRAIL_DIRECT_LINE_LAYER_ID = 'lovedones-trails-direct-line';
 const TRAIL_SPUR_LINE_LAYER_ID = 'lovedones-trails-spur-line';
+const TRAIL_CHEVRON_LAYER_ID = 'lovedones-trails-chevrons';
+const TRAIL_CHEVRON_IMAGE_ID = 'lovedones-trail-chevron';
 const TRAIL_POINT_LAYER_ID = 'lovedones-trails-pts';
+
+function distToSegmentPx(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq > 1e-6 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq)) : 0;
+  const qx = ax + t * dx;
+  const qy = ay + t * dy;
+  return Math.hypot(px - qx, py - qy);
+}
+
+/**
+ * Generates a 32x32 Euclidean SDF image of a north-pointing directional chevron (`^`)
+ * so MapLibre renders crisp hardware-rotated arrowheads without external sprite or font fetches.
+ */
+function ensureTrailChevronImage(map: maplibregl.Map): void {
+  if (map.hasImage(TRAIL_CHEVRON_IMAGE_ID)) return;
+  const size = 32;
+  const data = new Uint8Array(size * size * 4);
+  const tipX = 16;
+  const tipY = 10.5;
+  const leftX = 9.5;
+  const rightX = 22.5;
+  const armY = 20.5;
+  const strokeHalfWidth = 2.2;
+  const sdfScale = 24;
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const px = x + 0.5;
+      const py = y + 0.5;
+      const d = Math.min(
+        distToSegmentPx(px, py, leftX, armY, tipX, tipY),
+        distToSegmentPx(px, py, tipX, tipY, rightX, armY),
+      );
+      const signedDist = d - strokeHalfWidth;
+      const alpha = Math.max(0, Math.min(255, Math.round(192 - signedDist * sdfScale)));
+      const idx = (y * size + x) * 4;
+      data[idx] = 255;
+      data[idx + 1] = 255;
+      data[idx + 2] = 255;
+      data[idx + 3] = alpha;
+    }
+  }
+
+  map.addImage(TRAIL_CHEVRON_IMAGE_ID, { width: size, height: size, data }, { sdf: true });
+}
 
 export type MapLabelLanguage = 'en' | 'local';
 
@@ -1329,11 +1385,47 @@ export function MapCanvas({
           'line-opacity': 0.6,
         },
       });
+      ensureTrailChevronImage(map);
+      map.addLayer({
+        id: TRAIL_CHEVRON_LAYER_ID,
+        type: 'symbol',
+        source: TRAIL_SOURCE_ID,
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'chevron']],
+        layout: {
+          'icon-image': TRAIL_CHEVRON_IMAGE_ID,
+          'icon-size': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            10,
+            ['case', ['boolean', ['get', 'isReturnPass'], false], 0.38, 0.32],
+            14,
+            ['case', ['boolean', ['get', 'isReturnPass'], false], 0.52, 0.44],
+            17,
+            ['case', ['boolean', ['get', 'isReturnPass'], false], 0.62, 0.52],
+          ],
+          'icon-rotate': ['coalesce', ['get', 'bearingDeg'], 0],
+          'icon-rotation-alignment': 'map',
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+        },
+        paint: {
+          'icon-color': mapThemeRef.current === 'dark' ? '#09090b' : '#ffffff',
+          'icon-halo-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
+          'icon-halo-width': 0.65,
+          'icon-opacity': [
+            'case',
+            ['boolean', ['get', 'isReturnPass'], false],
+            0.98,
+            ['interpolate', ['linear'], ['coalesce', ['get', 'progress'], 1], 0, 0.52, 1, 0.94],
+          ],
+        },
+      });
       map.addLayer({
         id: TRAIL_POINT_LAYER_ID,
         type: 'circle',
         source: TRAIL_SOURCE_ID,
-        filter: ['==', ['geometry-type'], 'Point'],
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['!=', ['get', 'kind'], 'chevron']],
         paint: {
           'circle-radius': [
             'case',
