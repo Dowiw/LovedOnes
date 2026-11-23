@@ -630,5 +630,68 @@ describe('RoadTrailMatcher', () => {
     expect(destTransferMatch.hasRoadMatches).toBe(true);
     expect(destTransferMatch.segments.filter((s) => s.kind === 'direct')).toHaveLength(0);
     expect(destTransferMatch.segments[0].roadKind).toBe('rail');
+
+    // Transport-mode inertia: when already moving along a tram/rail line, an intermediate moving
+    // ping that drifts slightly closer to an adjacent minor_road stays on the rail corridor
+    // instead of hopping onto the road for one point and back onto the tram.
+    const modeInertiaMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        // Tram track along lat 52.5200
+        {
+          kind: 'rail',
+          coords: [
+            [13.400, 52.5200],
+            [13.405, 52.5200],
+            [13.410, 52.5200],
+          ],
+        },
+        // Parallel minor_road 16m north (lat 52.52014) that touches at the ends
+        {
+          kind: 'minor_road',
+          coords: [
+            [13.400, 52.5200],
+            [13.400, 52.52014],
+            [13.405, 52.52014],
+            [13.410, 52.52014],
+            [13.410, 52.5200],
+          ],
+        },
+      ]),
+    });
+    const [inertiaMatch] = await modeInertiaMatcher.matchTrails([
+      {
+        userId: 'inertia-user',
+        username: 'TramRider',
+        latitude: 52.5200,
+        longitude: 13.4002,
+        recordedAt: '2026-11-22T20:00:00.000Z',
+        speed: 8,
+        accuracy: 15,
+      },
+      {
+        // Intermediate moving ping drifted 12m north toward minor_road (4m from minor_road, 12m from rail)
+        userId: 'inertia-user',
+        username: 'TramRider',
+        latitude: 52.52011,
+        longitude: 13.4050,
+        recordedAt: '2026-11-22T20:00:45.000Z',
+        speed: 8,
+        accuracy: 15,
+      },
+      {
+        userId: 'inertia-user',
+        username: 'TramRider',
+        latitude: 52.5200,
+        longitude: 13.4098,
+        recordedAt: '2026-11-22T20:01:30.000Z',
+        speed: 8,
+        accuracy: 15,
+      },
+    ]);
+    expect(inertiaMatch.hasRoadMatches).toBe(true);
+    expect(inertiaMatch.segments).toHaveLength(1);
+    expect(inertiaMatch.segments[0].roadKind).toBe('rail');
+    // Middle visit should snap to the rail line (52.5200) rather than hopping to minor_road (52.52014)
+    expect(inertiaMatch.visits?.[1]?.latitude).toBeCloseTo(52.5200, 4);
   });
 });

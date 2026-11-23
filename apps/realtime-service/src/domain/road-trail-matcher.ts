@@ -807,6 +807,26 @@ function candidateCategory(kind: string): 'rail' | 'path' | 'road' {
   return 'road';
 }
 
+/**
+ * Penalizes switching transport modes (e.g. rail <-> road/path or road <-> path)
+ * mid-movement so a rider on a tram/train or driver on a road maintains mode
+ * continuity across slightly noisy GPS pings unless a genuine station/dwell transfer occurs.
+ */
+function modeTransitionPenalty(
+  fromKind: string,
+  toKind: string,
+  isDwellTransfer = false,
+): number {
+  if (fromKind === toKind) return 0;
+  const fromCat = candidateCategory(fromKind);
+  const toCat = candidateCategory(toKind);
+  if (fromCat === toCat) return 1.5;
+  if (fromCat === 'rail' || toCat === 'rail') {
+    return isDwellTransfer ? 14 : 42;
+  }
+  return isDwellTransfer ? 5 : 14;
+}
+
 function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCandidate[] {
   if (graph.segments.length === 0) return [];
   const radiusLatCells = Math.ceil(MAX_SNAP_DISTANCE_METERS / SEGMENT_GRID_CELL_METERS) + 1;
@@ -1075,11 +1095,15 @@ function routeBetweenCandidates(
 
     // If we reached an endpoint of goalSeg, try connecting directly to the goal projection
     if (cur.nodeId === goalSeg.aNode || cur.nodeId === goalSeg.bNode) {
+      const inKind = parentKind.get(cur.nodeId) ?? startSeg.kind;
       const remDist =
         cur.nodeId === goalSeg.aNode
           ? goal.t * goalSeg.lengthMeters
           : (1 - goal.t) * goalSeg.lengthMeters;
-      const nextCost = curCost + remDist * effectiveEdgeCostFactor(goalSeg.kind);
+      const nextCost =
+        curCost +
+        remDist * effectiveEdgeCostFactor(goalSeg.kind) +
+        modeTransitionPenalty(inKind, goalSeg.kind, false);
       const nextDist = curDist + remDist;
       const prevGoalCost = gScore.get(VIRTUAL_GOAL);
       if (nextDist <= maxDetourMeters && (prevGoalCost === undefined || nextCost < prevGoalCost)) {
@@ -1091,12 +1115,16 @@ function routeBetweenCandidates(
       }
     }
 
+    const inKind = parentKind.get(cur.nodeId) ?? startSeg.kind;
     const edges = graph.adj[cur.nodeId] ?? [];
     for (const edge of edges) {
       if (closed.has(edge.to)) continue;
       const nextDist = curDist + edge.lengthMeters;
       if (nextDist > maxDetourMeters) continue;
-      const nextCost = curCost + edge.lengthMeters * effectiveEdgeCostFactor(edge.kind);
+      const nextCost =
+        curCost +
+        edge.lengthMeters * effectiveEdgeCostFactor(edge.kind) +
+        modeTransitionPenalty(inKind, edge.kind, false);
       if (nextCost > maxAllowedCost) continue;
       const prevCost = gScore.get(edge.to);
       if (prevCost === undefined || nextCost < prevCost) {
@@ -1570,6 +1598,12 @@ export class RoadTrailMatcher {
               }
             }
             if (!routed) continue;
+            const isDwellSwitch = Boolean(prevVisit.isDwell || currVisit.isDwell);
+            const continuityPenalty =
+              modeTransferPenalty > 0
+                ? 0
+                : modeTransitionPenalty(prevCand.kind, currCand.kind, isDwellSwitch) +
+                  modeTransitionPenalty(prevCand.kind, routed.dominantRoadKind, isDwellSwitch) * 0.5;
             const detourPenalty = Math.max(0, routed.distanceMeters - straightDist) * 0.35;
             let turnPenalty = 0;
             const prevB = prevBearings[pi];
@@ -1585,6 +1619,7 @@ export class RoadTrailMatcher {
               detourPenalty +
               turnPenalty +
               modeTransferPenalty +
+              continuityPenalty +
               emission;
             if (total < bestTotal) {
               bestTotal = total;
@@ -1607,6 +1642,10 @@ export class RoadTrailMatcher {
                 skipMaxDetour,
               );
               if (!routed) continue;
+              const isSkipDwellSwitch = Boolean(skipPrevVisit?.isDwell || currVisit.isDwell);
+              const skipContinuityPenalty =
+                modeTransitionPenalty(skipCands[ppi].kind, currCand.kind, isSkipDwellSwitch) +
+                modeTransitionPenalty(skipCands[ppi].kind, routed.dominantRoadKind, isSkipDwellSwitch) * 0.5;
               const detourPenalty = Math.max(0, routed.distanceMeters - skipStraightDist) * 0.35;
               let turnPenalty = 0;
               const prevB = skipBearings[ppi];
@@ -1621,6 +1660,7 @@ export class RoadTrailMatcher {
                 routed.cost * 0.35 +
                 detourPenalty +
                 turnPenalty +
+                skipContinuityPenalty +
                 skipEmission +
                 skipPenalty;
               if (total < bestTotal) {
