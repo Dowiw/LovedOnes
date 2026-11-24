@@ -102,6 +102,7 @@ export const locationHistory = pgTable(
     accuracy: doublePrecision('accuracy'),
     speed: doublePrecision('speed'),
     heading: doublePrecision('heading'),
+    activity: varchar('activity', { length: 24 }),
     batteryLevel: smallint('battery_level'),
     recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
     receivedAt: timestamp('received_at', { withTimezone: true }).defaultNow().notNull(),

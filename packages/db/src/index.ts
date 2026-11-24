@@ -12,6 +12,7 @@ import type {
   LocationPoint,
   LocationRequestItem,
   LocationRequestStatus,
+  MotionActivity,
   PlaceTransitionEvent,
   PlaceTransitionType,
   PrivacyMode,
@@ -140,6 +141,7 @@ export async function insertLocationBatch(
   const accuracies: Array<number | null> = [];
   const speeds: Array<number | null> = [];
   const headings: Array<number | null> = [];
+  const activities: Array<string | null> = [];
   const batteryLevels: Array<number | null> = [];
   const recordedAts: string[] = [];
 
@@ -150,12 +152,13 @@ export async function insertLocationBatch(
     accuracies.push(pt.accuracy ?? null);
     speeds.push(pt.speed ?? null);
     headings.push(pt.heading ?? null);
+    activities.push(pt.activity ?? null);
     batteryLevels.push(pt.batteryLevel ?? null);
     recordedAts.push(pt.recordedAt);
   }
 
   const result = await pool.query(
-    `INSERT INTO location_history (user_id, coords, altitude, accuracy, speed, heading, battery_level, recorded_at)
+    `INSERT INTO location_history (user_id, coords, altitude, accuracy, speed, heading, activity, battery_level, recorded_at)
      SELECT
        $1::uuid,
        ST_SetSRID(ST_MakePoint(u.lon, u.lat), 4326)::geography,
@@ -163,6 +166,7 @@ export async function insertLocationBatch(
        u.acc,
        u.spd,
        u.hdg,
+       u.act,
        u.batt,
        u.rec_at
      FROM UNNEST(
@@ -172,9 +176,10 @@ export async function insertLocationBatch(
        $5::double precision[],
        $6::double precision[],
        $7::double precision[],
-       $8::smallint[],
-       $9::timestamptz[]
-     ) AS u(lon, lat, alt, acc, spd, hdg, batt, rec_at)
+       $8::varchar[],
+       $9::smallint[],
+       $10::timestamptz[]
+     ) AS u(lon, lat, alt, acc, spd, hdg, act, batt, rec_at)
      ON CONFLICT (user_id, recorded_at) DO NOTHING`,
     [
       userId,
@@ -184,6 +189,7 @@ export async function insertLocationBatch(
       accuracies,
       speeds,
       headings,
+      activities,
       batteryLevels,
       recordedAts,
     ],
@@ -206,6 +212,7 @@ export interface GroupMemberLocationRow {
   accuracy?: number | null;
   speed: number | null;
   heading?: number | null;
+  activity?: MotionActivity | null;
   batteryLevel: number | null;
   recordedAt: string;
 }
@@ -224,6 +231,7 @@ interface RawGroupLocationRow {
   accuracy?: number | null;
   speed: number | null;
   heading?: number | null;
+  activity?: MotionActivity | null;
   battery_level: number | null;
   recorded_at: Date;
 }
@@ -243,6 +251,7 @@ function mapGroupLocationRow(row: RawGroupLocationRow): GroupMemberLocationRow {
     accuracy: row.accuracy ?? null,
     speed: row.speed,
     heading: row.heading ?? null,
+    activity: row.activity ?? null,
     batteryLevel: row.battery_level,
     recordedAt: row.recorded_at.toISOString(),
   };
@@ -300,6 +309,7 @@ export async function getLatestGroupLocations(
        lh.accuracy,
        lh.speed,
        lh.heading,
+       lh.activity,
        lh.battery_level,
        lh.recorded_at
      FROM group_memberships gm
@@ -385,6 +395,7 @@ export async function getGroupTrails(
        lh.accuracy,
        lh.speed,
        lh.heading,
+       lh.activity,
        lh.battery_level,
        lh.recorded_at
      FROM group_memberships gm
@@ -692,6 +703,7 @@ export async function getLatestUserLocation(
     accuracy: number | null;
     speed: number | null;
     heading: number | null;
+    activity: MotionActivity | null;
     battery_level: number | null;
     recorded_at: Date;
   }>(
@@ -701,6 +713,7 @@ export async function getLatestUserLocation(
             accuracy,
             speed,
             heading,
+            activity,
             battery_level,
             recorded_at
      FROM location_history
@@ -718,6 +731,7 @@ export async function getLatestUserLocation(
     accuracy: row.accuracy,
     speed: row.speed,
     heading: row.heading,
+    activity: row.activity,
     batteryLevel: row.battery_level,
     recordedAt: row.recorded_at.toISOString(),
   };

@@ -8,6 +8,7 @@ import {
   buildExternalMapsUrls,
   buildGeodesicCircleRing,
   buildSolarTerminatorGeoJson,
+  buildTrailGeoJsonFeatures,
   ChangePasswordSchema,
   compareSemver,
   computeCityFallbackBbox,
@@ -43,6 +44,9 @@ import {
   PublicLoginConfigSchema,
   QrInvitePayloadSchema,
   resolveMemberPresenceStatus,
+  resolveSegmentActivityMode,
+  resolveTrailPointDetails,
+  TRAIL_ACTIVITY_META,
   RespondLocationRequestSchema,
   serializeSavedMapViewport,
   slugifyCityName,
@@ -1525,5 +1529,161 @@ describe('@loved-ones/shared', () => {
     expect(isWorldOverviewRegion(worldOverviewRegion)).toBe(true);
     expect(isRegionOperational(worldOverviewRegion)).toBe(false);
     expect(isPointCoveredByRegions(35.6762, 139.6503, [worldOverviewRegion])).toBe(false);
+  });
+
+  it('parses OwnTracks and Overland motion activity + course headings with kinematic & privacy guards', () => {
+    const ownTracksPoints = normalizeOwnTracksToPoints([
+      {
+        _type: 'location',
+        lat: 52.52,
+        lon: 13.405,
+        tst: 1_732_000_000,
+        vel: 18, // 5.0 m/s
+        cog: 360,
+        m: 2,
+        motionactivities: ['stationary', 'cycling'],
+      },
+      {
+        // Android OwnTracks often omits motionactivities and cog
+        _type: 'location',
+        lat: 52.521,
+        lon: 13.406,
+        tst: 1_732_000_060,
+        vel: 4.5,
+      },
+    ]);
+    expect(ownTracksPoints).toHaveLength(2);
+    expect(ownTracksPoints[0].activity).toBe('cycling');
+    expect(ownTracksPoints[0].heading).toBe(0);
+    expect(ownTracksPoints[0].speed).toBe(5);
+    expect(ownTracksPoints[1].activity).toBeUndefined();
+    expect(ownTracksPoints[1].heading).toBeUndefined();
+
+    const overlandPoints = normalizeOverlandToPoints({
+      locations: [
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [13.405, 52.52] },
+          properties: {
+            timestamp: '2026-11-24T12:00:00.000Z',
+            speed: 14,
+            course: 270,
+            motion: ['driving'],
+            battery_level: 0.72,
+          },
+        },
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [13.41, 52.525] },
+          properties: {
+            timestamp: '2026-11-24T12:01:00.000Z',
+            motion: ['stationary', 'running'],
+            course: 360,
+          },
+        },
+      ],
+    });
+    expect(overlandPoints).toHaveLength(2);
+    expect(overlandPoints[0].activity).toBe('automotive');
+    expect(overlandPoints[0].heading).toBe(270);
+    expect(overlandPoints[1].activity).toBe('running');
+    expect(overlandPoints[1].heading).toBe(0);
+
+    expect(
+      resolveSegmentActivityMode({ activity: 'automotive', maxSpeedMps: 15, roadKind: 'highway' }),
+    ).toBe('driving');
+    expect(
+      resolveSegmentActivityMode({ activity: 'walking', maxSpeedMps: 6, roadKind: 'rail' }),
+    ).toBe('transit');
+    expect(
+      resolveSegmentActivityMode({ activity: null, maxSpeedMps: 5.1, roadKind: 'minor_road', isMovingLeg: true }),
+    ).toBe('cycling');
+    expect(
+      resolveSegmentActivityMode({ activity: null, maxSpeedMps: 1.4, isMovingLeg: true }),
+    ).toBe('walking');
+    expect(
+      resolveSegmentActivityMode({ activity: 'cycling', maxSpeedMps: 5.5, isFuzzed: true }),
+    ).toBeUndefined();
+
+    expect(Object.keys(TRAIL_ACTIVITY_META)).toEqual([
+      'stationary',
+      'walking',
+      'running',
+      'cycling',
+      'transit',
+      'driving',
+    ]);
+
+    const rawGeo = buildTrailGeoJsonFeatures({
+      trails: [
+        {
+          userId: 'u1',
+          username: 'Alice',
+          latitude: 52.52,
+          longitude: 13.405,
+          recordedAt: '2026-11-24T12:00:00.000Z',
+          speed: 3.1,
+          activity: 'running',
+          privacyMode: 'EXACT',
+          isFuzzed: false,
+          groupId: 'g1',
+        },
+      ],
+      matchedTrails: [
+        {
+          userId: 'u1',
+          username: 'Alice',
+          stops: [
+            {
+              userId: 'u1',
+              username: 'Alice',
+              latitude: 52.52,
+              longitude: 13.405,
+              pingCount: 1,
+              firstRecordedAt: '2026-11-24T12:00:00.000Z',
+              lastRecordedAt: '2026-11-24T12:00:00.000Z',
+              isFuzzed: false,
+            },
+          ],
+          visits: [
+            {
+              stopIndex: 0,
+              latitude: 52.52,
+              longitude: 13.405,
+              firstRecordedAt: '2026-11-24T12:00:00.000Z',
+              lastRecordedAt: '2026-11-24T12:00:00.000Z',
+              isFuzzed: false,
+              maxSpeedMps: 3.1,
+              activity: 'running',
+              activityMode: 'running',
+            },
+          ],
+          segments: [
+            {
+              kind: 'road',
+              coordinates: [
+                [13.405, 52.52],
+                [13.408, 52.522],
+              ],
+              roadKind: 'path',
+              activityMode: 'running',
+            },
+          ],
+          hasRoadMatches: true,
+        },
+      ],
+    });
+    const lineFeat = rawGeo.features.find((f) => f.geometry.type === 'LineString');
+    expect(lineFeat?.properties.activityMode).toBe('running');
+    const stopFeat = rawGeo.features.find((f) => f.properties.kind === 'stop');
+    expect(stopFeat?.properties.activityMode).toBe('running');
+    expect(
+      resolveTrailPointDetails({
+        latitude: 52.52,
+        longitude: 13.405,
+        isFuzzed: true,
+        activityMode: 'running',
+      }).activityMode,
+    ).toBeUndefined();
   });
 });

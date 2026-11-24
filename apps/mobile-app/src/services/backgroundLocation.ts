@@ -188,7 +188,8 @@ const defaultGeofenceAdapter: GeofenceRecoveryAdapter = {
 };
 
 function parseValidHeading(raw: number | null | undefined): number | null {
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 360 ? raw : null;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 360) return null;
+  return raw === 360 ? 0 : raw;
 }
 
 async function ingestLocationsAndOpportunisticFlush(
@@ -208,6 +209,7 @@ async function ingestLocationsAndOpportunisticFlush(
         : null,
     speed: loc.coords.speed !== null && loc.coords.speed >= 0 ? loc.coords.speed : null,
     heading: parseValidHeading(loc.coords.heading),
+    activity: null,
     batteryLevel,
     recordedAt: new Date(loc.timestamp || Date.now()).toISOString(),
   }));

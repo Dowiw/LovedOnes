@@ -694,4 +694,126 @@ describe('RoadTrailMatcher', () => {
     // Middle visit should snap to the rail line (52.5200) rather than hopping to minor_road (52.52014)
     expect(inertiaMatch.visits?.[1]?.latitude).toBeCloseTo(52.5200, 4);
   });
+
+  it('splits multi-modal trips by activityMode and uses activity weights for route snapping', async () => {
+    // 1) Parallel path vs highway: activity='walking' chooses path even if equidistant from highway
+    const walkPrefMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        {
+          kind: 'highway',
+          coords: [
+            [13.400, 52.5200],
+            [13.405, 52.5200],
+          ],
+        },
+        {
+          kind: 'path',
+          coords: [
+            [13.400, 52.5202],
+            [13.405, 52.5202],
+          ],
+        },
+      ]),
+    });
+    const [walkMatch] = await walkPrefMatcher.matchTrails([
+      {
+        userId: 'walk-user',
+        username: 'Walker',
+        latitude: 52.5201,
+        longitude: 13.4002,
+        recordedAt: '2026-11-24T10:00:00.000Z',
+        activity: 'walking',
+        accuracy: 15,
+      },
+      {
+        userId: 'walk-user',
+        username: 'Walker',
+        latitude: 52.5201,
+        longitude: 13.4048,
+        recordedAt: '2026-11-24T10:03:00.000Z',
+        activity: 'walking',
+        accuracy: 15,
+      },
+    ]);
+    expect(walkMatch.hasRoadMatches).toBe(true);
+    expect(walkMatch.segments[0].roadKind).toBe('path');
+    expect(walkMatch.segments[0].activityMode).toBe('walking');
+
+    // 2) Connected multi-modal route: footpath -> rail transit -> major_road driving
+    //    must split cleanly into 3 color-codable TrailPathSegments.
+    const multiModalMatcher = new RoadTrailMatcher({
+      tileProvider: createMemoryRoadProvider([
+        {
+          kind: 'path',
+          coords: [
+            [13.400, 52.5200],
+            [13.403, 52.5200],
+          ],
+        },
+        {
+          kind: 'rail',
+          coords: [
+            [13.403, 52.5200],
+            [13.410, 52.5200],
+          ],
+        },
+        {
+          kind: 'major_road',
+          coords: [
+            [13.410, 52.5200],
+            [13.418, 52.5200],
+          ],
+        },
+      ]),
+    });
+    const [multiModal] = await multiModalMatcher.matchTrails([
+      {
+        userId: 'mm-user',
+        username: 'Commuter',
+        latitude: 52.5200,
+        longitude: 13.4001,
+        recordedAt: '2026-11-24T08:00:00.000Z',
+        activity: 'walking',
+        speed: 1.4,
+        accuracy: 10,
+      },
+      {
+        userId: 'mm-user',
+        username: 'Commuter',
+        latitude: 52.5200,
+        longitude: 13.4030,
+        recordedAt: '2026-11-24T08:02:30.000Z',
+        activity: 'walking',
+        speed: 1.4,
+        accuracy: 10,
+      },
+      {
+        userId: 'mm-user',
+        username: 'Commuter',
+        latitude: 52.5200,
+        longitude: 13.4099,
+        recordedAt: '2026-11-24T08:03:20.000Z',
+        // Null activity tests Android kinematic / rail transit resolution
+        activity: null,
+        speed: 11,
+        accuracy: 10,
+      },
+      {
+        userId: 'mm-user',
+        username: 'Commuter',
+        latitude: 52.5200,
+        longitude: 13.4179,
+        recordedAt: '2026-11-24T08:04:00.000Z',
+        activity: 'automotive',
+        speed: 14,
+        accuracy: 10,
+      },
+    ]);
+    expect(multiModal.segments.map((s) => [s.roadKind, s.activityMode])).toEqual([
+      ['path', 'walking'],
+      ['rail', 'transit'],
+      ['major_road', 'driving'],
+    ]);
+    expect(multiModal.segments).toHaveLength(3);
+  });
 });

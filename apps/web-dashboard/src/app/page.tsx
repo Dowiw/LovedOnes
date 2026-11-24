@@ -53,6 +53,7 @@ import {
   isSafeAvatarUrl,
   isSafeLoginBackgroundUrl,
   resolveMemberPresenceStatus,
+  TRAIL_ACTIVITY_META,
   withMinDelay,
   type AppVersionInfo,
   type ChatMessage,
@@ -235,6 +236,7 @@ export default function HomePage() {
   const [trails, setTrails] = useState<LocationBroadcast[]>([]);
   const [matchedTrails, setMatchedTrails] = useState<MatchedUserTrail[]>([]);
   const [trailDisplayMode, setTrailDisplayMode] = useState<TrailDisplayMode>('roads');
+  const [colorTrailsByActivity, setColorTrailsByActivity] = useState(true);
   const [webVersionInfo, setWebVersionInfo] = useState<AppVersionInfo | null>(null);
   const [dismissedWebUpdateVersion, setDismissedWebUpdateVersion] = useState<string | null>(null);
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('live');
@@ -2521,6 +2523,7 @@ export default function HomePage() {
         trails={trails}
         matchedTrails={matchedTrails}
         trailMode={trailDisplayMode}
+        colorTrailsByActivity={colorTrailsByActivity}
         regions={mapRegionsLoaded ? mapRegions : undefined}
         regionsRevision={regionsRevision}
         showTrails={mapViewMode === 'trails'}
@@ -4128,26 +4131,55 @@ export default function HomePage() {
       {/* Bottom-Center Floating Map View Mode Switcher */}
       <div className="pointer-events-auto absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-1/2 z-20 flex -translate-x-1/2 flex-col items-center gap-1.5 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))]">
         {mapViewMode === 'trails' && (
-          <div className="lo-float-in flex items-center gap-0.5 rounded-lg border border-zinc-200/80 bg-white/95 p-0.5 text-[10px] font-semibold shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-[11px]">
-            {(
-              [
-                ['roads', 'Clean'],
-                ['raw', 'Raw'],
-              ] as const
-            ).map(([mode, label]) => (
+          <div className="lo-float-in flex flex-col items-center gap-1">
+            {colorTrailsByActivity && (
+              <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 rounded-lg border border-zinc-200/80 bg-white/95 px-2.5 py-1 text-[10px] font-medium text-zinc-700 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-300">
+                {(['walking', 'running', 'cycling', 'transit', 'driving', 'stationary'] as const).map(
+                  (modeKey) => (
+                    <span key={modeKey} className="inline-flex items-center gap-1">
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ backgroundColor: TRAIL_ACTIVITY_META[modeKey].color }}
+                      />
+                      {TRAIL_ACTIVITY_META[modeKey].shortLabel}
+                    </span>
+                  ),
+                )}
+              </div>
+            )}
+            <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200/80 bg-white/95 p-0.5 text-[10px] font-semibold shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-[11px]">
+              {(
+                [
+                  ['roads', 'Clean'],
+                  ['raw', 'Raw'],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setTrailDisplayMode(mode)}
+                  className={`lo-press rounded-md px-2.5 py-1 transition ${
+                    trailDisplayMode === mode
+                      ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                      : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="mx-0.5 h-3.5 w-px bg-zinc-200 dark:bg-zinc-700" />
               <button
-                key={mode}
                 type="button"
-                onClick={() => setTrailDisplayMode(mode)}
+                onClick={() => setColorTrailsByActivity((prev) => !prev)}
                 className={`lo-press rounded-md px-2.5 py-1 transition ${
-                  trailDisplayMode === mode
+                  colorTrailsByActivity
                     ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
                     : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
                 }`}
               >
-                {label}
+                Activity
               </button>
-            ))}
+            </div>
           </div>
         )}
         <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/95 p-1 text-[11px] font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-xs">

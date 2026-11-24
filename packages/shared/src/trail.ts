@@ -1,3 +1,5 @@
+import type { MotionActivity, TrailActivityMode } from './schemas.js';
+
 export const DEFAULT_TRAIL_CLUSTER_RADIUS_METERS = 85;
 export const DEFAULT_TRAIL_MAX_TIME_GAP_MS = 30 * 60 * 1000;
 export const DEFAULT_TRAIL_MAX_DISTANCE_METERS = 15_000;
@@ -5,6 +7,104 @@ export const DEFAULT_TRAIL_SPUR_THRESHOLD_METERS = 15;
 export const DEFAULT_TRAIL_DWELL_THRESHOLD_MS = 90_000;
 const EARTH_RADIUS_METERS = 6_371_000;
 const METERS_PER_DEGREE_LAT = 111_320;
+
+export interface TrailActivityMeta {
+  mode: TrailActivityMode;
+  label: string;
+  shortLabel: string;
+  color: string;
+}
+
+export const TRAIL_ACTIVITY_META: Record<TrailActivityMode, TrailActivityMeta> = {
+  stationary: { mode: 'stationary', label: 'Stationary', shortLabel: 'Stay', color: '#64748b' },
+  walking: { mode: 'walking', label: 'Walking', shortLabel: 'Walk', color: '#10b981' },
+  running: { mode: 'running', label: 'Running', shortLabel: 'Run', color: '#f97316' },
+  cycling: { mode: 'cycling', label: 'Cycling', shortLabel: 'Cycle', color: '#8b5cf6' },
+  transit: { mode: 'transit', label: 'Transit', shortLabel: 'Transit', color: '#06b6d4' },
+  driving: { mode: 'driving', label: 'Driving', shortLabel: 'Drive', color: '#2563eb' },
+};
+
+const ACTIVITY_PRECEDENCE: Record<MotionActivity, number> = {
+  automotive: 5,
+  cycling: 4,
+  running: 3,
+  walking: 2,
+  stationary: 1,
+  unknown: 0,
+};
+
+function mergeVisitActivity(
+  current: MotionActivity | null | undefined,
+  incoming: MotionActivity | null | undefined,
+): MotionActivity | null {
+  if (!incoming) return current ?? null;
+  if (!current) return incoming;
+  return ACTIVITY_PRECEDENCE[incoming] >= ACTIVITY_PRECEDENCE[current] ? incoming : current;
+}
+
+/**
+ * Resolves a human-friendly TrailActivityMode for a trail segment or stop visit
+ * from sensor motion hints, kinematics (speed/dwell), and PMTiles road class.
+ * Returns undefined when coordinates are fuzzed so ~1km privacy never leaks mode context.
+ */
+export function resolveSegmentActivityMode(input: {
+  activity?: MotionActivity | null;
+  maxSpeedMps?: number | null;
+  roadKind?: string | null;
+  isDwell?: boolean;
+  isMovingLeg?: boolean;
+  isFuzzed?: boolean;
+}): TrailActivityMode | undefined {
+  if (input.isFuzzed) return undefined;
+  if (input.roadKind === 'rail') return 'transit';
+
+  const speed =
+    typeof input.maxSpeedMps === 'number' &&
+    Number.isFinite(input.maxSpeedMps) &&
+    input.maxSpeedMps >= 0
+      ? input.maxSpeedMps
+      : null;
+  const act = input.activity ?? null;
+
+  if (act && act !== 'unknown') {
+    if (act === 'stationary') {
+      if (!(input.isMovingLeg && speed !== null && speed >= 0.8)) {
+        return 'stationary';
+      }
+    } else if (act === 'walking') {
+      return 'walking';
+    } else if (act === 'running') {
+      return 'running';
+    } else if (act === 'cycling') {
+      return 'cycling';
+    } else if (act === 'automotive') {
+      return 'driving';
+    }
+  }
+
+  if (input.roadKind === 'path') {
+    if (speed !== null && speed >= 4.2) return 'cycling';
+    if (speed !== null && speed >= 2.5) return 'running';
+    return 'walking';
+  }
+
+  if (speed !== null) {
+    if (speed >= 8.5) return 'driving';
+    if (speed >= 4.2) {
+      return input.roadKind === 'highway' || input.roadKind === 'major_road'
+        ? 'driving'
+        : 'cycling';
+    }
+    if (speed >= 2.5) return 'running';
+    if (speed >= 0.4 || input.isMovingLeg) return 'walking';
+    return 'stationary';
+  }
+
+  if (input.isDwell && !input.isMovingLeg) return 'stationary';
+  if (input.roadKind === 'highway' || input.roadKind === 'major_road') return 'driving';
+  if (input.isMovingLeg) return 'walking';
+  return undefined;
+}
 
 export interface TrailPingLike {
   userId: string;
@@ -16,6 +116,7 @@ export interface TrailPingLike {
   speed?: number | null;
   accuracy?: number | null;
   heading?: number | null;
+  activity?: MotionActivity | null;
 }
 
 export interface AveragedTrailStop {
@@ -42,6 +143,8 @@ export interface TrailStopVisit {
   isDwell?: boolean;
   accuracyMeters?: number | null;
   headingDeg?: number | null;
+  activity?: MotionActivity | null;
+  activityMode?: TrailActivityMode;
 }
 
 export interface CompactUserTrail {
@@ -62,8 +165,10 @@ export interface TrailPathSegment {
   kind: TrailSegmentKind;
   /** Chronological [longitude, latitude] coordinates for this segment. */
   coordinates: [number, number][];
-  /** Road class hint when kind === 'road' (e.g. 'highway', 'major_road', 'minor_road', 'path'). */
+  /** Road class hint when kind === 'road' (e.g. 'highway', 'major_road', 'minor_road', 'path', 'rail'). */
   roadKind?: string;
+  /** Activity mode hint resolved from motion sensors, speed, and road class. */
+  activityMode?: TrailActivityMode;
 }
 
 export interface MatchedUserTrail {
@@ -97,6 +202,7 @@ export interface TrailGeoJsonFeature {
     matchedPlaceName?: string | null;
     matchedPlaceIsPrivate?: boolean;
     roadKind?: string;
+    activityMode?: TrailActivityMode;
     bearingDeg?: number;
     progress?: number;
     isReturnPass?: boolean;
@@ -563,10 +669,11 @@ function compactSingleUserTrail(
       pt.heading <= 360
         ? pt.heading
         : null;
+    const actVal = !entry.stop.isFuzzed ? (pt.activity ?? null) : null;
 
     if (lastClusterId !== cid) {
       pathCoordinates.push([entry.stop.longitude, entry.stop.latitude]);
-      visits.push({
+      const visit: TrailStopVisit = {
         stopIndex: entry.stopIndex,
         latitude: entry.stop.latitude,
         longitude: entry.stop.longitude,
@@ -579,7 +686,16 @@ function compactSingleUserTrail(
         isDwell: false,
         accuracyMeters: accVal,
         headingDeg: headVal,
-      });
+        activity: actVal,
+        activityMode: resolveSegmentActivityMode({
+          activity: actVal,
+          maxSpeedMps: speedVal,
+          isDwell: false,
+          isMovingLeg: speedVal !== null && speedVal >= 0.4,
+          isFuzzed: entry.stop.isFuzzed,
+        }),
+      };
+      visits.push(visit);
       visitAccuracyState.push({ sum: accVal ?? 0, count: accVal !== null ? 1 : 0 });
       lastClusterId = cid;
     } else if (visits.length > 0) {
@@ -604,6 +720,14 @@ function compactSingleUserTrail(
       if (headVal !== null) {
         curVisit.headingDeg = headVal;
       }
+      curVisit.activity = mergeVisitActivity(curVisit.activity, actVal);
+      curVisit.activityMode = resolveSegmentActivityMode({
+        activity: curVisit.activity,
+        maxSpeedMps: curVisit.maxSpeedMps,
+        isDwell: curVisit.isDwell,
+        isMovingLeg: !curVisit.isDwell && (curVisit.maxSpeedMps ?? 0) >= 0.4,
+        isFuzzed: curVisit.isFuzzed,
+      });
     }
   }
 
@@ -762,6 +886,7 @@ export interface TrailPointDetails {
   durationLabel: string;
   isDwell: boolean;
   isFuzzed: boolean;
+  activityMode?: TrailActivityMode;
   matchedPlaceName: string | null;
   matchedPlaceIsPrivate: boolean;
 }
@@ -781,6 +906,7 @@ export function resolveTrailPointDetails(input: {
   durationLabel?: string;
   isDwell?: boolean;
   isFuzzed?: boolean;
+  activityMode?: TrailActivityMode;
   matchedPlaceName?: string | null;
   matchedPlaceIsPrivate?: boolean;
   places?: readonly TrailPlaceLike[];
@@ -796,6 +922,7 @@ export function resolveTrailPointDetails(input: {
       ? input.isDwell
       : stayDurationMs >= DEFAULT_TRAIL_DWELL_THRESHOLD_MS;
   const isFuzzed = Boolean(input.isFuzzed);
+  const activityMode = !isFuzzed ? input.activityMode : undefined;
   const durationLabel =
     typeof input.durationLabel === 'string' && input.durationLabel.length > 0
       ? input.durationLabel
@@ -811,6 +938,7 @@ export function resolveTrailPointDetails(input: {
       durationLabel,
       isDwell,
       isFuzzed,
+      ...(activityMode ? { activityMode } : {}),
       matchedPlaceName: input.matchedPlaceName || null,
       matchedPlaceIsPrivate: Boolean(input.matchedPlaceIsPrivate),
     };
@@ -835,6 +963,7 @@ export function resolveTrailPointDetails(input: {
     durationLabel,
     isDwell,
     isFuzzed,
+    ...(activityMode ? { activityMode } : {}),
     matchedPlaceName: matchedPlace?.name ?? null,
     matchedPlaceIsPrivate: matchedPlace?.isPrivate ?? false,
   };
@@ -856,6 +985,15 @@ function appendUserPointFeatures(
         visit.dwellDurationMs ?? computeVisitDurationMs(visit.firstRecordedAt, visit.lastRecordedAt);
       const isDwell =
         visit.isDwell ?? stayDurationMs >= DEFAULT_TRAIL_DWELL_THRESHOLD_MS;
+      const visitActivityMode =
+        visit.activityMode ??
+        resolveSegmentActivityMode({
+          activity: visit.activity,
+          maxSpeedMps: visit.maxSpeedMps,
+          isDwell,
+          isMovingLeg: !isDwell && (visit.maxSpeedMps ?? 0) >= 0.4,
+          isFuzzed: visit.isFuzzed,
+        });
       const precomputed = resolveTrailPointDetails({
         latitude: visit.latitude,
         longitude: visit.longitude,
@@ -866,6 +1004,7 @@ function appendUserPointFeatures(
         stayDurationMs,
         isDwell,
         isFuzzed: visit.isFuzzed,
+        activityMode: visitActivityMode,
         places,
       });
       features.push({
@@ -882,6 +1021,7 @@ function appendUserPointFeatures(
           durationLabel: precomputed.durationLabel,
           isDwell,
           isFuzzed: visit.isFuzzed,
+          ...(precomputed.activityMode ? { activityMode: precomputed.activityMode } : {}),
           matchedPlaceName: precomputed.matchedPlaceName,
           matchedPlaceIsPrivate: precomputed.matchedPlaceIsPrivate,
         },
@@ -1142,6 +1282,7 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
             userId: userTrail.userId,
             username: userTrail.username,
             ...(seg.roadKind ? { roadKind: seg.roadKind } : {}),
+            ...(seg.activityMode ? { activityMode: seg.activityMode } : {}),
           },
         });
       }
