@@ -146,7 +146,16 @@ Traffic enters through a single reverse proxy gateway (`gateway`), so only one p
 - **Map Tiles (`gateway` / optional `apps/map-service`):** Static HTTP byte-range server for `.pmtiles` archives and map styles (`apps/map-service` remains available via the `standalone-maps` profile or standalone Node).
 - **Database (`packages/db`):** Spatial SQL database and pub/sub message broker.
 
-For deeper technical details, see [SPEC.md](SPEC.md), [GLOSSARY.md](GLOSSARY.md), and [AGENTS.md](AGENTS.md). Copyright (c) 2026 Kabuñiang Buhawi (KB) Monjardin — licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
+For deeper technical details, see [SPEC.md](SPEC.md), [GLOSSARY.md](GLOSSARY.md), and [AGENTS.md](AGENTS.md).
+
+---
+
+## License
+
+LovedOnes — self-hosted, privacy-first family and friends group map, trails, and chat.
+Copyright (C) 2026 Kabuñiang Buhawi (KB) Monjardin
+
+This program is free software: you can redistribute it and/or modify it under the terms of the [GNU Affero General Public License](LICENSE) as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [`LICENSE`](LICENSE) or <https://www.gnu.org/licenses/> for the full license terms.
 
 ---
 

@@ -95,6 +95,9 @@ jobs:
           file: apps/${{ matrix.service }}/Dockerfile
           platforms: ${{ matrix.target.platform }}
           outputs: type=image,name=${{ steps.repo.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/Dowiw/LovedOnes
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
           cache-from: type=gha,scope=${{ matrix.service }}-${{ matrix.target.arch }}
           cache-to: type=gha,mode=min,scope=${{ matrix.service }}-${{ matrix.target.arch }}
 
