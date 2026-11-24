@@ -195,19 +195,27 @@ export function validateAuthForm(input: AuthFormValidationInput): string | null 
     return 'Check your server address (for example, https://track.example.com).';
   }
   const cleanEmail = input.email.trim();
-  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-    return 'Please enter a valid email address.';
-  }
   if (input.mode === 'register') {
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return 'Please enter a valid email address.';
+    }
     const cleanName = input.username.trim();
-    if (cleanName.length < 1) {
-      return 'Enter a display name so your circle recognizes you.';
+    if (cleanName.length < 2) {
+      return 'Enter a username with at least 2 characters.';
+    }
+    if (cleanName.includes('@')) {
+      return 'Username cannot contain "@".';
     }
     if (input.password.length < 8) {
       return 'Use a password with at least 8 characters.';
     }
-  } else if (!input.password) {
-    return 'Please enter your password.';
+  } else {
+    if (!cleanEmail) {
+      return 'Please enter your email or username.';
+    }
+    if (!input.password) {
+      return 'Please enter your password.';
+    }
   }
   return null;
 }

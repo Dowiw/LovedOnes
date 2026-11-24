@@ -746,7 +746,7 @@ export function QrOnboardingScreen({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            email: email.trim(),
+            identifier: email.trim(),
             password,
           }),
         });
@@ -774,7 +774,7 @@ export function QrOnboardingScreen({
       }, 850);
 
       if (outcome.invalidCredentials) {
-        setError('That email or password did not match an account on this server.');
+        setError('That email, username, or password did not match an account on this server.');
         setLoginNotFoundPrompt(true);
         return;
       }
@@ -2658,11 +2658,11 @@ export function QrOnboardingScreen({
                   <Text
                     style={[styles.fieldLabel, { color: palette.inkSubtle, fontFamily: fonts.heading }]}
                   >
-                    Email
+                    Email or Username
                   </Text>
                   <TextInput
                     ref={emailRef}
-                    accessibilityLabel="Email"
+                    accessibilityLabel="Email or Username"
                     style={[
                       styles.input,
                       {
@@ -2679,12 +2679,12 @@ export function QrOnboardingScreen({
                     }}
                     autoCapitalize="none"
                     autoCorrect={false}
-                    autoComplete="email"
-                    textContentType="emailAddress"
-                    keyboardType="email-address"
+                    autoComplete="username"
+                    textContentType="username"
+                    keyboardType="default"
                     returnKeyType="next"
                     onSubmitEditing={() => passwordRef.current?.focus()}
-                    placeholder="you@example.com"
+                    placeholder="you@example.com or username"
                     placeholderTextColor={palette.placeholder}
                   />
                 </View>

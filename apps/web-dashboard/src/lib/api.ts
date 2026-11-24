@@ -319,11 +319,11 @@ async function requestAuthedJson<T>(
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-export async function apiLogin(email: string, password: string): Promise<StoredSession> {
+export async function apiLogin(identifier: string, password: string): Promise<StoredSession> {
   const { authBase } = getServiceBaseUrls();
   return requestJson<StoredSession>(`${authBase}/api/auth/login`, {
     method: 'POST',
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ identifier: identifier.trim(), password }),
   });
 }
 

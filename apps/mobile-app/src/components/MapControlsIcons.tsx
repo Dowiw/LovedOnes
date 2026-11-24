@@ -81,6 +81,21 @@ export function ChatTabIcon({
   );
 }
 
+/**
+ * Minimal geometric four-corner frame icon for explicit Fit All / frame members button.
+ */
+export function FitAllIcon({ tintColor = '#18181b' }: { tintColor?: string }) {
+  return (
+    <View style={styles.fitWrap}>
+      <View style={[styles.fitCorner, styles.fitTL, { borderColor: tintColor }]} />
+      <View style={[styles.fitCorner, styles.fitTR, { borderColor: tintColor }]} />
+      <View style={[styles.fitCorner, styles.fitBL, { borderColor: tintColor }]} />
+      <View style={[styles.fitCorner, styles.fitBR, { borderColor: tintColor }]} />
+      <View style={[styles.fitDot, { backgroundColor: tintColor }]} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   compassWrap: {
     width: 24,
@@ -179,5 +194,49 @@ const styles = StyleSheet.create({
     borderRightWidth: 4,
     borderTopWidth: 3.5,
     borderRightColor: 'transparent',
+  },
+  fitWrap: {
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fitCorner: {
+    position: 'absolute',
+    width: 6,
+    height: 6,
+  },
+  fitTL: {
+    top: 1,
+    left: 1,
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+    borderTopLeftRadius: 2,
+  },
+  fitTR: {
+    top: 1,
+    right: 1,
+    borderTopWidth: 2,
+    borderRightWidth: 2,
+    borderTopRightRadius: 2,
+  },
+  fitBL: {
+    bottom: 1,
+    left: 1,
+    borderBottomWidth: 2,
+    borderLeftWidth: 2,
+    borderBottomLeftRadius: 2,
+  },
+  fitBR: {
+    bottom: 1,
+    right: 1,
+    borderBottomWidth: 2,
+    borderRightWidth: 2,
+    borderBottomRightRadius: 2,
+  },
+  fitDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 999,
   },
 });

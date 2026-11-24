@@ -438,4 +438,22 @@ describe('@loved-ones/db PostGIS integration', () => {
       await pool.query('DELETE FROM users WHERE id = $1', [userId]);
     }
   });
+
+  it('enforces case-insensitive unique usernames in PostgreSQL', async () => {
+    const u1 = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, username, password_hash, role)
+       VALUES ('uniq-a@lovedones.test', 'UniqueCaseUser', 'hash', 'USER')
+       RETURNING id`,
+    );
+    try {
+      await expect(
+        pool.query(
+          `INSERT INTO users (email, username, password_hash, role)
+           VALUES ('uniq-b@lovedones.test', 'uniquecaseuser', 'hash', 'USER')`,
+        ),
+      ).rejects.toMatchObject({ code: '23505' });
+    } finally {
+      await pool.query('DELETE FROM users WHERE id = $1', [u1.rows[0].id]);
+    }
+  });
 });

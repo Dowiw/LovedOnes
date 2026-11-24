@@ -43,12 +43,14 @@ import {
   getPendingRegistration,
   getPingedServers,
   getRecoveryGeofenceAnchor,
+  getSavedMapViewport,
   getStoredConfig,
   isPendingRecordActive,
   parseAndBindQrInvite,
   saveMapThemePreference,
   savePendingRegistration,
   saveRecoveryGeofenceAnchor,
+  saveSavedMapViewport,
   saveStoredConfig,
   setBackgroundTrackingEnabled,
 } from '../services/secureConfig';
@@ -449,13 +451,33 @@ describe('@loved-ones/mobile-app', () => {
 
     expect(
       validateAuthForm({
+        mode: 'login',
+        serverUrl: 'https://track.example.com',
+        email: 'alex_user',
+        username: '',
+        password: 'secret',
+      }),
+    ).toBeNull();
+
+    expect(
+      validateAuthForm({
         mode: 'register',
         serverUrl: 'https://track.example.com',
         email: 'a@b.com',
         username: '   ',
         password: 'password123',
       }),
-    ).toContain('display name');
+    ).toContain('username');
+
+    expect(
+      validateAuthForm({
+        mode: 'register',
+        serverUrl: 'https://track.example.com',
+        email: 'a@b.com',
+        username: 'bad@name',
+        password: 'password123',
+      }),
+    ).toContain('@');
 
     expect(
       validateAuthForm({
@@ -1006,5 +1028,35 @@ describe('@loved-ones/mobile-app', () => {
         { heading: 210, speed: 0.3, recordedAtMs: w0 + 4_000 },
       ),
     ).toBe(false);
+  });
+
+  it('persists, isolates, restores, and clears saved mobile map viewport state', async () => {
+    const store = createMemoryKeyValueStore();
+    expect(await getSavedMapViewport('user-1', store)).toBeNull();
+
+    await saveSavedMapViewport(
+      {
+        center: [13.4123, 52.5189],
+        zoom: 14.5,
+        bearing: 24,
+        focusedUserId: 'member-9',
+        activeGroupId: 'grp-2',
+      },
+      'user-1',
+      store,
+    );
+
+    const restored = await getSavedMapViewport('user-1', store);
+    expect(restored).toMatchObject({
+      center: [13.4123, 52.5189],
+      zoom: 14.5,
+      bearing: 24,
+      focusedUserId: 'member-9',
+      activeGroupId: 'grp-2',
+    });
+    expect(await getSavedMapViewport('user-2', store)).toBeNull();
+
+    await clearSessionConfig(store);
+    expect(await getSavedMapViewport('user-1', store)).toBeNull();
   });
 });

@@ -156,9 +156,18 @@ export const HexColorSchema = z
   .regex(SAFE_HEX_COLOR_REGEX, 'Color must be a #RRGGBB hex value')
   .transform((v) => v.toLowerCase());
 
+export const UsernameSchema = z
+  .string()
+  .trim()
+  .min(2, 'Username must be at least 2 characters')
+  .max(64, 'Username must be at most 64 characters')
+  .refine((value) => !value.includes('@'), {
+    message: 'Username cannot contain "@"',
+  });
+
 export const RegisterSchema = z.object({
-  email: z.string().email().max(255),
-  username: z.string().min(2).max(64).trim(),
+  email: z.string().trim().email().max(255),
+  username: UsernameSchema,
   password: z.string().min(8).max(128),
   inviteToken: z.string().min(4).max(128).optional(),
 });
@@ -166,7 +175,7 @@ export type RegisterInput = z.infer<typeof RegisterSchema>;
 
 export const UpdateProfileSchema = z
   .object({
-    username: z.string().min(2).max(64).trim().optional(),
+    username: UsernameSchema.optional(),
     email: z.string().email().max(255).trim().optional(),
     avatarUrl: AvatarUrlSchema.nullable().optional(),
     haloColor: HexColorSchema.nullable().optional(),
@@ -239,11 +248,21 @@ export const MemberPrivacyUpdatedSchema = z.object({
 });
 export type MemberPrivacyUpdatedEvent = z.infer<typeof MemberPrivacyUpdatedSchema>;
 
-export const LoginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
-export type LoginInput = z.infer<typeof LoginSchema>;
+export const LoginSchema = z
+  .object({
+    identifier: z.string().trim().min(1).max(255).optional(),
+    email: z.string().trim().min(1).max(255).optional(),
+    password: z.string().min(1),
+  })
+  .refine((data) => Boolean((data.identifier ?? data.email)?.trim()), {
+    message: 'Enter your email or username',
+    path: ['identifier'],
+  })
+  .transform((data) => ({
+    identifier: (data.identifier ?? data.email)!.trim(),
+    password: data.password,
+  }));
+export type LoginInput = z.input<typeof LoginSchema>;
 
 export const RefreshSchema = z.object({
   refreshToken: z.string().min(10),
@@ -1051,7 +1070,7 @@ export type OnboardingHandshakeInput = z.infer<typeof OnboardingHandshakeSchema>
 
 export const CreateRegistrationRequestSchema = z.object({
   email: z.string().trim().email().max(255),
-  username: z.string().trim().min(1).max(64),
+  username: UsernameSchema,
   password: z.string().min(8).max(128),
   avatarUrl: AvatarUrlSchema.nullable().optional(),
   haloColor: z

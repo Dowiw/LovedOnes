@@ -919,5 +919,34 @@ describe('@loved-ones/auth-admin-service integration', () => {
     expect(dismissUpdateRes.statusCode).toBe(200);
     expect(dismissUpdateRes.json().phase).toBe('idle');
     expect(dismissUpdateRes.json().error).toBeNull();
+
+    // 20. Unique case-insensitive usernames & login by username or email
+    const loginByUsernameRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'hostadmin', password: 'SuperSecretPassword123' },
+    });
+    expect(loginByUsernameRes.statusCode).toBe(200);
+    expect(loginByUsernameRes.json().user.id).toBe(adminData.user.id);
+
+    const dupUsernameReqRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/registration-requests',
+      headers: { 'x-forwarded-for': '203.0.113.77' },
+      payload: {
+        email: 'brandnew@lovedones.test',
+        username: 'HOSTADMIN',
+        password: 'NewPassword123!',
+      },
+    });
+    expect(dupUsernameReqRes.statusCode).toBe(409);
+
+    const dupUsernameProfileRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/auth/me',
+      headers: { Authorization: `Bearer ${patched.accessToken}` },
+      payload: { username: 'hostadmin' },
+    });
+    expect(dupUsernameProfileRes.statusCode).toBe(409);
   });
 });

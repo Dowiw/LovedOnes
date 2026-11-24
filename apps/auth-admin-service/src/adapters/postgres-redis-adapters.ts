@@ -108,6 +108,14 @@ function createTxStore(client: pg.PoolClient): AuthGroupTxStore {
       return res.rows[0] ? mapAccount(res.rows[0]) : null;
     },
 
+    async findAccountByUsername(username: string): Promise<AccountRecord | null> {
+      const res = await client.query<PgUserRow>(
+        `SELECT ${USER_AUTH_SELECT_COLUMNS} FROM users WHERE LOWER(username) = LOWER($1)`,
+        [username],
+      );
+      return res.rows[0] ? mapAccount(res.rows[0]) : null;
+    },
+
     async countAccounts(): Promise<number> {
       const res = await client.query<{ cnt: number }>('SELECT COUNT(*)::int AS cnt FROM users');
       return res.rows[0]?.cnt ?? 0;
@@ -203,6 +211,27 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
     return res.rows[0] ? mapAccount(res.rows[0]) : null;
   }
 
+  async findAccountByUsername(username: string): Promise<AccountRecord | null> {
+    const res = await this.pool.query<PgUserRow>(
+      `SELECT ${USER_AUTH_SELECT_COLUMNS}
+       FROM users WHERE LOWER(username) = LOWER($1)`,
+      [username],
+    );
+    return res.rows[0] ? mapAccount(res.rows[0]) : null;
+  }
+
+  async findAccountByIdentifier(identifier: string): Promise<AccountRecord | null> {
+    const res = await this.pool.query<PgUserRow>(
+      `SELECT ${USER_AUTH_SELECT_COLUMNS}
+       FROM users
+       WHERE LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1)
+       ORDER BY (LOWER(email) = LOWER($1)) DESC
+       LIMIT 1`,
+      [identifier],
+    );
+    return res.rows[0] ? mapAccount(res.rows[0]) : null;
+  }
+
   async findAccountByVerifiedRecoveryEmail(recoveryEmail: string): Promise<AccountRecord | null> {
     const res = await this.pool.query<PgUserRow>(
       `SELECT ${USER_AUTH_SELECT_COLUMNS}
@@ -241,7 +270,10 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
       fuzzCircleColor?: string | null;
     },
   ): Promise<
-    { status: 'ok'; account: PublicAccountRecord } | { status: 'email_conflict' } | { status: 'not_found' }
+    | { status: 'ok'; account: PublicAccountRecord }
+    | { status: 'email_conflict' }
+    | { status: 'username_conflict' }
+    | { status: 'not_found' }
   > {
     const sets: string[] = [];
     const params: unknown[] = [];
@@ -282,6 +314,16 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
       }
     }
 
+    if (patch.username !== undefined) {
+      const dupUsername = await this.pool.query<{ id: string }>(
+        'SELECT id FROM users WHERE LOWER(username) = LOWER($1) AND id <> $2 LIMIT 1',
+        [patch.username, userId],
+      );
+      if (dupUsername.rows.length > 0) {
+        return { status: 'username_conflict' };
+      }
+    }
+
     params.push(userId);
     try {
       const res = await this.pool.query<Omit<PgUserRow, 'password_hash'>>(
@@ -293,7 +335,11 @@ export class PostgresAuthGroupStore implements AuthGroupStore {
       const row = res.rows[0];
       return row ? { status: 'ok', account: mapPublicAccount(row) } : { status: 'not_found' };
     } catch (err) {
-      if ((err as { code?: string }).code === '23505') {
+      const pgErr = err as { code?: string; constraint?: string };
+      if (pgErr.code === '23505') {
+        if (pgErr.constraint === 'idx_users_username_lower') {
+          return { status: 'username_conflict' };
+        }
         return { status: 'email_conflict' };
       }
       throw err;

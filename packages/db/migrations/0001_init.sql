@@ -273,3 +273,29 @@ CREATE TABLE IF NOT EXISTS server_settings (
     updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname = 'idx_users_username_lower'
+    ) THEN
+        WITH ranked AS (
+            SELECT id,
+                   username,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY LOWER(username)
+                       ORDER BY created_at ASC, id ASC
+                   ) AS rn
+            FROM users
+        )
+        UPDATE users u
+        SET username = LEFT(r.username, 56) || '_' || r.rn::text || '_' || SUBSTRING(REPLACE(u.id::text, '-', ''), 1, 4)
+        FROM ranked r
+        WHERE u.id = r.id
+          AND r.rn > 1;
+
+        CREATE UNIQUE INDEX idx_users_username_lower
+        ON users (LOWER(username));
+    END IF;
+END $$;
