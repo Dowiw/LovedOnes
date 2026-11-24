@@ -44,6 +44,7 @@ import {
   getPingedServers,
   getRecoveryGeofenceAnchor,
   getSavedMapViewport,
+  getShowTerminatorPreference,
   getStoredConfig,
   isPendingRecordActive,
   parseAndBindQrInvite,
@@ -51,6 +52,7 @@ import {
   savePendingRegistration,
   saveRecoveryGeofenceAnchor,
   saveSavedMapViewport,
+  saveShowTerminatorPreference,
   saveStoredConfig,
   setBackgroundTrackingEnabled,
 } from '../services/secureConfig';
@@ -1058,5 +1060,16 @@ describe('@loved-ones/mobile-app', () => {
 
     await clearSessionConfig(store);
     expect(await getSavedMapViewport('user-1', store)).toBeNull();
+  });
+
+  it('defaults Day/Night terminator preference to enabled and persists toggles', async () => {
+    const store = createMemoryKeyValueStore();
+    expect(await getShowTerminatorPreference(store)).toBe(true);
+
+    await saveShowTerminatorPreference(false, store);
+    expect(await getShowTerminatorPreference(store)).toBe(false);
+
+    await saveShowTerminatorPreference(true, store);
+    expect(await getShowTerminatorPreference(store)).toBe(true);
   });
 });

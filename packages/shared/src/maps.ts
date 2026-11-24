@@ -59,6 +59,13 @@ const MAX_SPAN_LAT_DEG = 1.6;
 const MAX_SPAN_LON_DEG = 2.4;
 const MIN_PAD_LAT_DEG = 0.08;
 
+export const WORLD_OVERVIEW_REGION_ID = 'world-overview';
+export const WORLD_OVERVIEW_MAX_ZOOM = 5;
+
+export function isWorldOverviewRegion(region: Pick<MapRegion, 'id' | 'maxZoom' | 'isStub'>): boolean {
+  return !region.isStub && (region.id === WORLD_OVERVIEW_REGION_ID || region.maxZoom <= 6);
+}
+
 export function isRegionOperational(region: Pick<MapRegion, 'isStub' | 'maxZoom'>): boolean {
   return !region.isStub && region.maxZoom >= 12;
 }

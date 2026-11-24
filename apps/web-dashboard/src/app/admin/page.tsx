@@ -11,6 +11,7 @@ import {
   CloudDownload,
   Cpu,
   Database,
+  Globe,
   HardDrive,
   Image as ImageIcon,
   Link2,
@@ -29,11 +30,13 @@ import {
   formatCountdownRemaining,
   isSafeAvatarUrl,
   isSafeLoginBackgroundUrl,
+  isWorldOverviewRegion,
   type MapDownloadJob,
   type MapRegion,
   type RegistrationRequestItem,
   type SystemTelemetry,
   type SystemUpdateStatus,
+  WORLD_OVERVIEW_REGION_ID,
 } from '@loved-ones/shared';
 import {
   AdminNoticesBanner,
@@ -56,6 +59,7 @@ import {
   apiFetchRegistrationRequests,
   apiFetchSystemUpdateStatus,
   apiFetchTelemetry,
+  apiRequestWorldOverviewDownload,
   apiTriggerSystemUpdate,
   apiUpdateLoginAppearance,
   formatBytes,
@@ -139,6 +143,7 @@ export default function AdminDashboardPage() {
   const [loginBgError, setLoginBgError] = useState<string | null>(null);
   const loginBgFileInputRef = useRef<HTMLInputElement | null>(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [downloadingWorldOverview, setDownloadingWorldOverview] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1104,16 +1109,68 @@ export default function AdminDashboardPage() {
         </section>
 
         <section className="overflow-hidden rounded-xl border border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
-          <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800">
             <div className="flex items-center gap-2 text-sm font-semibold text-zinc-950 dark:text-zinc-50">
               <CloudDownload className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
               Downloaded Map Regions ({mapRegions.filter((r) => !r.isStub).length})
             </div>
-            {mapJobs.some((j) => j.status === 'resolving' || j.status === 'downloading') && (
-              <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
-                Download active
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {mapJobs.some((j) => j.status === 'resolving' || j.status === 'downloading') && (
+                <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-[11px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
+                  Download active
+                </span>
+              )}
+              {(() => {
+                const hasWorldOverview = mapRegions.some(
+                  (r) => !r.isStub && isWorldOverviewRegion(r),
+                );
+                const worldJobActive = mapJobs.some(
+                  (j) =>
+                    (j.regionId === WORLD_OVERVIEW_REGION_ID ||
+                      j.cityName === 'World Overview (z0-z5)') &&
+                    (j.status === 'queued' || j.status === 'resolving' || j.status === 'downloading'),
+                );
+                if (hasWorldOverview) {
+                  return (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/60 dark:text-emerald-300">
+                      <Globe className="h-3 w-3" />
+                      World Overview Ready
+                    </span>
+                  );
+                }
+                return (
+                  <button
+                    type="button"
+                    disabled={downloadingWorldOverview || worldJobActive}
+                    onClick={() => {
+                      if (!session) return;
+                      setDownloadingWorldOverview(true);
+                      setError(null);
+                      void apiRequestWorldOverviewDownload(session.accessToken)
+                        .then(() => refreshData(session.accessToken))
+                        .catch((err) =>
+                          setError(
+                            err instanceof Error
+                              ? err.message
+                              : 'Failed to request world overview download',
+                          ),
+                        )
+                        .finally(() => setDownloadingWorldOverview(false));
+                    }}
+                    className="lo-press inline-flex items-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                  >
+                    {downloadingWorldOverview || worldJobActive ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Globe className="h-3.5 w-3.5" />
+                    )}
+                    {worldJobActive
+                      ? 'Downloading World Overview…'
+                      : 'Download World Overview (z0–z5)'}
+                  </button>
+                );
+              })()}
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
@@ -1153,10 +1210,18 @@ export default function AdminDashboardPage() {
                         className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                           r.isStub
                             ? 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
-                            : 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                            : isWorldOverviewRegion(r)
+                              ? 'bg-sky-100 text-sky-800 dark:bg-sky-950/70 dark:text-sky-300'
+                              : 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
                         }`}
                       >
-                        {r.isStub ? 'Placeholder Stub' : r.isPrimary ? 'Primary' : 'City Extract'}
+                        {r.isStub
+                          ? 'Placeholder Stub'
+                          : isWorldOverviewRegion(r)
+                            ? 'World Overview'
+                            : r.isPrimary
+                              ? 'Primary'
+                              : 'City Extract'}
                       </span>
                     </td>
                     <td className="px-5 py-3 text-right">

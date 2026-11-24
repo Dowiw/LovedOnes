@@ -26,6 +26,7 @@ import {
   Maximize2,
   Menu,
   MessageSquare,
+  Minus,
   Monitor,
   Moon,
   Navigation,
@@ -37,6 +38,7 @@ import {
   Send,
   Settings,
   Share2,
+  SlidersHorizontal,
   Smartphone,
   Sun,
   Trash2,
@@ -71,7 +73,11 @@ import {
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
 import { BrandMark } from '@/components/BrandMark';
 import { createGeoWarmupGate } from '@/lib/geoWarmup';
-import { MapCanvas, type MapLabelLanguage } from '@/components/MapCanvas';
+import {
+  MapCanvas,
+  type MapLabelLanguage,
+  type MapProjectionMode,
+} from '@/components/MapCanvas';
 import { QrJoinModal } from '@/components/QrJoinModal';
 import {
   ACCOUNT_REMOVED_DEFAULT_MESSAGE,
@@ -144,6 +150,21 @@ import { readSavedMapViewport, writeSavedMapViewport } from '@/lib/mapViewport';
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
 type MapViewMode = 'live' | 'trails' | 'places';
 const WEB_APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.1.0';
+
+function CompassNorthNeedle({ bearingDeg, className = 'h-4 w-4' }: { bearingDeg: number; className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={className}
+      style={{ transform: `rotate(${-bearingDeg}deg)`, transition: 'transform 120ms linear' }}
+    >
+      <polygon points="12,2.5 16,12 12,10.5 8,12" fill="#ef4444" />
+      <polygon points="12,21.5 16,12 12,13.5 8,12" fill="currentColor" opacity="0.45" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
 
 function playChatChime() {
   try {
@@ -304,6 +325,14 @@ export default function HomePage() {
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
   const [mapThemePreference, setMapThemePreference] = useState<MapThemePreference>('system');
   const [systemPrefersDark, setSystemPrefersDark] = useState(false);
+  const [mapProjection, setMapProjection] = useState<MapProjectionMode>('globe');
+  const [globeSupported, setGlobeSupported] = useState(true);
+  const [showTerminator, setShowTerminator] = useState(true);
+  const [mapBearing, setMapBearing] = useState(0);
+  const [zoomAction, setZoomAction] = useState<{ delta: 1 | -1; nonce: number } | null>(null);
+  const [resetNorthNonce, setResetNorthNonce] = useState(0);
+  const [mobileControlsOpen, setMobileControlsOpen] = useState(false);
+  const [desktopMapOptionsOpen, setDesktopMapOptionsOpen] = useState(false);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
   const [mapRegionsLoaded, setMapRegionsLoaded] = useState(false);
   const [regionsRevision, setRegionsRevision] = useState(0);
@@ -340,6 +369,8 @@ export default function HomePage() {
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
   const leftDockRef = useRef<HTMLDivElement | null>(null);
+  const mobileControlsRef = useRef<HTMLDivElement | null>(null);
+  const desktopControlsRef = useRef<HTMLDivElement | null>(null);
   const rightOpenRef = useRef(rightOpen);
   rightOpenRef.current = rightOpen;
   const inspectorTabRef = useRef(inspectorTab);
@@ -366,6 +397,14 @@ export default function HomePage() {
       }
       const savedTheme = readStoredThemePreference();
       setMapThemePreference(savedTheme);
+      const savedProjection = window.localStorage.getItem('lovedones_map_projection_v1');
+      if (savedProjection === 'globe' || savedProjection === 'mercator') {
+        setMapProjection(savedProjection);
+      }
+      const savedTerminator = window.localStorage.getItem('lovedones_map_terminator_v1');
+      if (savedTerminator === 'off') {
+        setShowTerminator(false);
+      }
       const savedAlerts = window.localStorage.getItem('lovedones_chat_alerts_v1');
       if (savedAlerts === 'off') {
         setChatAlertsEnabled(false);
@@ -517,6 +556,53 @@ export default function HomePage() {
     persistThemePreference(pref);
   }
 
+  function handleChangeMapProjection(next: MapProjectionMode) {
+    if (next === 'globe' && !globeSupported) return;
+    setMapProjection(next);
+    try {
+      window.localStorage.setItem('lovedones_map_projection_v1', next);
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  function handleToggleTerminator() {
+    setShowTerminator((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem('lovedones_map_terminator_v1', next ? 'on' : 'off');
+      } catch {
+        // ignore storage failures
+      }
+      return next;
+    });
+  }
+
+  function handleZoomStep(delta: 1 | -1) {
+    setZoomAction({ delta, nonce: Date.now() + Math.random() });
+  }
+
+  function handleResetNorth() {
+    setResetNorthNonce((n) => n + 1);
+  }
+
+  function handleLocateOrShareGps() {
+    if (!geoSharing) {
+      setGeoSharing(true);
+    }
+    if (selfLocation) {
+      setSelectedUserId(null);
+      setSelectedPlaceId(null);
+      setMapViewMode((prev) => (prev === 'places' ? 'live' : prev));
+      setFocusCoords({
+        latitude: selfLocation.latitude,
+        longitude: selfLocation.longitude,
+        zoom: 15,
+        nonce: Date.now(),
+      });
+    }
+  }
+
   useEffect(() => {
     const syncStoredTheme = () => {
       setMapThemePreference(readStoredThemePreference());
@@ -619,17 +705,26 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    if (!groupPopoverOpen && !menuOpen) return;
+    if (!groupPopoverOpen && !menuOpen && !mobileControlsOpen && !desktopMapOptionsOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setGroupPopoverOpen(false);
         setMenuOpen(false);
+        setMobileControlsOpen(false);
+        setDesktopMapOptionsOpen(false);
       }
     };
     const onPointerDown = (event: PointerEvent) => {
-      if (leftDockRef.current && !leftDockRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (leftDockRef.current && !leftDockRef.current.contains(target)) {
         setGroupPopoverOpen(false);
         setMenuOpen(false);
+      }
+      if (mobileControlsRef.current && !mobileControlsRef.current.contains(target)) {
+        setMobileControlsOpen(false);
+      }
+      if (desktopControlsRef.current && !desktopControlsRef.current.contains(target)) {
+        setDesktopMapOptionsOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -638,7 +733,7 @@ export default function HomePage() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('pointerdown', onPointerDown);
     };
-  }, [groupPopoverOpen, menuOpen]);
+  }, [groupPopoverOpen, menuOpen, mobileControlsOpen, desktopMapOptionsOpen]);
 
   function openChatTab() {
     setGroupPopoverOpen(false);
@@ -2439,10 +2534,21 @@ export default function HomePage() {
         focusCoords={focusCoords}
         initialViewport={initialMapViewport}
         fitAllNonce={fitAllNonce}
+        zoomAction={zoomAction}
+        resetNorthNonce={resetNorthNonce}
         draftPlace={draftPlace}
         pickingPlace={isPickingPlace}
         labelLanguage={labelLanguage}
         mapTheme={resolvedMapTheme}
+        projection={globeSupported ? mapProjection : 'mercator'}
+        showTerminator={showTerminator}
+        onProjectionFallback={(resolved) => {
+          if (resolved === 'mercator') {
+            setGlobeSupported(false);
+            setMapProjection('mercator');
+          }
+        }}
+        onBearingChange={setMapBearing}
         onViewportChange={handleMapViewportChange}
         onMapSelectCoords={(lat, lon) => {
           if (!isPickingPlace) return;
@@ -2676,6 +2782,8 @@ export default function HomePage() {
               type="button"
               onClick={() => {
                 setGroupPopoverOpen(false);
+                setMobileControlsOpen(false);
+                setDesktopMapOptionsOpen(false);
                 setMenuOpen((v) => {
                   const next = !v;
                   if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
@@ -2685,7 +2793,7 @@ export default function HomePage() {
                 });
               }}
               aria-expanded={menuOpen}
-              title="Workspace menu (GPS, labels, tracker, account)"
+              title="Workspace menu (maps, share links, tracker, account)"
               className={`lo-press relative rounded-lg p-2 transition ${
                 menuOpen
                   ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
@@ -2693,12 +2801,6 @@ export default function HomePage() {
               }`}
             >
               <Menu className="h-4 w-4" />
-              {geoSharing && !menuOpen && (
-                <span
-                  title="Live GPS active"
-                  className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-zinc-950 ring-2 ring-white dark:bg-emerald-400 dark:ring-zinc-900"
-                />
-              )}
             </button>
 
             <button
@@ -2706,10 +2808,12 @@ export default function HomePage() {
               onClick={() => {
                 setGroupPopoverOpen(false);
                 setMenuOpen(false);
+                setMobileControlsOpen(false);
+                setDesktopMapOptionsOpen(false);
                 setRightOpen((v) => !v);
               }}
               title="Toggle inspector panel"
-              className={`lo-press relative rounded-lg p-2 transition md:hidden ${
+              className={`lo-press relative hidden rounded-lg p-2 transition sm:inline-flex md:hidden ${
                 rightOpen
                   ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
                   : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-50'
@@ -2879,127 +2983,8 @@ export default function HomePage() {
 
         {menuOpen && (
           <div className="lo-float-in pointer-events-auto max-h-[calc(var(--lo-app-height,100dvh)-5.5rem-var(--lo-safe-top,0px)-var(--lo-safe-bottom,0px))] space-y-3 overflow-y-auto rounded-xl border border-zinc-200/80 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.12)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
-            {/* Live GPS Beacon */}
-            <div>
-              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                Location Beacon
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setGeoSharing((s) => !s)}
-                  className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                    geoSharing
-                      ? 'border border-zinc-950 bg-white text-zinc-950 shadow-sm hover:bg-zinc-100 dark:border-zinc-200 dark:bg-zinc-800 dark:text-zinc-50 dark:hover:bg-zinc-700'
-                      : 'bg-zinc-950 text-white shadow-sm hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200'
-                  }`}
-                >
-                  <Radio className="h-3.5 w-3.5" />
-                  {geoSharing ? 'Stop Live GPS' : 'Share Live GPS'}
-                </button>
-                {selfLocation && (
-                  <button
-                    type="button"
-                    title="Zoom to my live location"
-                    onClick={() => {
-                      setSelectedUserId(null);
-                      setSelectedPlaceId(null);
-                      setMapViewMode((prev) => (prev === 'places' ? 'live' : prev));
-                      setFocusCoords({
-                        latitude: selfLocation.latitude,
-                        longitude: selfLocation.longitude,
-                        zoom: 15,
-                        nonce: Date.now(),
-                      });
-                    }}
-                    className="lo-press rounded-lg border border-zinc-200 bg-white p-2 text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-                  >
-                    <LocateFixed className="h-3.5 w-3.5" />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={sendingTestPing}
-                  onClick={() => void handleSendTestPing()}
-                  className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-white"
-                >
-                  {sendingTestPing && <Loader2 className="h-3 w-3 animate-spin" />}
-                  <span>{sendingTestPing ? 'Sending...' : 'Test Ping'}</span>
-                </button>
-              </div>
-              {geoStatus && (
-                <p className="mt-2 truncate font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
-                  {geoStatus}
-                </p>
-              )}
-            </div>
-
-            {/* Map Theme (Auto / Light / Dark) */}
-            <div className="flex items-center justify-between border-t border-zinc-100 pt-3 dark:border-zinc-800">
-              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
-                {resolvedMapTheme === 'dark' ? (
-                  <Moon className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
-                ) : (
-                  <Sun className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
-                )}
-                Map Theme
-              </div>
-              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
-                {(
-                  [
-                    ['system', 'Auto', Monitor],
-                    ['light', 'Light', Sun],
-                    ['dark', 'Dark', Moon],
-                  ] as const
-                ).map(([pref, label, Icon]) => (
-                  <button
-                    key={pref}
-                    type="button"
-                    onClick={() => handleChangeMapTheme(pref)}
-                    className={`lo-press flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold transition ${
-                      mapThemePreference === pref
-                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
-                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
-                    }`}
-                  >
-                    <Icon className="h-3 w-3" />
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Map Label Language */}
-            <div className="flex items-center justify-between border-t border-zinc-100 pt-3 dark:border-zinc-800">
-              <div className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
-                <Globe className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
-                Map Labels
-              </div>
-              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
-                {(
-                  [
-                    ['en', 'EN'],
-                    ['local', 'Local'],
-                  ] as const
-                ).map(([lang, label]) => (
-                  <button
-                    key={lang}
-                    type="button"
-                    onClick={() => handleChangeLabelLanguage(lang)}
-                    className={`lo-press rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
-                      labelLanguage === lang
-                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
-                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* Offline City Map Regions */}
-            <div className="border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+            <div>
               <button
                 type="button"
                 onClick={() => setOfflineMapsOpen((v) => !v)}
@@ -4207,6 +4192,529 @@ export default function HomePage() {
               </button>
             </>
           )}
+        </div>
+      </div>
+
+      {/* Mobile Portrait (< sm): Bottom-Left Progressive Disclosure Controls (GPS + Zoom + North + Map Options) */}
+      <div
+        ref={mobileControlsRef}
+        className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] z-20 flex flex-col items-start gap-2 sm:hidden"
+      >
+        {mobileControlsOpen && (
+          <div className="lo-float-in pointer-events-auto w-[min(18rem,calc(100vw-1.5rem))] space-y-3 rounded-xl border border-zinc-200/85 bg-white/95 p-3 shadow-[0_14px_40px_rgba(9,9,11,0.16)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+            {/* Live GPS Controls */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                Location Beacon
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setGeoSharing((s) => !s)}
+                  className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold transition ${
+                    geoSharing
+                      ? 'border border-emerald-500/40 bg-emerald-50 text-emerald-800 dark:border-emerald-400/35 dark:bg-emerald-950/60 dark:text-emerald-200'
+                      : 'bg-zinc-950 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200'
+                  }`}
+                >
+                  <Radio className="h-3.5 w-3.5" />
+                  {geoSharing ? 'Stop GPS' : 'Share GPS'}
+                </button>
+                {selfLocation && (
+                  <button
+                    type="button"
+                    title="Center on my location"
+                    aria-label="Center on my location"
+                    onClick={() => {
+                      handleLocateOrShareGps();
+                      setMobileControlsOpen(false);
+                    }}
+                    className="lo-press rounded-lg border border-zinc-200 bg-white p-2 text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                  >
+                    <LocateFixed className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={sendingTestPing}
+                  onClick={() => void handleSendTestPing()}
+                  className="lo-press flex items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                >
+                  {sendingTestPing && <Loader2 className="h-3 w-3 animate-spin" />}
+                  <span>Ping</span>
+                </button>
+              </div>
+              {geoStatus && (
+                <p className="truncate font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+                  {geoStatus}
+                </p>
+              )}
+            </div>
+
+            {/* Zoom & Return North */}
+            <div className="flex items-center justify-between gap-2 border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => handleZoomStep(-1)}
+                  title="Zoom out"
+                  aria-label="Zoom out"
+                  className="lo-press flex h-8 w-8 items-center justify-center rounded-md text-zinc-700 hover:bg-white hover:text-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleZoomStep(1)}
+                  title="Zoom in"
+                  aria-label="Zoom in"
+                  className="lo-press flex h-8 w-8 items-center justify-center rounded-md text-zinc-700 hover:bg-white hover:text-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={handleResetNorth}
+                title="Reset map orientation to North"
+                className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+              >
+                <CompassNorthNeedle bearingDeg={mapBearing} className="h-3.5 w-3.5" />
+                <span>North</span>
+              </button>
+            </div>
+
+            {/* Projection & Day/Night */}
+            <div className="space-y-2 border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                  <Globe className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                  View
+                </span>
+                <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                  {(
+                    [
+                      ['globe', 'Globe'],
+                      ['mercator', 'Flat'],
+                    ] as const
+                  ).map(([mode, label]) => {
+                    const disabled = mode === 'globe' && !globeSupported;
+                    const active = (globeSupported ? mapProjection : 'mercator') === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        disabled={disabled}
+                        title={disabled ? 'Globe view unsupported on this browser' : undefined}
+                        onClick={() => handleChangeMapProjection(mode)}
+                        className={`lo-press rounded-md px-2.5 py-1 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                          active
+                            ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                            : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                  <Moon className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                  Day / Night
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={showTerminator}
+                  onClick={handleToggleTerminator}
+                  className={`lo-press rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
+                    showTerminator
+                      ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                      : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
+                  }`}
+                >
+                  {showTerminator ? 'On' : 'Off'}
+                </button>
+              </div>
+            </div>
+
+            {/* Map Theme */}
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                {resolvedMapTheme === 'dark' ? (
+                  <Moon className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                ) : (
+                  <Sun className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                )}
+                Theme
+              </span>
+              <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                {(
+                  [
+                    ['system', 'Auto', Monitor],
+                    ['light', 'Light', Sun],
+                    ['dark', 'Dark', Moon],
+                  ] as const
+                ).map(([pref, label, Icon]) => (
+                  <button
+                    key={pref}
+                    type="button"
+                    onClick={() => handleChangeMapTheme(pref)}
+                    className={`lo-press flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold transition ${
+                      mapThemePreference === pref
+                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                    }`}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Map Labels */}
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200">Labels</span>
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                {(
+                  [
+                    ['en', 'EN'],
+                    ['local', 'Local'],
+                  ] as const
+                ).map(([lang, label]) => (
+                  <button
+                    key={lang}
+                    type="button"
+                    onClick={() => handleChangeLabelLanguage(lang)}
+                    className={`lo-press rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                      labelLanguage === lang
+                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => {
+            setGroupPopoverOpen(false);
+            setMenuOpen(false);
+            setRightOpen(false);
+            setMobileControlsOpen((v) => !v);
+          }}
+          aria-expanded={mobileControlsOpen}
+          aria-label="Map controls and GPS options"
+          title="Live GPS, zoom, north & map options"
+          className={`lo-press pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-xl border shadow-[0_8px_24px_rgba(9,9,11,0.12)] backdrop-blur-xl transition ${
+            mobileControlsOpen
+              ? 'border-zinc-950 bg-zinc-950 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
+              : 'border-zinc-200/85 bg-white/95 text-zinc-800 hover:bg-white dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-100'
+          }`}
+        >
+          {mobileControlsOpen ? (
+            <X className="h-4 w-4" />
+          ) : (
+            <SlidersHorizontal className="h-4 w-4" />
+          )}
+          {geoSharing && !mobileControlsOpen && (
+            <span
+              title="Live GPS active"
+              className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900"
+            />
+          )}
+        </button>
+      </div>
+
+      {/* Mobile Portrait (< sm): Bottom-Right Inspector Panel Toggle */}
+      <div className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] right-[calc(0.75rem+var(--lo-safe-right,0px))] z-20 sm:hidden">
+        <button
+          type="button"
+          onClick={() => {
+            setGroupPopoverOpen(false);
+            setMenuOpen(false);
+            setMobileControlsOpen(false);
+            setRightOpen((v) => !v);
+          }}
+          aria-expanded={rightOpen}
+          aria-label="Toggle group inspector panel"
+          title="Toggle inspector panel"
+          className={`lo-press pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-xl border shadow-[0_8px_24px_rgba(9,9,11,0.12)] backdrop-blur-xl transition ${
+            rightOpen
+              ? 'border-zinc-950 bg-zinc-950 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
+              : 'border-zinc-200/85 bg-white/95 text-zinc-800 hover:bg-white dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-100'
+          }`}
+        >
+          <PanelRight className="h-4 w-4" />
+          {!rightOpen && unreadChatCount + pendingIncomingCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-950 px-1 text-[9px] font-bold text-white ring-2 ring-white dark:bg-zinc-100 dark:text-zinc-950 dark:ring-zinc-900">
+              {unreadChatCount + pendingIncomingCount > 9
+                ? '9+'
+                : unreadChatCount + pendingIncomingCount}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Desktop & Landscape (sm+): Bottom-Right Cluster [Map Options Box] + [Circular GPS Button] + [North / + / - Pill] */}
+      <div
+        ref={desktopControlsRef}
+        className="pointer-events-none absolute bottom-[calc(1rem+var(--lo-safe-bottom,0px))] right-[calc(1rem+var(--lo-safe-right,0px))] z-20 hidden flex-col items-end gap-2 sm:flex"
+      >
+        {desktopMapOptionsOpen && (
+          <div className="lo-float-in pointer-events-auto w-[280px] space-y-3 rounded-xl border border-zinc-200/85 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.14)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                Map Options
+              </span>
+              <button
+                type="button"
+                onClick={() => setDesktopMapOptionsOpen(false)}
+                aria-label="Close map options"
+                className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            {/* Projection: Globe / Flat */}
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                <Globe className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                Projection
+              </span>
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                {(
+                  [
+                    ['globe', 'Globe'],
+                    ['mercator', 'Flat'],
+                  ] as const
+                ).map(([mode, label]) => {
+                  const disabled = mode === 'globe' && !globeSupported;
+                  const active = (globeSupported ? mapProjection : 'mercator') === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      disabled={disabled}
+                      title={disabled ? 'Globe view unsupported on this browser' : undefined}
+                      onClick={() => handleChangeMapProjection(mode)}
+                      className={`lo-press rounded-md px-2.5 py-1 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                        active
+                          ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                          : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Day / Night Terminator */}
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <span className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                <Moon className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                Day / Night
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={showTerminator}
+                onClick={handleToggleTerminator}
+                className={`lo-press rounded-lg px-3 py-1 text-[11px] font-semibold transition ${
+                  showTerminator
+                    ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                    : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
+                }`}
+              >
+                {showTerminator ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            {/* Map Theme */}
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <span className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                {resolvedMapTheme === 'dark' ? (
+                  <Moon className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                ) : (
+                  <Sun className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                )}
+                Theme
+              </span>
+              <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                {(
+                  [
+                    ['system', 'Auto', Monitor],
+                    ['light', 'Light', Sun],
+                    ['dark', 'Dark', Moon],
+                  ] as const
+                ).map(([pref, label, Icon]) => (
+                  <button
+                    key={pref}
+                    type="button"
+                    onClick={() => handleChangeMapTheme(pref)}
+                    className={`lo-press flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold transition ${
+                      mapThemePreference === pref
+                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                    }`}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Map Labels */}
+            <div className="flex items-center justify-between border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <span className="flex items-center gap-2 text-xs font-medium text-zinc-800 dark:text-zinc-200">
+                <Globe className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                Labels
+              </span>
+              <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                {(
+                  [
+                    ['en', 'EN'],
+                    ['local', 'Local'],
+                  ] as const
+                ).map(([lang, label]) => (
+                  <button
+                    key={lang}
+                    type="button"
+                    onClick={() => handleChangeLabelLanguage(lang)}
+                    className={`lo-press rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                      labelLanguage === lang
+                        ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Location Beacon Actions */}
+            <div className="space-y-1.5 border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setGeoSharing((s) => !s)}
+                  className={`lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                    geoSharing
+                      ? 'border border-emerald-500/40 bg-emerald-50 text-emerald-800 dark:border-emerald-400/35 dark:bg-emerald-950/60 dark:text-emerald-200'
+                      : 'bg-zinc-950 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200'
+                  }`}
+                >
+                  <Radio className="h-3 w-3" />
+                  {geoSharing ? 'Stop Live GPS' : 'Share Live GPS'}
+                </button>
+                <button
+                  type="button"
+                  disabled={sendingTestPing}
+                  onClick={() => void handleSendTestPing()}
+                  className="lo-press flex items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                >
+                  {sendingTestPing && <Loader2 className="h-3 w-3 animate-spin" />}
+                  <span>Test Ping</span>
+                </button>
+              </div>
+              {geoStatus && (
+                <p className="truncate font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+                  {geoStatus}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="pointer-events-auto flex items-end gap-2">
+          {/* Compact Square Map Options Box */}
+          <button
+            type="button"
+            onClick={() => {
+              setGroupPopoverOpen(false);
+              setMenuOpen(false);
+              setDesktopMapOptionsOpen((v) => !v);
+            }}
+            aria-expanded={desktopMapOptionsOpen}
+            aria-label="Map options (Globe, Day/Night, Theme, Labels)"
+            title="Map options"
+            className={`lo-press flex h-10 w-10 items-center justify-center rounded-xl border shadow-[0_8px_24px_rgba(9,9,11,0.1)] backdrop-blur-xl transition ${
+              desktopMapOptionsOpen
+                ? 'border-zinc-950 bg-zinc-950 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
+                : 'border-zinc-200/85 bg-white/95 text-zinc-800 hover:bg-white dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-100 dark:hover:bg-zinc-800'
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+          </button>
+
+          {/* Circular Google Maps-Style Live GPS Button */}
+          <button
+            type="button"
+            onClick={handleLocateOrShareGps}
+            aria-label={geoSharing ? 'Center on my live location' : 'Share and center on live GPS'}
+            title={
+              geoSharing
+                ? 'Live GPS active — click to center on you'
+                : 'Share live GPS & center on you'
+            }
+            className={`lo-press relative flex h-11 w-11 items-center justify-center rounded-full border shadow-[0_10px_28px_rgba(9,9,11,0.14)] backdrop-blur-xl transition ${
+              geoSharing
+                ? 'border-emerald-500/50 bg-white/95 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-400/45 dark:bg-zinc-900/95 dark:text-emerald-400 dark:hover:bg-zinc-800'
+                : 'border-zinc-200/85 bg-white/95 text-zinc-800 hover:bg-white hover:text-zinc-950 dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-100 dark:hover:bg-zinc-800'
+            }`}
+          >
+            <LocateFixed className="h-[18px] w-[18px]" />
+            {geoSharing && (
+              <span className="absolute bottom-1 right-1 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900" />
+            )}
+          </button>
+
+          {/* Vertical Navigation Pill: Return North + Zoom In + Zoom Out */}
+          <div className="flex flex-col overflow-hidden rounded-xl border border-zinc-200/85 bg-white/95 shadow-[0_8px_24px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+            <button
+              type="button"
+              onClick={handleResetNorth}
+              aria-label="Reset map orientation to North"
+              title="Reset orientation to North"
+              className="lo-press flex h-9 w-9 items-center justify-center text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:text-white"
+            >
+              <CompassNorthNeedle bearingDeg={mapBearing} className="h-4 w-4" />
+            </button>
+            <div className="h-px bg-zinc-200/80 dark:bg-zinc-800" />
+            <button
+              type="button"
+              onClick={() => handleZoomStep(1)}
+              aria-label="Zoom in"
+              title="Zoom in"
+              className="lo-press flex h-9 w-9 items-center justify-center text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:text-white"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+            <div className="h-px bg-zinc-200/80 dark:bg-zinc-800" />
+            <button
+              type="button"
+              onClick={() => handleZoomStep(-1)}
+              aria-label="Zoom out"
+              title="Zoom out"
+              className="lo-press flex h-9 w-9 items-center justify-center text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:text-white"
+            >
+              <Minus className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
 

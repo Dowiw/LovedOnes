@@ -13,6 +13,8 @@ import {
   RequestMapDownloadInput,
   RequestMapDownloadSchema,
   slugifyCityName,
+  WORLD_OVERVIEW_MAX_ZOOM,
+  WORLD_OVERVIEW_REGION_ID,
 } from '@loved-ones/shared';
 import { DomainError } from '@loved-ones/shared/auth';
 
@@ -70,6 +72,7 @@ export interface TileExtractorContext {
   bbox: [number, number, number, number];
   outputPath: string;
   maxExtractBytes: number;
+  maxZoom?: number;
   onProgress?: (pct: number, message: string) => void;
 }
 
@@ -263,12 +266,13 @@ export class ProtomapsCliExtractor implements TileExtractor {
     ctx.onProgress?.(20, `Extracting city tiles from ${source.key}…`);
 
     const bboxArg = ctx.bbox.join(',');
+    const maxZoom = Math.max(1, Math.min(15, Math.round(ctx.maxZoom ?? 15)));
     const args = [
       'extract',
       source.url,
       ctx.outputPath,
       `--bbox=${bboxArg}`,
-      '--maxzoom=15',
+      `--maxzoom=${maxZoom}`,
       '--download-threads=6',
       '--overfetch=0.05',
     ];
@@ -454,7 +458,10 @@ export class MapRegionsModule {
     const pmtiles = new PMTiles(source);
     try {
       const header = await pmtiles.getHeader();
-      const isStub = header.numAddressedTiles === 0 || header.maxZoom < 12;
+      const isWorldOverview =
+        params.id === WORLD_OVERVIEW_REGION_ID ||
+        path.basename(params.filePath) === `${WORLD_OVERVIEW_REGION_ID}.pmtiles`;
+      const isStub = header.numAddressedTiles === 0 || (!isWorldOverview && header.maxZoom < 12);
       return {
         source,
         pmtiles,
@@ -851,6 +858,150 @@ export class MapRegionsModule {
           this.onLog?.('error', 'failed regional pmtiles extract', {
             jobId: job.id,
             cityName: cityInfo.cityName,
+            error: msg,
+          });
+        }
+      });
+
+    return {
+      alreadyCovered: false,
+      job,
+    };
+  }
+
+  async requestWorldOverviewDownload(actor: { id: string; role: string }): Promise<{
+    alreadyCovered: boolean;
+    region?: MapRegion;
+    regions?: MapRegion[];
+    job?: MapDownloadJob;
+  }> {
+    if (actor.role !== 'HOST_ADMIN') {
+      throw new DomainError(403, 'Only Host Admins can download the global world overview map');
+    }
+
+    const regions = await this.listRegions();
+    const existing = regions.find((r) => !r.isStub && r.id === WORLD_OVERVIEW_REGION_ID);
+    if (existing) {
+      return {
+        alreadyCovered: true,
+        region: existing,
+        regions,
+      };
+    }
+
+    for (const j of this.jobs.values()) {
+      if (
+        j.cityName === 'World Overview (z0-z5)' &&
+        j.status !== 'completed' &&
+        j.status !== 'failed'
+      ) {
+        return { alreadyCovered: false, job: j };
+      }
+    }
+
+    await this.ensureFreeDiskSpace();
+
+    const filename = `${WORLD_OVERVIEW_REGION_ID}.pmtiles`;
+    const worldBbox: [number, number, number, number] = [-180, -85, 180, 85];
+    const now = new Date().toISOString();
+    const job: MapDownloadJob = {
+      id: crypto.randomUUID(),
+      cityName: 'World Overview (z0-z5)',
+      displayName: 'World Overview (z0–z5)',
+      bbox: worldBbox,
+      status: 'queued',
+      progressPct: 5,
+      message: 'Queued global world overview extract (z0–z5)…',
+      error: null,
+      regionId: null,
+      requestedBy: actor.id,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.jobs.set(job.id, job);
+
+    const updateJob = (patch: Partial<MapDownloadJob>) => {
+      const cur = this.jobs.get(job.id);
+      if (!cur) return;
+      Object.assign(cur, patch, { updatedAt: new Date().toISOString() });
+    };
+
+    this.extractionChain = this.extractionChain
+      .catch(() => {})
+      .then(async () => {
+        const finalPath = path.join(this.regionsDir, filename);
+        const tmpPath = path.join(this.regionsDir, `${filename}.${job.id}.tmp`);
+
+        try {
+          await fs.promises.mkdir(this.regionsDir, { recursive: true });
+          updateJob({
+            status: 'resolving',
+            progressPct: 12,
+            message: 'Resolving Protomaps build for global z0–z5 overview…',
+          });
+
+          const { sourceBuild } = await this.tileExtractor.extract({
+            bbox: worldBbox,
+            outputPath: tmpPath,
+            maxExtractBytes: this.maxExtractBytes,
+            maxZoom: WORLD_OVERVIEW_MAX_ZOOM,
+            onProgress: (pct, message) => {
+              updateJob({ status: 'downloading', progressPct: pct, message });
+            },
+          });
+
+          const verifySource = new NodeFileSource(tmpPath);
+          const verifyArchive = new PMTiles(verifySource);
+          let header;
+          try {
+            header = await verifyArchive.getHeader();
+          } finally {
+            await verifySource.close();
+          }
+
+          if (header.numAddressedTiles === 0) {
+            throw new Error('Downloaded world overview contained zero map tiles');
+          }
+
+          await fs.promises.rename(tmpPath, finalPath);
+
+          const manifest = await this.readManifest();
+          manifest[filename] = {
+            id: WORLD_OVERVIEW_REGION_ID,
+            name: 'World Overview',
+            displayName: 'World Overview (z0–z5)',
+            countryCode: null,
+            filename,
+            downloadedAt: new Date().toISOString(),
+            sourceBuild,
+          };
+          await this.writeManifest(manifest);
+          await this.invalidateCache();
+          await this.ensureLoaded();
+
+          updateJob({
+            status: 'completed',
+            progressPct: 100,
+            message: 'Downloaded World Overview (z0–z5) tiles',
+            regionId: WORLD_OVERVIEW_REGION_ID,
+          });
+          this.onLog?.('info', 'downloaded world overview pmtiles extract', {
+            jobId: job.id,
+            regionId: WORLD_OVERVIEW_REGION_ID,
+            sourceBuild,
+          });
+        } catch (err) {
+          await fs.promises.rm(tmpPath, { force: true }).catch(() => {});
+          const msg = err instanceof Error ? err.message : 'Failed to extract world overview tiles';
+          updateJob({
+            status: 'failed',
+            progressPct: 0,
+            error: msg,
+            message: msg,
+          });
+          this.onLog?.('error', 'failed world overview pmtiles extract', {
+            jobId: job.id,
             error: msg,
           });
         }

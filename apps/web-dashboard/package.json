@@ -14,7 +14,7 @@
     "@loved-ones/shared": "workspace:*",
     "jsqr": "^1.4.0",
     "lucide-react": "^0.468.0",
-    "maplibre-gl": "^4.7.1",
+    "maplibre-gl": "^5.24.1",
     "next": "^15.1.0",
     "pmtiles": "^4.2.0",
     "qrcode": "^1.5.4",

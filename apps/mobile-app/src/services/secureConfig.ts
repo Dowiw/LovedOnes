@@ -80,6 +80,7 @@ const KEYS = {
   recoveryGeofenceAnchor: 'lovedones.recoveryGeofenceAnchor',
   adaptiveTrackingState: 'lovedones.adaptiveTrackingState',
   savedMapViewport: 'lovedones.savedMapViewport',
+  showTerminator: 'lovedones.showTerminator',
 } as const;
 
 export type MobileMapThemePreference = 'system' | 'light' | 'dark';
@@ -107,6 +108,22 @@ export async function saveMapThemePreference(
 ): Promise<void> {
   const s = store ?? (await getExpoSecureStore());
   await s.setItemAsync(KEYS.mapThemePreference, preference);
+}
+
+export async function getShowTerminatorPreference(
+  store?: SecureKeyValueStore,
+): Promise<boolean> {
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(KEYS.showTerminator);
+  return raw !== 'false';
+}
+
+export async function saveShowTerminatorPreference(
+  enabled: boolean,
+  store?: SecureKeyValueStore,
+): Promise<void> {
+  const s = store ?? (await getExpoSecureStore());
+  await s.setItemAsync(KEYS.showTerminator, enabled ? 'true' : 'false');
 }
 
 /**
