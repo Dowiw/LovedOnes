@@ -146,7 +146,7 @@ Traffic enters through a single reverse proxy gateway (`gateway`), so only one p
 - **Map Tiles (`gateway` / optional `apps/map-service`):** Static HTTP byte-range server for `.pmtiles` archives and map styles (`apps/map-service` remains available via the `standalone-maps` profile or standalone Node).
 - **Database (`packages/db`):** Spatial SQL database and pub/sub message broker.
 
-For deeper technical details, see [SPEC.md](SPEC.md), [GLOSSARY.md](GLOSSARY.md), and [AGENTS.md](AGENTS.md). Licensed under the [MIT License](LICENSE).
+For deeper technical details, see [SPEC.md](SPEC.md), [GLOSSARY.md](GLOSSARY.md), and [AGENTS.md](AGENTS.md). Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) (commercial use requires a separate license).
 
 ---
 

@@ -38,4 +38,4 @@ NEXT_PUBLIC_GATEWAY_URL=http://localhost:8080 pnpm --filter @loved-ones/web-dash
    pnpm test
    ```
 2. Write clear commit messages describing *why* the change matters.
-3. By contributing, you agree your changes are licensed under the [MIT License](LICENSE).
+3. By contributing, you agree your changes are licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
