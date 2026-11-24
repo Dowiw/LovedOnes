@@ -26,6 +26,7 @@ import {
   type TrailDisplayMode,
 } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
+import { normalizeMapStyleUrls, resolveAbsoluteStyleUrl } from '@/lib/mapStyleUrl';
 import { getMapPaintOverrides, type ResolvedMapTheme } from '@/lib/mapTheme';
 
 let pmtilesProtocolRegistered = false;
@@ -854,6 +855,7 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const styleReadyRef = useRef(false);
+  const lastRegionsSigRef = useRef<string | null>(null);
   const markersRef = useRef<
     Map<string, { marker: maplibregl.Marker; signature: string; loc: LocationBroadcast }>
   >(new Map());
@@ -1097,28 +1099,26 @@ export function MapCanvas({
     if (!containerRef.current || mapRef.current) return;
 
     const { tilesBase } = getServiceBaseUrls();
-    syncCompositeEntries(tilesBase, regions);
-    registerCompositePmtilesProtocol(tilesBase);
+    const resolvedOrigin =
+      tilesBase.trim().replace(/\/+$/, '') ||
+      (typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin.replace(/\/+$/, '')
+        : '');
+    syncCompositeEntries(resolvedOrigin, regions);
+    registerCompositePmtilesProtocol(resolvedOrigin);
 
-    const styleUrl = `${tilesBase}/tiles/style.json?v=7`;
+    const styleUrl = `${resolvedOrigin}/tiles/style.json?v=7`;
     const savedStart = initialViewportRef.current;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: styleUrl,
       center: savedStart ? savedStart.center : [13.405, 52.52],
       zoom: savedStart ? savedStart.zoom : 13.2,
       bearing: savedStart ? savedStart.bearing : 0,
       attributionControl: false,
-      transformRequest: (url) => {
-        if (tilesBase && url.startsWith('pmtiles:///tiles/')) {
-          return { url: `pmtiles://${tilesBase}${url.slice('pmtiles://'.length)}` };
-        }
-        if (tilesBase && url.startsWith('/tiles/')) {
-          return { url: `${tilesBase}${url}` };
-        }
-        return { url };
-      },
+      transformRequest: (url) => ({
+        url: resolveAbsoluteStyleUrl(url, resolvedOrigin),
+      }),
     });
 
     const emitViewport = () => {
@@ -1155,23 +1155,30 @@ export function MapCanvas({
     map.on('zoomend', emitViewport);
     const handleBeforeUnload = () => emitViewport();
     window.addEventListener('beforeunload', handleBeforeUnload);
+    let fallbackStyleApplied = false;
     map.on('error', () => {
-      if (!map.isStyleLoaded()) {
-        map.once('style.load', initializeStyledLayers);
-        map.setStyle({
-          version: 8,
-          sources: {},
-          layers: [
-            {
-              id: 'fallback-bg',
-              type: 'background',
-              paint: {
-                'background-color': mapThemeRef.current === 'dark' ? '#0c141d' : '#cfe3ee',
-              },
+      if (fallbackStyleApplied || styleReadyRef.current) return;
+      const existingLayers = map.getStyle()?.layers;
+      if (Array.isArray(existingLayers) && existingLayers.length > 0) return;
+      fallbackStyleApplied = true;
+      map.once('style.load', initializeStyledLayers);
+      map.setStyle({
+        version: 8,
+        sources: {},
+        layers: [
+          {
+            id: 'fallback-bg',
+            type: 'background',
+            paint: {
+              'background-color': mapThemeRef.current === 'dark' ? '#0c141d' : '#cfe3ee',
             },
-          ],
-        });
-      }
+          },
+        ],
+      });
+    });
+
+    map.setStyle(styleUrl, {
+      transformStyle: (_prev, nextStyle) => normalizeMapStyleUrls(nextStyle, resolvedOrigin),
     });
 
     map.on('click', (e) => {
@@ -2047,14 +2054,33 @@ export function MapCanvas({
 
   useEffect(() => {
     const { tilesBase } = getServiceBaseUrls();
-    syncCompositeEntries(tilesBase, regions);
+    const resolvedOrigin =
+      tilesBase.trim().replace(/\/+$/, '') ||
+      (typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin.replace(/\/+$/, '')
+        : '');
+    syncCompositeEntries(resolvedOrigin, regions);
     const map = mapRef.current;
-    if (!map || regionsRevision <= 0) return;
+    if (!map || !regions) return;
+
+    const sig = regions
+      .filter((r) => !r.isStub)
+      .map((r) => `${r.id}:${r.sizeBytes}`)
+      .sort()
+      .join('|');
+    const changed = lastRegionsSigRef.current !== null && lastRegionsSigRef.current !== sig;
+    const initialHasSecondary =
+      lastRegionsSigRef.current === null &&
+      regions.some((r) => !r.isStub && !r.isPrimary);
+    lastRegionsSigRef.current = sig;
+
+    if (regionsRevision <= 0 && !changed && !initialHasSecondary) return;
 
     const refreshSource = () => {
       const source = map.getSource('openmaptiles') as maplibregl.VectorTileSource | undefined;
       if (source && typeof source.setUrl === 'function') {
-        source.setUrl(`pmtiles:///tiles/region.pmtiles?rev=${regionsRevision}`);
+        const revTag = `${regionsRevision}-${Date.now()}`;
+        source.setUrl(`pmtiles://${resolvedOrigin}/tiles/region.pmtiles?rev=${revTag}`);
       }
     };
 
