@@ -1425,6 +1425,31 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     },
   );
 
+  app.post(
+    '/api/maps/download-world-overview',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest, reply) => {
+      const actor = request.authUser!;
+      const result = await mapRegions.requestWorldOverviewDownload({
+        id: actor.id,
+        role: actor.role,
+      });
+      if (result.alreadyCovered) {
+        return reply.code(200).send(result);
+      }
+      loggerHandle.logger.info(
+        {
+          action: 'map.world_overview_download_requested',
+          userId: actor.id,
+          username: actor.username,
+          jobId: result.job?.id,
+        },
+        `${actor.username} requested global z0-z5 World Overview PMTiles download`,
+      );
+      return reply.code(202).send(result);
+    },
+  );
+
   app.delete(
     '/api/maps/regions/:regionId',
     { preHandler: [requireHostAdmin] },

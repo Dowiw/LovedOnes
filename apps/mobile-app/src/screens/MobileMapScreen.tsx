@@ -29,6 +29,7 @@ import {
   averageNearbyTrailPings,
   buildExternalMapsUrls,
   buildGeodesicCircleRing,
+  buildSolarTerminatorGeoJson,
   buildTrailGeoJsonFeatures,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
@@ -42,6 +43,7 @@ import {
   parseInviteInput,
   resolveTrailPointDetails,
   withMinDelay,
+  WORLD_LAND_GEOJSON,
   type AppVersionInfo,
   type ChatMessage,
   type GroupPlace,
@@ -63,6 +65,7 @@ import {
   CompassNeedleIcon,
   FitAllIcon,
   LocationPinIcon,
+  MapOptionsIcon,
   PlacesTabIcon,
 } from '../components/MapControlsIcons';
 import {
@@ -125,10 +128,12 @@ import {
   getBackgroundTrackingEnabled,
   getMapThemePreference,
   getSavedMapViewport,
+  getShowTerminatorPreference,
   type MobileMapThemePreference,
   MobileStoredConfig,
   saveMapThemePreference,
   saveSavedMapViewport,
+  saveShowTerminatorPreference,
   saveStoredConfig,
 } from '../services/secureConfig';
 import {
@@ -335,6 +340,9 @@ export function MobileMapScreen({
   const [selfCoord, setSelfCoord] = useState<[number, number] | null>(null);
   const [presenceNowMs, setPresenceNowMs] = useState(() => Date.now());
   const [labelLanguage, setLabelLanguage] = useState<MapLabelLanguage>('en');
+  const [showTerminator, setShowTerminator] = useState(true);
+  const [terminatorTick, setTerminatorTick] = useState(0);
+  const [mapOptionsOpen, setMapOptionsOpen] = useState(false);
   const [queuedCount, setQueuedCount] = useState(0);
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
@@ -587,7 +595,18 @@ export function MobileMapScreen({
         onThemePreferenceChange?.(pref);
       })
       .catch(() => {});
+    void getShowTerminatorPreference()
+      .then((enabled) => setShowTerminator(enabled))
+      .catch(() => {});
   }, [onThemePreferenceChange, refreshQueueCount]);
+
+  useEffect(() => {
+    if (!showTerminator) return;
+    const timer = setInterval(() => {
+      setTerminatorTick((t) => t + 1);
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [showTerminator]);
 
   useEffect(() => {
     if (!chatOpen) return;
@@ -2133,6 +2152,11 @@ export function MobileMapScreen({
     };
   }, [activeTrailUserId, memberTrailPoints, memberMatchedTrails, trailDisplayMode, places]);
 
+  const terminatorGeoJson = useMemo(() => {
+    void terminatorTick;
+    return buildSolarTerminatorGeoJson(new Date(), { polarCapLat: 85.0 });
+  }, [terminatorTick]);
+
   const showCompassBtn = Math.abs(mapBearing) > 2;
 
   return (
@@ -2178,6 +2202,9 @@ export function MobileMapScreen({
           schedulePersistViewport();
         }}
         onPress={(ev) => {
+          if (mapOptionsOpen) {
+            setMapOptionsOpen(false);
+          }
           if (!pickingPlaceCoords) {
             if (selectedTrailPoint) setSelectedTrailPoint(null);
             return;
@@ -2197,6 +2224,137 @@ export function MobileMapScreen({
             zoom: 11,
           }}
         />
+        <GeoJSONSource
+          id="world-land-src"
+          data={WORLD_LAND_GEOJSON as unknown as GeoJSON.FeatureCollection}
+        >
+          <Layer
+            id="world-land-fill"
+            type="fill"
+            beforeId="earth"
+            maxzoom={8}
+            paint={{
+              'fill-color': resolvedMapTheme === 'dark' ? '#161b24' : '#efeee9',
+              'fill-opacity': ['interpolate', ['linear'], ['zoom'], 0, 1, 6, 0.96, 7.5, 0],
+            }}
+          />
+          <Layer
+            id="world-land-border"
+            type="line"
+            beforeId="earth"
+            maxzoom={8}
+            paint={{
+              'line-color': resolvedMapTheme === 'dark' ? '#2c3647' : '#c6cbd4',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 0, 0.6, 5, 1.0],
+              'line-opacity': ['interpolate', ['linear'], ['zoom'], 0, 0.85, 6, 0.7, 7.5, 0],
+            }}
+          />
+        </GeoJSONSource>
+        {showTerminator && (
+          <GeoJSONSource id="solar-terminator-src" data={terminatorGeoJson}>
+            <Layer
+              id="solar-terminator-night"
+              type="fill"
+              beforeId="buildings-housenumbers"
+              filter={['==', ['get', 'band'], 'night']}
+              paint={{
+                'fill-color': resolvedMapTheme === 'dark' ? '#020612' : '#0a162c',
+                'fill-opacity': [
+                  'interpolate',
+                  ['linear'],
+                  ['zoom'],
+                  0,
+                  resolvedMapTheme === 'dark' ? 0.44 : 0.34,
+                  6,
+                  resolvedMapTheme === 'dark' ? 0.4 : 0.31,
+                  9,
+                  resolvedMapTheme === 'dark' ? 0.24 : 0.19,
+                  12,
+                  resolvedMapTheme === 'dark' ? 0.13 : 0.1,
+                ],
+              }}
+            />
+            <Layer
+              id="solar-terminator-astronomical"
+              type="fill"
+              beforeId="buildings-housenumbers"
+              filter={['==', ['get', 'band'], 'astronomical']}
+              paint={{
+                'fill-color': resolvedMapTheme === 'dark' ? '#0d1736' : '#1e2b54',
+                'fill-opacity': [
+                  'interpolate',
+                  ['linear'],
+                  ['zoom'],
+                  0,
+                  resolvedMapTheme === 'dark' ? 0.34 : 0.27,
+                  6,
+                  resolvedMapTheme === 'dark' ? 0.3 : 0.24,
+                  9,
+                  resolvedMapTheme === 'dark' ? 0.18 : 0.15,
+                  12,
+                  resolvedMapTheme === 'dark' ? 0.09 : 0.07,
+                ],
+              }}
+            />
+            <Layer
+              id="solar-terminator-nautical"
+              type="fill"
+              beforeId="buildings-housenumbers"
+              filter={['==', ['get', 'band'], 'nautical']}
+              paint={{
+                'fill-color': resolvedMapTheme === 'dark' ? '#43306b' : '#5e4082',
+                'fill-opacity': [
+                  'interpolate',
+                  ['linear'],
+                  ['zoom'],
+                  0,
+                  resolvedMapTheme === 'dark' ? 0.25 : 0.21,
+                  6,
+                  resolvedMapTheme === 'dark' ? 0.22 : 0.19,
+                  9,
+                  resolvedMapTheme === 'dark' ? 0.14 : 0.12,
+                  12,
+                  resolvedMapTheme === 'dark' ? 0.06 : 0.05,
+                ],
+              }}
+            />
+            <Layer
+              id="solar-terminator-civil"
+              type="fill"
+              beforeId="buildings-housenumbers"
+              filter={['==', ['get', 'band'], 'civil']}
+              paint={{
+                'fill-color': resolvedMapTheme === 'dark' ? '#d96b2b' : '#eb7634',
+                'fill-opacity': [
+                  'interpolate',
+                  ['linear'],
+                  ['zoom'],
+                  0,
+                  resolvedMapTheme === 'dark' ? 0.2 : 0.18,
+                  6,
+                  resolvedMapTheme === 'dark' ? 0.18 : 0.16,
+                  9,
+                  resolvedMapTheme === 'dark' ? 0.11 : 0.1,
+                  12,
+                  resolvedMapTheme === 'dark' ? 0.05 : 0.04,
+                ],
+              }}
+            />
+            <Layer
+              id="solar-terminator-horizon"
+              type="line"
+              beforeId="buildings-housenumbers"
+              filter={['==', ['get', 'band'], 'horizon']}
+              layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+              paint={{
+                'line-color': resolvedMapTheme === 'dark' ? '#f59e0b' : '#f97316',
+                'line-width': ['interpolate', ['linear'], ['zoom'], 0, 2.2, 6, 1.7, 11, 1.0],
+                'line-blur': ['interpolate', ['linear'], ['zoom'], 0, 3.0, 6, 2.4, 11, 1.5],
+                'line-opacity': ['interpolate', ['linear'], ['zoom'], 0, 0.72, 6, 0.56, 9, 0.28, 12, 0.1],
+              }}
+            />
+          </GeoJSONSource>
+        )}
         <GeoJSONSource id="places-zones-src" data={placesGeoJson}>
           <Layer
             id="places-zones-fill"
@@ -2716,7 +2874,7 @@ export function MobileMapScreen({
         })()}
       </View>
 
-      {/* 2 Map Controls Floating Above Drawer: Compass (only when rotated) + Pin Location */}
+      {/* Bottom-Left Floating Map Controls Above Drawer: Compass + Fit All + Map Options + Pin Location */}
       <Animated.View
         pointerEvents="box-none"
         style={[
@@ -2724,65 +2882,195 @@ export function MobileMapScreen({
           { bottom: Animated.add(drawerHeightAnim, 12) },
         ]}
       >
-        {showCompassBtn && (
-          <TouchableOpacity
-            style={styles.mapActionBtn}
-            activeOpacity={0.85}
-            accessibilityLabel="Reset map orientation to North"
-            onPress={() => {
-              setMapBearing(0);
-              mapBearingRef.current = 0;
-              cameraRef.current?.easeTo({
-                center: cameraViewRef.current.center,
-                zoom: cameraViewRef.current.zoom,
-                bearing: 0,
-                duration: 320,
-              });
-            }}
-          >
-            <CompassNeedleIcon bearingDeg={mapBearing} />
-          </TouchableOpacity>
-        )}
-
-        {locations.length > 0 && (
-          <TouchableOpacity
-            style={styles.mapActionBtn}
-            activeOpacity={0.85}
-            accessibilityLabel="Fit all group members on map"
-            onPress={() => {
-              setSelectedMemberId(null);
-              handleFitAllMembers();
-            }}
-          >
-            <FitAllIcon tintColor={ui.ink} />
-          </TouchableOpacity>
-        )}
-
-        <TouchableOpacity
-          style={styles.mapActionBtn}
-          activeOpacity={0.85}
-          disabled={syncingBusy}
-          accessibilityLabel="Center and share location"
-          onPress={() => void handlePinLocationPress()}
-        >
-          {syncingBusy ? (
-            <ActivityIndicator size="small" color={ui.ink} />
-          ) : (
-            <LocationPinIcon
-              active={tracking}
-              tintColor={ui.ink}
-              holeColor={ui.surface}
-            />
-          )}
-          {tracking && <View style={styles.pinLiveBadge} />}
-          {queuedCount > 0 && (
-            <View style={styles.floatingBadge}>
-              <Text style={styles.floatingBadgeText}>
-                {queuedCount > 99 ? '99+' : queuedCount}
-              </Text>
+        {mapOptionsOpen && (
+          <View style={styles.mapOptionsPopover}>
+            <View style={styles.mapOptionsHeader}>
+              <Text style={styles.mapOptionsTitle}>Map Options</Text>
+              <TouchableOpacity
+                hitSlop={8}
+                onPress={() => setMapOptionsOpen(false)}
+                accessibilityLabel="Close map options"
+              >
+                <Text style={styles.mapOptionsCloseText}>Done</Text>
+              </TouchableOpacity>
             </View>
+
+            <View style={styles.mapOptionsRow}>
+              <Text style={styles.mapOptionsLabel}>Day / Night</Text>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[
+                  styles.mapOptionsPillBtn,
+                  showTerminator && styles.mapOptionsPillBtnActive,
+                ]}
+                onPress={() => {
+                  const next = !showTerminator;
+                  setShowTerminator(next);
+                  void saveShowTerminatorPreference(next).catch(() => {});
+                }}
+              >
+                <Text
+                  style={[
+                    styles.mapOptionsPillText,
+                    showTerminator && styles.mapOptionsPillTextActive,
+                  ]}
+                >
+                  {showTerminator ? 'On' : 'Off'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.mapOptionsRow}>
+              <Text style={styles.mapOptionsLabel}>Theme</Text>
+              <View style={styles.mapOptionsSegment}>
+                {(
+                  [
+                    ['system', 'Auto'],
+                    ['light', 'Light'],
+                    ['dark', 'Dark'],
+                  ] as const
+                ).map(([pref, label]) => {
+                  const active = mapThemePreference === pref;
+                  return (
+                    <TouchableOpacity
+                      key={pref}
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        setMapThemePreference(pref);
+                        onThemePreferenceChange?.(pref);
+                        void saveMapThemePreference(pref).catch(() => {});
+                      }}
+                      style={[
+                        styles.mapOptionsSegBtn,
+                        active && styles.mapOptionsSegBtnActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.mapOptionsSegText,
+                          active && styles.mapOptionsSegTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={styles.mapOptionsRow}>
+              <Text style={styles.mapOptionsLabel}>Labels</Text>
+              <View style={styles.mapOptionsSegment}>
+                {(
+                  [
+                    ['en', 'EN'],
+                    ['local', 'Local'],
+                  ] as const
+                ).map(([lang, label]) => {
+                  const active = labelLanguage === lang;
+                  return (
+                    <TouchableOpacity
+                      key={lang}
+                      activeOpacity={0.85}
+                      onPress={() => setLabelLanguage(lang)}
+                      style={[
+                        styles.mapOptionsSegBtn,
+                        active && styles.mapOptionsSegBtnActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.mapOptionsSegText,
+                          active && styles.mapOptionsSegTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+        )}
+
+        <View style={styles.floatingControlsRail} pointerEvents="box-none">
+          {showCompassBtn && (
+            <TouchableOpacity
+              style={styles.mapActionBtn}
+              activeOpacity={0.85}
+              accessibilityLabel="Reset map orientation to North"
+              onPress={() => {
+                setMapBearing(0);
+                mapBearingRef.current = 0;
+                cameraRef.current?.easeTo({
+                  center: cameraViewRef.current.center,
+                  zoom: cameraViewRef.current.zoom,
+                  bearing: 0,
+                  duration: 320,
+                });
+              }}
+            >
+              <CompassNeedleIcon bearingDeg={mapBearing} />
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
+
+          {locations.length > 0 && (
+            <TouchableOpacity
+              style={styles.mapActionBtn}
+              activeOpacity={0.85}
+              accessibilityLabel="Fit all group members on map"
+              onPress={() => {
+                setSelectedMemberId(null);
+                handleFitAllMembers();
+              }}
+            >
+              <FitAllIcon tintColor={ui.ink} />
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.mapActionBtn,
+              mapOptionsOpen && styles.mapActionBtnActive,
+            ]}
+            activeOpacity={0.85}
+            accessibilityLabel="Map display options"
+            onPress={() => setMapOptionsOpen((v) => !v)}
+          >
+            <MapOptionsIcon
+              tintColor={mapOptionsOpen ? ui.ctaText : ui.ink}
+              knobFill={mapOptionsOpen ? ui.ctaBg : ui.surface}
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.mapActionBtn}
+            activeOpacity={0.85}
+            disabled={syncingBusy}
+            accessibilityLabel="Center and share location"
+            onPress={() => void handlePinLocationPress()}
+          >
+            {syncingBusy ? (
+              <ActivityIndicator size="small" color={ui.ink} />
+            ) : (
+              <LocationPinIcon
+                active={tracking}
+                tintColor={ui.ink}
+                holeColor={ui.surface}
+              />
+            )}
+            {tracking && <View style={styles.pinLiveBadge} />}
+            {queuedCount > 0 && (
+              <View style={styles.floatingBadge}>
+                <Text style={styles.floatingBadgeText}>
+                  {queuedCount > 99 ? '99+' : queuedCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </Animated.View>
 
       {/* True Draggable Bottom Drawer (Member Details + Trails + Places + Chat) */}
@@ -4756,7 +5044,11 @@ export function createMobileStyles(
     topAvatarInitial: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
     floatingControlsWrap: {
       position: 'absolute',
-      right: 14,
+      left: 14,
+      gap: 10,
+      alignItems: 'flex-start',
+    },
+    floatingControlsRail: {
       gap: 10,
       alignItems: 'center',
     },
@@ -4774,6 +5066,96 @@ export function createMobileStyles(
       shadowRadius: 12,
       shadowOffset: { width: 0, height: 4 },
       elevation: 6,
+    },
+    mapActionBtnActive: {
+      backgroundColor: ui.ctaBg,
+      borderColor: ui.ctaBg,
+    },
+    mapOptionsPopover: {
+      width: 244,
+      borderRadius: 14,
+      padding: 12,
+      gap: 10,
+      backgroundColor: isDark ? 'rgba(24, 24, 27, 0.96)' : 'rgba(255, 255, 255, 0.97)',
+      borderWidth: 1,
+      borderColor: ui.borderStrong,
+      shadowColor: '#000000',
+      shadowOpacity: isDark ? 0.42 : 0.16,
+      shadowRadius: 14,
+      shadowOffset: { width: 0, height: 6 },
+      elevation: 8,
+    },
+    mapOptionsHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    mapOptionsTitle: {
+      color: ui.inkMuted,
+      fontSize: 11,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      letterSpacing: 0.6,
+    },
+    mapOptionsCloseText: {
+      color: ui.ink,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    mapOptionsRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 8,
+    },
+    mapOptionsLabel: {
+      color: ui.ink,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    mapOptionsPillBtn: {
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      backgroundColor: ui.surfaceMuted,
+      borderWidth: 1,
+      borderColor: ui.border,
+    },
+    mapOptionsPillBtnActive: {
+      backgroundColor: ui.ctaBg,
+      borderColor: ui.ctaBg,
+    },
+    mapOptionsPillText: {
+      color: ui.inkMuted,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    mapOptionsPillTextActive: {
+      color: ui.ctaText,
+    },
+    mapOptionsSegment: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      borderRadius: 9,
+      padding: 2,
+      backgroundColor: ui.surfaceMuted,
+    },
+    mapOptionsSegBtn: {
+      borderRadius: 7,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+    },
+    mapOptionsSegBtnActive: {
+      backgroundColor: ui.ctaBg,
+    },
+    mapOptionsSegText: {
+      color: ui.inkMuted,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    mapOptionsSegTextActive: {
+      color: ui.ctaText,
     },
     pinLiveBadge: {
       position: 'absolute',

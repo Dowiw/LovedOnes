@@ -946,6 +946,25 @@ export async function apiRequestMapDownload(
   });
 }
 
+export async function apiRequestWorldOverviewDownload(
+  accessToken: string,
+): Promise<{
+  alreadyCovered: boolean;
+  region?: MapRegion;
+  regions?: MapRegion[];
+  job?: MapDownloadJob;
+}> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{
+    alreadyCovered: boolean;
+    region?: MapRegion;
+    regions?: MapRegion[];
+    job?: MapDownloadJob;
+  }>(`${authBase}/api/maps/download-world-overview`, accessToken, {
+    method: 'POST',
+  });
+}
+
 export async function apiFetchMapJobs(accessToken: string): Promise<MapDownloadJob[]> {
   const { authBase } = getServiceBaseUrls();
   const res = await requestAuthedJson<{ jobs: MapDownloadJob[] }>(

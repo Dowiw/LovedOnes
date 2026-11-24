@@ -7,9 +7,11 @@ import {
   averageNearbyTrailPings,
   buildExternalMapsUrls,
   buildGeodesicCircleRing,
+  buildSolarTerminatorGeoJson,
   ChangePasswordSchema,
   compareSemver,
   computeCityFallbackBbox,
+  computeSubsolarPoint,
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
   CreateRegistrationRequestSchema,
@@ -21,9 +23,11 @@ import {
   HeartbeatInputSchema,
   hexToRgba,
   isPointCoveredByRegions,
+  isRegionOperational,
   isSafeAvatarUrl,
   isSafeHexColor,
   isSafeLoginBackgroundUrl,
+  isWorldOverviewRegion,
   LocationBatchSchema,
   LocationSnapshotQuerySchema,
   LoginSchema,
@@ -47,6 +51,9 @@ import {
   UpdateProfileSchema,
   UsernameSchema,
   withMinDelay,
+  WORLD_LAND_GEOJSON,
+  WORLD_OVERVIEW_MAX_ZOOM,
+  WORLD_OVERVIEW_REGION_ID,
 } from '../index.js';
 import { createServiceLogger, LOGS_RING_KEY, pruneLogArtifacts } from '../logger.js';
 import {
@@ -1463,5 +1470,60 @@ describe('@loved-ones/shared', () => {
     expect(parseSavedMapViewport('not json')).toBeNull();
     expect(parseSavedMapViewport({ center: [200, 52], zoom: 12 })).toBeNull();
     expect(parseSavedMapViewport({ center: [13, 52], zoom: 35 })).toBeNull();
+  });
+
+  it('computes accurate subsolar points, solar terminator twilight bands, and world land geometry', () => {
+    const juneSolstice = computeSubsolarPoint(new Date('2026-06-21T12:00:00Z'));
+    expect(juneSolstice.latitude).toBeGreaterThan(22.5);
+    expect(juneSolstice.latitude).toBeLessThan(24.0);
+    expect(Math.abs(juneSolstice.longitude)).toBeLessThan(5);
+
+    const decSolstice = computeSubsolarPoint(new Date('2026-12-21T12:00:00Z'));
+    expect(decSolstice.latitude).toBeLessThan(-22.5);
+    expect(decSolstice.latitude).toBeGreaterThan(-24.0);
+
+    const equinox = computeSubsolarPoint(new Date('2026-03-20T12:00:00Z'));
+    expect(Math.abs(equinox.latitude)).toBeLessThan(1.5);
+
+    const terminator = buildSolarTerminatorGeoJson(new Date('2026-06-21T18:00:00Z'), {
+      polarCapLat: 89.2,
+    });
+    const bands = terminator.features.map((f) => f.properties.band);
+    expect(bands).toEqual(['night', 'astronomical', 'nautical', 'civil', 'horizon']);
+
+    const nightPoly = terminator.features[0];
+    expect(nightPoly.geometry.type).toBe('Polygon');
+    if (nightPoly.geometry.type === 'Polygon') {
+      const ring = nightPoly.geometry.coordinates[0];
+      expect(ring.length).toBeGreaterThan(60);
+      expect(ring[0]).toEqual(ring[ring.length - 1]);
+      for (const [lon, lat] of ring) {
+        expect(lon).toBeGreaterThanOrEqual(-180);
+        expect(lon).toBeLessThanOrEqual(180);
+        expect(lat).toBeGreaterThanOrEqual(-89.2);
+        expect(lat).toBeLessThanOrEqual(89.2);
+      }
+    }
+
+    expect(WORLD_LAND_GEOJSON.type).toBe('FeatureCollection');
+    expect(WORLD_LAND_GEOJSON.features.length).toBeGreaterThan(100);
+
+    const worldOverviewRegion: MapRegion = {
+      id: WORLD_OVERVIEW_REGION_ID,
+      name: 'World Overview (z0–z5)',
+      url: '/tiles/world-overview.pmtiles',
+      minLon: -180,
+      minLat: -85.0511,
+      maxLon: 180,
+      maxLat: 85.0511,
+      minZoom: 0,
+      maxZoom: WORLD_OVERVIEW_MAX_ZOOM,
+      sizeBytes: 25_000_000,
+      isStub: false,
+      isPrimary: false,
+    };
+    expect(isWorldOverviewRegion(worldOverviewRegion)).toBe(true);
+    expect(isRegionOperational(worldOverviewRegion)).toBe(false);
+    expect(isPointCoveredByRegions(35.6762, 139.6503, [worldOverviewRegion])).toBe(false);
   });
 });

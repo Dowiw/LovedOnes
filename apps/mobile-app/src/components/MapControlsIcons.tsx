@@ -96,6 +96,52 @@ export function FitAllIcon({ tintColor = '#18181b' }: { tintColor?: string }) {
   );
 }
 
+/**
+ * Minimal geometric horizontal sliders icon for progressive-disclosure Map Options.
+ */
+export function MapOptionsIcon({
+  tintColor = '#18181b',
+  knobFill = '#ffffff',
+}: {
+  tintColor?: string;
+  knobFill?: string;
+}) {
+  return (
+    <View style={styles.optionsWrap}>
+      <View style={styles.optionsRow}>
+        <View style={[styles.optionsBar, { backgroundColor: tintColor }]} />
+        <View
+          style={[
+            styles.optionsKnob,
+            styles.optionsKnobLeft,
+            { borderColor: tintColor, backgroundColor: knobFill },
+          ]}
+        />
+      </View>
+      <View style={styles.optionsRow}>
+        <View style={[styles.optionsBar, { backgroundColor: tintColor }]} />
+        <View
+          style={[
+            styles.optionsKnob,
+            styles.optionsKnobRight,
+            { borderColor: tintColor, backgroundColor: knobFill },
+          ]}
+        />
+      </View>
+      <View style={styles.optionsRow}>
+        <View style={[styles.optionsBar, { backgroundColor: tintColor }]} />
+        <View
+          style={[
+            styles.optionsKnob,
+            styles.optionsKnobMid,
+            { borderColor: tintColor, backgroundColor: knobFill },
+          ]}
+        />
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   compassWrap: {
     width: 24,
@@ -238,5 +284,36 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 999,
+  },
+  optionsWrap: {
+    width: 20,
+    height: 18,
+    justifyContent: 'space-between',
+    paddingVertical: 1,
+  },
+  optionsRow: {
+    height: 4,
+    justifyContent: 'center',
+  },
+  optionsBar: {
+    height: 1.75,
+    borderRadius: 999,
+    width: '100%',
+  },
+  optionsKnob: {
+    position: 'absolute',
+    width: 5.5,
+    height: 5.5,
+    borderRadius: 999,
+    borderWidth: 1.75,
+  },
+  optionsKnobLeft: {
+    left: 2,
+  },
+  optionsKnobRight: {
+    right: 2,
+  },
+  optionsKnobMid: {
+    left: 7,
   },
 });

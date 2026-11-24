@@ -32,6 +32,7 @@ function buildSingleTilePmtiles(params: {
   minLat: number;
   maxLon: number;
   maxLat: number;
+  maxZoom?: number;
   tilePayload: Buffer;
 }): Buffer {
   // 1-entry root directory (numEntries=1, delta=0, runLen=1, len=tilePayload.length, offset=1 -> 0 + 1)
@@ -68,7 +69,7 @@ function buildSingleTilePmtiles(params: {
   header.writeUInt8(1, 98); // tileCompression = None
   header.writeUInt8(1, 99); // tileType = MVT
   header.writeUInt8(0, 100); // minZoom
-  header.writeUInt8(15, 101); // maxZoom
+  header.writeUInt8(params.maxZoom ?? 15, 101); // maxZoom
 
   header.writeInt32LE(Math.round(params.minLon * 10_000_000), 102);
   header.writeInt32LE(Math.round(params.minLat * 10_000_000), 106);
@@ -151,7 +152,8 @@ describe('@loved-ones/auth-admin-service map regions', () => {
               minLat: ctx.bbox[1],
               maxLon: ctx.bbox[2],
               maxLat: ctx.bbox[3],
-              tilePayload: Buffer.from('paris-mock-mvt'),
+              maxZoom: ctx.maxZoom ?? 15,
+              tilePayload: Buffer.from(ctx.maxZoom ? 'world-overview-mvt' : 'paris-mock-mvt'),
             });
             fs.writeFileSync(ctx.outputPath, archive);
             return { sourceBuild: '20261118.pmtiles' };
@@ -303,5 +305,62 @@ describe('@loved-ones/auth-admin-service map regions', () => {
       headers: { Authorization: `Bearer ${adminToken}` },
     });
     expect(primaryDel.statusCode).toBe(400);
+
+    // Standard member cannot download world overview (Host Admin only)
+    const memberWorldRes = await app.inject({
+      method: 'POST',
+      url: '/api/maps/download-world-overview',
+      headers: { Authorization: `Bearer ${memberToken}` },
+    });
+    expect(memberWorldRes.statusCode).toBe(403);
+
+    // Host Admin can trigger 1-click z0-z5 World Overview download
+    const adminWorldRes = await app.inject({
+      method: 'POST',
+      url: '/api/maps/download-world-overview',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(adminWorldRes.statusCode).toBe(202);
+    const worldJobId = adminWorldRes.json().job.id as string;
+
+    let finalWorldJob: { status: string; regionId: string | null } | null = null;
+    for (let i = 0; i < 30; i += 1) {
+      const jobRes = await app.inject({
+        method: 'GET',
+        url: `/api/maps/jobs/${worldJobId}`,
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      finalWorldJob = jobRes.json().job;
+      if (finalWorldJob?.status === 'completed' || finalWorldJob?.status === 'failed') break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(finalWorldJob?.status).toBe('completed');
+    expect(finalWorldJob?.regionId).toBe('world-overview');
+
+    const withWorldRes = await app.inject({ method: 'GET', url: '/api/maps/regions' });
+    const worldRegion = (
+      withWorldRes.json().regions as Array<{ id: string; maxZoom: number; isStub: boolean }>
+    ).find((r) => r.id === 'world-overview');
+    expect(worldRegion).toBeDefined();
+    expect(worldRegion?.isStub).toBe(false);
+    expect(worldRegion?.maxZoom).toBe(5);
+
+    // Requesting world overview again reports alreadyCovered
+    const repeatWorldRes = await app.inject({
+      method: 'POST',
+      url: '/api/maps/download-world-overview',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(repeatWorldRes.statusCode).toBe(200);
+    expect(repeatWorldRes.json().alreadyCovered).toBe(true);
+
+    // Host Admin can remove the world overview region cleanly
+    const delWorldRes = await app.inject({
+      method: 'DELETE',
+      url: '/api/maps/regions/world-overview',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(delWorldRes.statusCode).toBe(200);
+    expect(delWorldRes.json()).toEqual({ deleted: true, id: 'world-overview' });
   });
 });

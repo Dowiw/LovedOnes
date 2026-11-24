@@ -6,6 +6,7 @@ import { PMTiles, Protocol } from 'pmtiles';
 import {
   buildExternalMapsUrls,
   buildGeodesicCircleRing,
+  buildSolarTerminatorGeoJson,
   buildTrailGeoJsonFeatures,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
@@ -16,6 +17,7 @@ import {
   isSafeHexColor,
   resolveMemberPresenceStatus,
   resolveTrailPointDetails,
+  WORLD_LAND_GEOJSON,
   type GroupPlace,
   type LocationBroadcast,
   type MapRegion,
@@ -34,6 +36,22 @@ let hasSyncedRegions = false;
 const FUZZED_ZONES_SOURCE_ID = 'lovedones-fuzzed-zones-src';
 const FUZZED_ZONES_FILL_LAYER_ID = 'lovedones-fuzzed-zones-fill';
 const FUZZED_ZONES_OUTLINE_LAYER_ID = 'lovedones-fuzzed-zones-outline';
+const WORLD_LAND_SOURCE_ID = 'lovedones-world-land-src';
+const WORLD_LAND_FILL_LAYER_ID = 'lovedones-world-land-fill';
+const WORLD_LAND_BORDER_LAYER_ID = 'lovedones-world-land-border';
+const TERMINATOR_SOURCE_ID = 'lovedones-terminator-src';
+const TERMINATOR_NIGHT_LAYER_ID = 'lovedones-terminator-night';
+const TERMINATOR_ASTRO_LAYER_ID = 'lovedones-terminator-astro';
+const TERMINATOR_NAUTICAL_LAYER_ID = 'lovedones-terminator-nautical';
+const TERMINATOR_CIVIL_LAYER_ID = 'lovedones-terminator-civil';
+const TERMINATOR_HORIZON_LAYER_ID = 'lovedones-terminator-horizon';
+const TERMINATOR_LAYER_IDS = [
+  TERMINATOR_NIGHT_LAYER_ID,
+  TERMINATOR_ASTRO_LAYER_ID,
+  TERMINATOR_NAUTICAL_LAYER_ID,
+  TERMINATOR_CIVIL_LAYER_ID,
+  TERMINATOR_HORIZON_LAYER_ID,
+] as const;
 
 function getOrCreateArchive(url: string): PMTiles {
   let instance = archiveInstanceCache.get(url);
@@ -433,6 +451,266 @@ function applyMapTheme(map: maplibregl.Map, theme: ResolvedMapTheme): void {
       map.setPaintProperty(entry.layerId, entry.property, entry.value);
     }
   }
+  applyWorldLandTheme(map, theme);
+  applyTerminatorTheme(map, theme);
+  applyGlobeSky(map, theme);
+}
+
+function applyGlobeSky(map: maplibregl.Map, theme: ResolvedMapTheme): void {
+  const skyFn = (map as unknown as { setSky?: (sky: Record<string, unknown>) => void }).setSky;
+  if (typeof skyFn !== 'function') return;
+  try {
+    if (theme === 'dark') {
+      skyFn.call(map, {
+        'sky-color': '#030712',
+        'sky-horizon-blend': 0.45,
+        'horizon-color': '#1b3556',
+        'horizon-fog-blend': 0.5,
+        'fog-color': '#081220',
+        'fog-ground-blend': 0.4,
+        'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 0.85, 5, 0.55, 7, 0],
+      });
+    } else {
+      skyFn.call(map, {
+        'sky-color': '#8eb4d6',
+        'sky-horizon-blend': 0.5,
+        'horizon-color': '#d7e8f5',
+        'horizon-fog-blend': 0.45,
+        'fog-color': '#dbeaf4',
+        'fog-ground-blend': 0.35,
+        'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 0.72, 5, 0.42, 7, 0],
+      });
+    }
+  } catch {
+    // Ignore unsupported sky configurations on older WebGL contexts
+  }
+}
+
+function ensureWorldLandLayers(map: maplibregl.Map, theme: ResolvedMapTheme): void {
+  if (!map.getSource(WORLD_LAND_SOURCE_ID)) {
+    map.addSource(WORLD_LAND_SOURCE_ID, {
+      type: 'geojson',
+      data: WORLD_LAND_GEOJSON as unknown as maplibregl.GeoJSONSourceSpecification['data'],
+    });
+  }
+  const beforeId = map.getLayer('earth')
+    ? 'earth'
+    : map.getLayer('water')
+      ? 'water'
+      : undefined;
+
+  if (!map.getLayer(WORLD_LAND_FILL_LAYER_ID)) {
+    map.addLayer(
+      {
+        id: WORLD_LAND_FILL_LAYER_ID,
+        type: 'fill',
+        source: WORLD_LAND_SOURCE_ID,
+        maxzoom: 8,
+        paint: {
+          'fill-color': theme === 'dark' ? '#161b24' : '#efeee9',
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 0, 1, 6, 0.96, 7.5, 0],
+        },
+      },
+      beforeId,
+    );
+  }
+  if (!map.getLayer(WORLD_LAND_BORDER_LAYER_ID)) {
+    map.addLayer(
+      {
+        id: WORLD_LAND_BORDER_LAYER_ID,
+        type: 'line',
+        source: WORLD_LAND_SOURCE_ID,
+        maxzoom: 8,
+        paint: {
+          'line-color': theme === 'dark' ? '#2c3647' : '#c6cbd4',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 0, 0.6, 5, 1.0],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 0, 0.85, 6, 0.7, 7.5, 0],
+        },
+      },
+      beforeId,
+    );
+  }
+}
+
+function applyWorldLandTheme(map: maplibregl.Map, theme: ResolvedMapTheme): void {
+  if (map.getLayer(WORLD_LAND_FILL_LAYER_ID)) {
+    map.setPaintProperty(
+      WORLD_LAND_FILL_LAYER_ID,
+      'fill-color',
+      theme === 'dark' ? '#161b24' : '#efeee9',
+    );
+  }
+  if (map.getLayer(WORLD_LAND_BORDER_LAYER_ID)) {
+    map.setPaintProperty(
+      WORLD_LAND_BORDER_LAYER_ID,
+      'line-color',
+      theme === 'dark' ? '#2c3647' : '#c6cbd4',
+    );
+  }
+}
+
+function resolveTerminatorBeforeLayerId(map: maplibregl.Map): string | undefined {
+  const styleLayers = map.getStyle()?.layers;
+  if (Array.isArray(styleLayers)) {
+    const firstSymbol = styleLayers.find((layer) => layer.type === 'symbol');
+    if (firstSymbol?.id) return firstSymbol.id;
+  }
+  const preferredTargets = [
+    FUZZED_ZONES_FILL_LAYER_ID,
+    TRAIL_LINE_LAYER_ID,
+  ];
+  for (const id of preferredTargets) {
+    if (map.getLayer(id)) return id;
+  }
+  return undefined;
+}
+
+function applyTerminatorTheme(map: maplibregl.Map, theme: ResolvedMapTheme): void {
+  const isDark = theme === 'dark';
+  if (map.getLayer(TERMINATOR_NIGHT_LAYER_ID)) {
+    map.setPaintProperty(TERMINATOR_NIGHT_LAYER_ID, 'fill-color', isDark ? '#020612' : '#0a162c');
+    map.setPaintProperty(TERMINATOR_NIGHT_LAYER_ID, 'fill-opacity', [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      0,
+      isDark ? 0.44 : 0.34,
+      6,
+      isDark ? 0.4 : 0.31,
+      9,
+      isDark ? 0.24 : 0.19,
+      12,
+      isDark ? 0.13 : 0.1,
+    ]);
+  }
+  if (map.getLayer(TERMINATOR_ASTRO_LAYER_ID)) {
+    map.setPaintProperty(TERMINATOR_ASTRO_LAYER_ID, 'fill-color', isDark ? '#0d1736' : '#1e2b54');
+    map.setPaintProperty(TERMINATOR_ASTRO_LAYER_ID, 'fill-opacity', [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      0,
+      isDark ? 0.34 : 0.27,
+      6,
+      isDark ? 0.3 : 0.24,
+      9,
+      isDark ? 0.18 : 0.15,
+      12,
+      isDark ? 0.09 : 0.07,
+    ]);
+  }
+  if (map.getLayer(TERMINATOR_NAUTICAL_LAYER_ID)) {
+    map.setPaintProperty(
+      TERMINATOR_NAUTICAL_LAYER_ID,
+      'fill-color',
+      isDark ? '#43306b' : '#5e4082',
+    );
+    map.setPaintProperty(TERMINATOR_NAUTICAL_LAYER_ID, 'fill-opacity', [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      0,
+      isDark ? 0.25 : 0.21,
+      6,
+      isDark ? 0.22 : 0.19,
+      9,
+      isDark ? 0.14 : 0.12,
+      12,
+      isDark ? 0.06 : 0.05,
+    ]);
+  }
+  if (map.getLayer(TERMINATOR_CIVIL_LAYER_ID)) {
+    map.setPaintProperty(TERMINATOR_CIVIL_LAYER_ID, 'fill-color', isDark ? '#d96b2b' : '#eb7634');
+    map.setPaintProperty(TERMINATOR_CIVIL_LAYER_ID, 'fill-opacity', [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      0,
+      isDark ? 0.2 : 0.18,
+      6,
+      isDark ? 0.18 : 0.16,
+      9,
+      isDark ? 0.11 : 0.1,
+      12,
+      isDark ? 0.05 : 0.04,
+    ]);
+  }
+  if (map.getLayer(TERMINATOR_HORIZON_LAYER_ID)) {
+    map.setPaintProperty(TERMINATOR_HORIZON_LAYER_ID, 'line-color', isDark ? '#f59e0b' : '#f97316');
+  }
+}
+
+function syncTerminatorLayers(
+  map: maplibregl.Map,
+  enabled: boolean,
+  theme: ResolvedMapTheme,
+  projection: 'globe' | 'mercator',
+): void {
+  if (!enabled) {
+    for (const id of TERMINATOR_LAYER_IDS) {
+      if (map.getLayer(id)) {
+        map.setLayoutProperty(id, 'visibility', 'none');
+      }
+    }
+    return;
+  }
+
+  const data = buildSolarTerminatorGeoJson(new Date(), {
+    polarCapLat: projection === 'globe' ? 89.2 : 85.0,
+  });
+  const existing = map.getSource(TERMINATOR_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+  if (existing) {
+    existing.setData(data);
+  } else {
+    map.addSource(TERMINATOR_SOURCE_ID, { type: 'geojson', data });
+  }
+
+  const beforeId = resolveTerminatorBeforeLayerId(map);
+  const addBand = (id: string, band: string) => {
+    if (!map.getLayer(id)) {
+      map.addLayer(
+        {
+          id,
+          type: 'fill',
+          source: TERMINATOR_SOURCE_ID,
+          filter: ['==', ['get', 'band'], band],
+          paint: { 'fill-color': '#0a162c', 'fill-opacity': 0.2 },
+        },
+        beforeId,
+      );
+    }
+  };
+
+  addBand(TERMINATOR_NIGHT_LAYER_ID, 'night');
+  addBand(TERMINATOR_ASTRO_LAYER_ID, 'astronomical');
+  addBand(TERMINATOR_NAUTICAL_LAYER_ID, 'nautical');
+  addBand(TERMINATOR_CIVIL_LAYER_ID, 'civil');
+
+  if (!map.getLayer(TERMINATOR_HORIZON_LAYER_ID)) {
+    map.addLayer(
+      {
+        id: TERMINATOR_HORIZON_LAYER_ID,
+        type: 'line',
+        source: TERMINATOR_SOURCE_ID,
+        filter: ['==', ['get', 'band'], 'horizon'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#f97316',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 0, 2.2, 6, 1.7, 11, 1.0],
+          'line-blur': ['interpolate', ['linear'], ['zoom'], 0, 3.0, 6, 2.4, 11, 1.5],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 0, 0.72, 6, 0.56, 9, 0.28, 12, 0.1],
+        },
+      },
+      beforeId,
+    );
+  }
+
+  for (const id of TERMINATOR_LAYER_IDS) {
+    if (map.getLayer(id)) {
+      map.setLayoutProperty(id, 'visibility', 'visible');
+    }
+  }
+  applyTerminatorTheme(map, theme);
 }
 
 function buildExternalMapsPopupRowHtml(
@@ -494,6 +772,13 @@ interface DraftPlaceCoords {
   name?: string;
 }
 
+export type MapProjectionMode = 'globe' | 'mercator';
+
+interface MapZoomAction {
+  delta: 1 | -1;
+  nonce: number;
+}
+
 interface MapCanvasProps {
   locations: LocationBroadcast[];
   places?: GroupPlace[];
@@ -513,11 +798,17 @@ interface MapCanvasProps {
   focusCoords?: FocusCoordsRequest | null;
   initialViewport?: SavedMapViewport | null;
   fitAllNonce?: number;
+  zoomAction?: MapZoomAction | null;
+  resetNorthNonce?: number;
   draftPlace?: DraftPlaceCoords | null;
   pickingPlace?: boolean;
   labelLanguage?: MapLabelLanguage;
   mapTheme?: ResolvedMapTheme;
+  projection?: MapProjectionMode;
+  showTerminator?: boolean;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
+  onProjectionFallback?: (resolved: MapProjectionMode) => void;
+  onBearingChange?: (bearingDeg: number) => void;
   onViewportChange?: (viewport: {
     latitude: number;
     longitude: number;
@@ -546,11 +837,17 @@ export function MapCanvas({
   focusCoords = null,
   initialViewport = null,
   fitAllNonce = 0,
+  zoomAction = null,
+  resetNorthNonce = 0,
   draftPlace = null,
   pickingPlace = false,
   labelLanguage = 'en',
   mapTheme = 'light',
+  projection = 'globe',
+  showTerminator = true,
   onMapSelectCoords,
+  onProjectionFallback,
+  onBearingChange,
   onViewportChange,
   className,
 }: MapCanvasProps) {
@@ -579,6 +876,11 @@ export function MapCanvas({
   labelLanguageRef.current = labelLanguage;
   const mapThemeRef = useRef<ResolvedMapTheme>(mapTheme);
   mapThemeRef.current = mapTheme;
+  const projectionRef = useRef<MapProjectionMode>(projection);
+  projectionRef.current = projection;
+  const resolvedProjectionRef = useRef<MapProjectionMode>(projection);
+  const showTerminatorRef = useRef<boolean>(showTerminator);
+  showTerminatorRef.current = showTerminator;
   const placesRef = useRef<GroupPlace[]>(places);
   placesRef.current = places;
   const currentUserIdRef = useRef<string | null>(currentUserId);
@@ -589,8 +891,46 @@ export function MapCanvas({
   selfLocationRef.current = selfLocation;
   const onSelectCoordsRef = useRef(onMapSelectCoords);
   onSelectCoordsRef.current = onMapSelectCoords;
+  const onProjectionFallbackRef = useRef(onProjectionFallback);
+  onProjectionFallbackRef.current = onProjectionFallback;
+  const onBearingChangeRef = useRef(onBearingChange);
+  onBearingChangeRef.current = onBearingChange;
   const onViewportChangeRef = useRef(onViewportChange);
   onViewportChangeRef.current = onViewportChange;
+
+  function applyProjectionSafely(
+    map: maplibregl.Map,
+    requested: MapProjectionMode,
+  ): MapProjectionMode {
+    try {
+      const setProjectionFn = (
+        map as unknown as { setProjection?: (spec: { type: MapProjectionMode }) => void }
+      ).setProjection;
+      if (typeof setProjectionFn !== 'function') {
+        if (requested === 'globe') {
+          onProjectionFallbackRef.current?.('mercator');
+        }
+        resolvedProjectionRef.current = 'mercator';
+        return 'mercator';
+      }
+      setProjectionFn.call(map, { type: requested });
+      resolvedProjectionRef.current = requested;
+      return requested;
+    } catch {
+      if (requested === 'globe') {
+        onProjectionFallbackRef.current?.('mercator');
+      }
+      resolvedProjectionRef.current = 'mercator';
+      try {
+        (
+          map as unknown as { setProjection?: (spec: { type: MapProjectionMode }) => void }
+        ).setProjection?.({ type: 'mercator' });
+      } catch {
+        // ignore fallback errors
+      }
+      return 'mercator';
+    }
+  }
 
   function buildMemberPopupHtml(loc: LocationBroadcast): string {
     const resolvedAvatar =
@@ -791,12 +1131,25 @@ export function MapCanvas({
       });
     };
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
-    map.on('load', () => {
+    const initializeStyledLayers = () => {
       styleReadyRef.current = true;
+      ensureWorldLandLayers(map, mapThemeRef.current);
+      const effectiveProjection = applyProjectionSafely(map, projectionRef.current);
       applyMapLabelLanguage(map, labelLanguageRef.current);
       applyMapTheme(map, mapThemeRef.current);
+      syncTerminatorLayers(
+        map,
+        showTerminatorRef.current,
+        mapThemeRef.current,
+        effectiveProjection,
+      );
+      onBearingChangeRef.current?.(map.getBearing());
       emitViewport();
+    };
+
+    map.on('load', initializeStyledLayers);
+    map.on('rotate', () => {
+      onBearingChangeRef.current?.(map.getBearing());
     });
     map.on('moveend', emitViewport);
     map.on('zoomend', emitViewport);
@@ -804,6 +1157,7 @@ export function MapCanvas({
     window.addEventListener('beforeunload', handleBeforeUnload);
     map.on('error', () => {
       if (!map.isStyleLoaded()) {
+        map.once('style.load', initializeStyledLayers);
         map.setStyle({
           version: 8,
           sources: {},
@@ -812,7 +1166,7 @@ export function MapCanvas({
               id: 'fallback-bg',
               type: 'background',
               paint: {
-                'background-color': mapThemeRef.current === 'dark' ? '#111318' : '#e9eff3',
+                'background-color': mapThemeRef.current === 'dark' ? '#0c141d' : '#cfe3ee',
               },
             },
           ],
@@ -1626,6 +1980,56 @@ export function MapCanvas({
       applyMapTheme(map, mapTheme);
     }
   }, [mapTheme]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (styleReadyRef.current || map.isStyleLoaded()) {
+      const effectiveProjection = applyProjectionSafely(map, projection);
+      applyGlobeSky(map, mapThemeRef.current);
+      syncTerminatorLayers(
+        map,
+        showTerminatorRef.current,
+        mapThemeRef.current,
+        effectiveProjection,
+      );
+    }
+  }, [projection]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const refresh = () => {
+      if (styleReadyRef.current || map.isStyleLoaded()) {
+        syncTerminatorLayers(
+          map,
+          showTerminator,
+          mapThemeRef.current,
+          resolvedProjectionRef.current,
+        );
+      }
+    };
+    refresh();
+    if (!showTerminator) return;
+    const timer = window.setInterval(refresh, 60_000);
+    return () => window.clearInterval(timer);
+  }, [showTerminator]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !zoomAction) return;
+    if (zoomAction.delta > 0) {
+      map.zoomIn({ duration: 240 });
+    } else {
+      map.zoomOut({ duration: 240 });
+    }
+  }, [zoomAction]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !resetNorthNonce) return;
+    map.easeTo({ bearing: 0, pitch: 0, duration: 320 });
+  }, [resetNorthNonce]);
 
   useEffect(() => {
     for (const entry of markersRef.current.values()) {
