@@ -2,6 +2,7 @@
   "name": "@loved-ones/mobile-app",
   "version": "0.1.2-1",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --dev-client",

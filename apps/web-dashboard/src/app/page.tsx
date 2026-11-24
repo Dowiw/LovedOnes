@@ -4113,6 +4113,17 @@ export default function HomePage() {
                 (OFL 1.1)
               </p>
               <p>Data: OpenStreetMap · Protomaps</p>
+              <p className="mt-1 border-t border-zinc-100 pt-1 dark:border-zinc-800">
+                App:{' '}
+                <a
+                  href="https://github.com/Dowiw/LovedOnes"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-zinc-950 underline decoration-zinc-300 underline-offset-2 dark:text-zinc-100 dark:decoration-zinc-600"
+                >
+                  Source (AGPL-3.0)
+                </a>
+              </p>
             </div>
           )}
           <button

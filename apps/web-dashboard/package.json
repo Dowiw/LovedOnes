@@ -2,6 +2,7 @@
   "name": "@loved-ones/web-dashboard",
   "version": "0.1.2-1",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "build": "next build",
     "dev": "next dev -p 3000",
