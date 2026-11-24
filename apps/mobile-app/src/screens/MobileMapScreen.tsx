@@ -61,6 +61,7 @@ import { ColorPickerSheet } from '../components/ColorPickerSheet';
 import {
   ChatTabIcon,
   CompassNeedleIcon,
+  FitAllIcon,
   LocationPinIcon,
   PlacesTabIcon,
 } from '../components/MapControlsIcons';
@@ -123,9 +124,11 @@ import {
   clearSessionConfig,
   getBackgroundTrackingEnabled,
   getMapThemePreference,
+  getSavedMapViewport,
   type MobileMapThemePreference,
   MobileStoredConfig,
   saveMapThemePreference,
+  saveSavedMapViewport,
   saveStoredConfig,
 } from '../services/secureConfig';
 import {
@@ -244,6 +247,14 @@ export function MobileMapScreen({
     zoom: 11,
     bearing: 0,
   });
+  const [viewportHydrated, setViewportHydrated] = useState(false);
+  const hasSavedViewportRef = useRef(false);
+  const hasAutoFramedRef = useRef(false);
+  const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedMemberIdRef = useRef<string | null>(selectedMemberId);
+  selectedMemberIdRef.current = selectedMemberId;
+  const activeGroupIdRef = useRef<string>(activeGroupId);
+  activeGroupIdRef.current = activeGroupId;
 
   // Google Maps-style Profile Hub, Group Switcher, Permissions Prompt
   const [profileHubOpen, setProfileHubOpen] = useState(false);
@@ -657,18 +668,151 @@ export function MobileMapScreen({
     return () => clearInterval(timer);
   }, []);
 
+  const persistCurrentViewport = useCallback(() => {
+    const uid = userProfile?.id ?? config.user?.id ?? null;
+    if (!uid) return;
+    const cam = cameraViewRef.current;
+    void saveSavedMapViewport(
+      {
+        center: cam.center,
+        zoom: cam.zoom,
+        bearing: cam.bearing,
+        focusedUserId: selectedMemberIdRef.current,
+        activeGroupId: activeGroupIdRef.current || null,
+      },
+      uid,
+    ).catch(() => {});
+  }, [userProfile?.id, config.user?.id]);
+
+  const schedulePersistViewport = useCallback(() => {
+    if (viewportSaveTimerRef.current) {
+      clearTimeout(viewportSaveTimerRef.current);
+    }
+    viewportSaveTimerRef.current = setTimeout(() => {
+      viewportSaveTimerRef.current = null;
+      persistCurrentViewport();
+    }, 350);
+  }, [persistCurrentViewport]);
+
+  useEffect(() => {
+    let active = true;
+    const uid = userProfile?.id ?? config.user?.id ?? null;
+    void getSavedMapViewport(uid)
+      .then((saved) => {
+        if (!active) return;
+        if (saved) {
+          hasSavedViewportRef.current = true;
+          hasAutoFramedRef.current = true;
+          cameraViewRef.current = {
+            center: saved.center,
+            zoom: saved.zoom,
+            bearing: saved.bearing,
+          };
+          const norm = normalizeBearingDegrees(saved.bearing);
+          mapBearingRef.current = norm;
+          setMapBearing(norm);
+          if (saved.focusedUserId) {
+            setSelectedMemberId(saved.focusedUserId);
+          }
+          if (saved.activeGroupId && !activeGroupIdRef.current) {
+            setActiveGroupId(saved.activeGroupId);
+          }
+          cameraRef.current?.jumpTo({
+            center: saved.center,
+            zoom: saved.zoom,
+            bearing: saved.bearing,
+          });
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setViewportHydrated(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [userProfile?.id, config.user?.id]);
+
+  useEffect(() => {
+    if (!viewportHydrated) return;
+    persistCurrentViewport();
+  }, [viewportHydrated, selectedMemberId, activeGroupId, persistCurrentViewport]);
+
+  useEffect(() => {
+    return () => {
+      if (viewportSaveTimerRef.current) {
+        clearTimeout(viewportSaveTimerRef.current);
+        viewportSaveTimerRef.current = null;
+      }
+      persistCurrentViewport();
+    };
+  }, [persistCurrentViewport]);
+
+  const handleFitAllMembers = useCallback(() => {
+    hasAutoFramedRef.current = true;
+    if (locations.length >= 2) {
+      let minLon = Infinity;
+      let maxLon = -Infinity;
+      let minLat = Infinity;
+      let maxLat = -Infinity;
+      for (const loc of locations) {
+        if (loc.longitude < minLon) minLon = loc.longitude;
+        if (loc.longitude > maxLon) maxLon = loc.longitude;
+        if (loc.latitude < minLat) minLat = loc.latitude;
+        if (loc.latitude > maxLat) maxLat = loc.latitude;
+      }
+      if (Number.isFinite(minLon) && Number.isFinite(minLat)) {
+        const lonSpan = Math.max(0.002, maxLon - minLon);
+        const latSpan = Math.max(0.002, maxLat - minLat);
+        cameraRef.current?.fitBounds(
+          [
+            minLon - lonSpan * 0.08,
+            minLat - latSpan * 0.08,
+            maxLon + lonSpan * 0.08,
+            maxLat + latSpan * 0.08,
+          ],
+          {
+            padding: { top: 96, right: 64, bottom: 220, left: 64 },
+            duration: 650,
+          },
+        );
+      }
+    } else if (locations.length === 1) {
+      cameraRef.current?.flyTo({
+        center: [locations[0].longitude, locations[0].latitude],
+        zoom: 13.5,
+        duration: 650,
+      });
+    } else if (selfCoord) {
+      cameraRef.current?.flyTo({
+        center: selfCoord,
+        zoom: 14.5,
+        duration: 650,
+      });
+    }
+  }, [locations, selfCoord]);
+
+  useEffect(() => {
+    if (!viewportHydrated || hasSavedViewportRef.current || hasAutoFramedRef.current) return;
+    if (locations.length > 0 || selfCoord) {
+      handleFitAllMembers();
+    }
+  }, [viewportHydrated, locations, selfCoord, handleFitAllMembers]);
+
   useEffect(() => {
     void checkServerAppVersion(false);
     void authedFetch('/api/auth/me').catch(() => {});
     const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
+      if (nextState === 'background' || nextState === 'inactive') {
+        persistCurrentViewport();
+      } else if (nextState === 'active') {
         void checkServerAppVersion(false);
         void authedFetch('/api/auth/me').catch(() => {});
         void getLocationPermissionStatus().then(setPermissionInfo).catch(() => {});
       }
     });
     return () => sub.remove();
-  }, [checkServerAppVersion]);
+  }, [checkServerAppVersion, persistCurrentViewport]);
 
   const fetchGroups = useCallback(async () => {
     if (!serverUrl || !accessToken) return;
@@ -2029,6 +2173,9 @@ export function MobileMapScreen({
           const norm = normalizeBearingDegrees(vs.bearing);
           mapBearingRef.current = norm;
           setMapBearing(norm);
+          hasSavedViewportRef.current = true;
+          hasAutoFramedRef.current = true;
+          schedulePersistViewport();
         }}
         onPress={(ev) => {
           if (!pickingPlaceCoords) {
@@ -2594,6 +2741,20 @@ export function MobileMapScreen({
             }}
           >
             <CompassNeedleIcon bearingDeg={mapBearing} />
+          </TouchableOpacity>
+        )}
+
+        {locations.length > 0 && (
+          <TouchableOpacity
+            style={styles.mapActionBtn}
+            activeOpacity={0.85}
+            accessibilityLabel="Fit all group members on map"
+            onPress={() => {
+              setSelectedMemberId(null);
+              handleFitAllMembers();
+            }}
+          >
+            <FitAllIcon tintColor={ui.ink} />
           </TouchableOpacity>
         )}
 

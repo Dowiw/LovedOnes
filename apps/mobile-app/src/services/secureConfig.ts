@@ -1,7 +1,10 @@
 import {
+  parseSavedMapViewport,
   QrInvitePayload,
   QrInvitePayloadSchema,
   RegistrationRequestStatus,
+  SavedMapViewport,
+  serializeSavedMapViewport,
   SystemRole,
 } from '@loved-ones/shared';
 import { formatUserError } from './errorFormatter';
@@ -76,6 +79,7 @@ const KEYS = {
   backgroundTrackingEnabled: 'lovedones.backgroundTrackingEnabled',
   recoveryGeofenceAnchor: 'lovedones.recoveryGeofenceAnchor',
   adaptiveTrackingState: 'lovedones.adaptiveTrackingState',
+  savedMapViewport: 'lovedones.savedMapViewport',
 } as const;
 
 export type MobileMapThemePreference = 'system' | 'light' | 'dark';
@@ -213,6 +217,54 @@ export async function saveAdaptiveTrackingState(
   }
 }
 
+export async function getSavedMapViewport(
+  userId?: string | null,
+  store?: SecureKeyValueStore,
+): Promise<SavedMapViewport | null> {
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(KEYS.savedMapViewport);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { userId?: string | null; viewport?: unknown };
+    if (parsed && typeof parsed === 'object' && 'viewport' in parsed) {
+      if (userId && parsed.userId && parsed.userId !== userId) {
+        return null;
+      }
+      return parseSavedMapViewport(parsed.viewport);
+    }
+    return parseSavedMapViewport(parsed);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSavedMapViewport(
+  viewport: {
+    center: [number, number];
+    zoom: number;
+    bearing?: number;
+    focusedUserId?: string | null;
+    activeGroupId?: string | null;
+    updatedAt?: string;
+  } | null,
+  userId?: string | null,
+  store?: SecureKeyValueStore,
+): Promise<void> {
+  const s = store ?? (await getExpoSecureStore());
+  if (!viewport) {
+    await s.deleteItemAsync(KEYS.savedMapViewport);
+    return;
+  }
+  const serialized = serializeSavedMapViewport(viewport);
+  if (!serialized) return;
+  const normalized = parseSavedMapViewport(serialized);
+  if (!normalized) return;
+  await s.setItemAsync(
+    KEYS.savedMapViewport,
+    JSON.stringify({ userId: userId ?? null, viewport: normalized }),
+  );
+}
+
 export function normalizeServerUrlKey(rawUrl: string): string {
   return rawUrl.trim().replace(/\/+$/, '').toLowerCase();
 }
@@ -319,6 +371,7 @@ export async function clearStoredConfig(store?: SecureKeyValueStore): Promise<vo
     s.deleteItemAsync(KEYS.backgroundTrackingEnabled),
     s.deleteItemAsync(KEYS.recoveryGeofenceAnchor),
     s.deleteItemAsync(KEYS.adaptiveTrackingState),
+    s.deleteItemAsync(KEYS.savedMapViewport),
   ]);
 }
 
@@ -335,6 +388,7 @@ export async function clearSessionConfig(store?: SecureKeyValueStore): Promise<v
     s.deleteItemAsync(KEYS.backgroundTrackingEnabled),
     s.deleteItemAsync(KEYS.recoveryGeofenceAnchor),
     s.deleteItemAsync(KEYS.adaptiveTrackingState),
+    s.deleteItemAsync(KEYS.savedMapViewport),
   ]);
 }
 

@@ -189,6 +189,15 @@ export class RegistrationRequestModule {
         throw new DomainError(409, 'An account with this email already exists on this server.');
       }
 
+      const normalizedUsername = input.username.trim();
+      const existingUsernameRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE LOWER(username) = LOWER($1) LIMIT 1`,
+        [normalizedUsername],
+      );
+      if (existingUsernameRes.rows[0]) {
+        throw new DomainError(409, 'That username is already taken on this server.');
+      }
+
       const existingEmailReq = await client.query<{ id: string }>(
         `SELECT id
          FROM registration_requests
@@ -200,6 +209,20 @@ export class RegistrationRequestModule {
         throw new DomainError(
           409,
           'A registration request for this email is already awaiting admin approval.',
+        );
+      }
+
+      const existingUsernameReq = await client.query<{ id: string }>(
+        `SELECT id
+         FROM registration_requests
+         WHERE LOWER(username) = LOWER($1) AND status = 'PENDING' AND expires_at > NOW()
+         LIMIT 1`,
+        [normalizedUsername],
+      );
+      if (existingUsernameReq.rows[0]) {
+        throw new DomainError(
+          409,
+          'A registration request for that username is already awaiting admin approval.',
         );
       }
 
@@ -339,6 +362,14 @@ export class RegistrationRequestModule {
       );
       if (existingUser.rows[0]) {
         throw new DomainError(409, 'An account with this email already exists');
+      }
+
+      const existingUsername = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE LOWER(username) = LOWER($1) LIMIT 1`,
+        [row.username],
+      );
+      if (existingUsername.rows[0]) {
+        throw new DomainError(409, 'An account with this username already exists');
       }
 
       const createdUserRes = await client.query<{

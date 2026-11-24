@@ -26,21 +26,26 @@ import {
   isSafeLoginBackgroundUrl,
   LocationBatchSchema,
   LocationSnapshotQuerySchema,
+  LoginSchema,
   type MapRegion,
   normalizeCityBbox,
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
   normalizePrivacyMode,
+  normalizeViewportBearing,
   parseBoundingBox,
   parseInviteInput,
+  parseSavedMapViewport,
   PublicLoginConfigSchema,
   QrInvitePayloadSchema,
   resolveMemberPresenceStatus,
   RespondLocationRequestSchema,
+  serializeSavedMapViewport,
   slugifyCityName,
   TrailQuerySchema,
   UpdateLoginAppearanceSchema,
   UpdateProfileSchema,
+  UsernameSchema,
   withMinDelay,
 } from '../index.js';
 import { createServiceLogger, LOGS_RING_KEY, pruneLogArtifacts } from '../logger.js';
@@ -1414,5 +1419,49 @@ describe('@loved-ones/shared', () => {
       requireAdminApproval: true,
       loginBackgroundUrl: null,
     });
+  });
+
+  it('validates usernames without @ and supports login by identifier or legacy email payload', () => {
+    expect(UsernameSchema.parse('  Alex_99  ')).toBe('Alex_99');
+    expect(UsernameSchema.safeParse('a').success).toBe(false);
+    expect(UsernameSchema.safeParse('alex@example.com').success).toBe(false);
+
+    expect(LoginSchema.parse({ identifier: '  Alex_99 ', password: 'secret' })).toEqual({
+      identifier: 'Alex_99',
+      password: 'secret',
+    });
+    expect(LoginSchema.parse({ email: 'alex@example.com', password: 'secret' })).toEqual({
+      identifier: 'alex@example.com',
+      password: 'secret',
+    });
+    expect(LoginSchema.safeParse({ password: 'secret' }).success).toBe(false);
+  });
+
+  it('parses and serializes persisted map viewports safely', () => {
+    expect(normalizeViewportBearing(370)).toBe(10);
+    expect(normalizeViewportBearing(-190)).toBe(170);
+
+    const raw = serializeSavedMapViewport({
+      center: [13.4050123, 52.5200456],
+      zoom: 14.25,
+      bearing: -22.5,
+      focusedUserId: 'user-42',
+      activeGroupId: 'group-7',
+      updatedAt: '2026-11-24T10:00:00.000Z',
+    });
+    expect(raw).toBeTypeOf('string');
+    const parsed = parseSavedMapViewport(raw);
+    expect(parsed).toEqual({
+      center: [13.405012, 52.520046],
+      zoom: 14.25,
+      bearing: -22.5,
+      focusedUserId: 'user-42',
+      activeGroupId: 'group-7',
+      updatedAt: '2026-11-24T10:00:00.000Z',
+    });
+
+    expect(parseSavedMapViewport('not json')).toBeNull();
+    expect(parseSavedMapViewport({ center: [200, 52], zoom: 12 })).toBeNull();
+    expect(parseSavedMapViewport({ center: [13, 52], zoom: 35 })).toBeNull();
   });
 });

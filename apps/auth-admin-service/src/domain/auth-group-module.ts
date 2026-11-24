@@ -88,6 +88,7 @@ export interface InviteRecord {
 
 export interface AuthGroupTxStore {
   findAccountByEmail(email: string): Promise<AccountRecord | null>;
+  findAccountByUsername?(username: string): Promise<AccountRecord | null>;
   countAccounts(): Promise<number>;
   insertAccount(input: {
     email: string;
@@ -116,6 +117,8 @@ export interface AuthGroupStore {
     options?: { registrationLock?: boolean },
   ): Promise<T>;
   findAccountByEmail(email: string): Promise<AccountRecord | null>;
+  findAccountByUsername?(username: string): Promise<AccountRecord | null>;
+  findAccountByIdentifier?(identifier: string): Promise<AccountRecord | null>;
   findAccountByVerifiedRecoveryEmail?(recoveryEmail: string): Promise<AccountRecord | null>;
   findAccountById(id: string): Promise<PublicAccountRecord | null>;
   findAccountWithPasswordById?(id: string): Promise<AccountRecord | null>;
@@ -128,7 +131,12 @@ export interface AuthGroupStore {
       haloColor?: string | null;
       fuzzCircleColor?: string | null;
     },
-  ): Promise<{ status: 'ok'; account: PublicAccountRecord } | { status: 'email_conflict' } | { status: 'not_found' }>;
+  ): Promise<
+    | { status: 'ok'; account: PublicAccountRecord }
+    | { status: 'email_conflict' }
+    | { status: 'username_conflict' }
+    | { status: 'not_found' }
+  >;
   updateRecoveryEmail?(
     userId: string,
     recoveryEmail: string | null,
@@ -427,6 +435,12 @@ export class AuthGroupModule {
         if (existing) {
           throw new DomainError(409, 'Email already registered');
         }
+        if (tx.findAccountByUsername) {
+          const existingUsername = await tx.findAccountByUsername(username);
+          if (existingUsername) {
+            throw new DomainError(409, 'Username already taken');
+          }
+        }
 
         const existingCount = await tx.countAccounts();
         if (existingCount > 0 && this.requireAdminApproval) {
@@ -484,14 +498,23 @@ export class AuthGroupModule {
     if (!parsed.success) {
       throw new DomainError(400, 'Invalid input', parsed.error.flatten());
     }
-    const { email, password } = parsed.data;
-    const account = await this.store.findAccountByEmail(email);
+    const { identifier, password } = parsed.data;
+    let account: AccountRecord | null = null;
+    if (this.store.findAccountByIdentifier) {
+      account = await this.store.findAccountByIdentifier(identifier);
+    } else {
+      account =
+        (await this.store.findAccountByEmail(identifier)) ??
+        (this.store.findAccountByUsername
+          ? await this.store.findAccountByUsername(identifier)
+          : null);
+    }
     if (!account) {
-      throw new DomainError(401, 'Invalid email or password');
+      throw new DomainError(401, 'Invalid email, username, or password');
     }
     const valid = await this.passwordHasher.verify(account.passwordHash, password);
     if (!valid) {
-      throw new DomainError(401, 'Invalid email or password');
+      throw new DomainError(401, 'Invalid email, username, or password');
     }
 
     const tokens = await this.issueAndPersistSession(account);
@@ -575,6 +598,9 @@ export class AuthGroupModule {
     }
     if (res.status === 'email_conflict') {
       throw new DomainError(409, 'Email already registered');
+    }
+    if (res.status === 'username_conflict') {
+      throw new DomainError(409, 'Username already taken');
     }
 
     const updated = res.account;

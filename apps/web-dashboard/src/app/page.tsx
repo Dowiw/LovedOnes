@@ -23,6 +23,7 @@ import {
   LocateFixed,
   LogOut,
   MapPin,
+  Maximize2,
   Menu,
   MessageSquare,
   Monitor,
@@ -138,6 +139,7 @@ import {
   resolveMapTheme,
   THEME_CHANGE_EVENT,
 } from '@/lib/mapTheme';
+import { readSavedMapViewport, writeSavedMapViewport } from '@/lib/mapViewport';
 
 type InspectorTab = 'people' | 'chat' | 'places' | 'requests';
 type MapViewMode = 'live' | 'trails' | 'places';
@@ -315,7 +317,25 @@ export default function HomePage() {
     latitude: number;
     longitude: number;
     zoom: number;
+    bearing?: number;
   } | null>(null);
+  const [fitAllNonce, setFitAllNonce] = useState(0);
+  const mapViewportRef = useRef<{
+    latitude: number;
+    longitude: number;
+    zoom: number;
+    bearing?: number;
+  } | null>(null);
+  mapViewportRef.current = mapViewport;
+  const viewportSaveTimerRef = useRef<number | null>(null);
+  const selectedUserIdRef = useRef<string | null>(selectedUserId);
+  selectedUserIdRef.current = selectedUserId;
+  const activeGroupIdRef = useRef<string>(activeGroupId);
+  activeGroupIdRef.current = activeGroupId;
+  const initialMapViewport = useMemo(
+    () => readSavedMapViewport(session?.user.id),
+    [session?.user.id],
+  );
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
@@ -872,6 +892,63 @@ export default function HomePage() {
     setActiveGroupId((prev) => (prev && list.some((g) => g.id === prev) ? prev : list[0]?.id ?? ''));
     return list;
   }, []);
+
+  useEffect(() => {
+    if (!session?.user.id || !initialMapViewport) return;
+    if (initialMapViewport.activeGroupId) {
+      setActiveGroupId((prev) => prev || initialMapViewport.activeGroupId || '');
+    }
+    if (initialMapViewport.focusedUserId) {
+      setSelectedUserId((prev) => prev ?? initialMapViewport.focusedUserId);
+    }
+  }, [session?.user.id, initialMapViewport]);
+
+  const flushSavedMapViewport = useCallback(
+    (vpOverride?: { latitude: number; longitude: number; zoom: number; bearing?: number } | null) => {
+      const uid = session?.user.id;
+      const vp = vpOverride ?? mapViewportRef.current;
+      if (!uid || !vp) return;
+      writeSavedMapViewport(uid, {
+        center: [vp.longitude, vp.latitude],
+        zoom: vp.zoom,
+        bearing: vp.bearing ?? 0,
+        focusedUserId: selectedUserIdRef.current,
+        activeGroupId: activeGroupIdRef.current || null,
+      });
+    },
+    [session?.user.id],
+  );
+
+  const handleMapViewportChange = useCallback(
+    (vp: { latitude: number; longitude: number; zoom: number; bearing: number }) => {
+      setMapViewport(vp);
+      mapViewportRef.current = vp;
+      if (!session?.user.id) return;
+      if (viewportSaveTimerRef.current !== null) {
+        window.clearTimeout(viewportSaveTimerRef.current);
+      }
+      viewportSaveTimerRef.current = window.setTimeout(() => {
+        viewportSaveTimerRef.current = null;
+        flushSavedMapViewport(vp);
+      }, 250);
+    },
+    [session?.user.id, flushSavedMapViewport],
+  );
+
+  useEffect(() => {
+    if (!session?.user.id || !mapViewportRef.current) return;
+    flushSavedMapViewport();
+  }, [session?.user.id, selectedUserId, activeGroupId, flushSavedMapViewport]);
+
+  useEffect(() => {
+    return () => {
+      if (viewportSaveTimerRef.current !== null) {
+        window.clearTimeout(viewportSaveTimerRef.current);
+        viewportSaveTimerRef.current = null;
+      }
+      flushSavedMapViewport();
+    };
+  }, [flushSavedMapViewport]);
 
   useEffect(() => {
     if (!session) {
@@ -2193,14 +2270,15 @@ export default function HomePage() {
 
               <form onSubmit={handleAuthSubmit} className="space-y-3.5">
                 <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
-                  Email
+                  {authMode === 'login' ? 'Email or Username' : 'Email'}
                   <input
-                    type="email"
+                    type={authMode === 'login' ? 'text' : 'email'}
+                    autoComplete={authMode === 'login' ? 'username' : 'email'}
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
-                    placeholder="you@example.com"
+                    placeholder={authMode === 'login' ? 'you@example.com or alex' : 'you@example.com'}
                   />
                 </label>
 
@@ -2359,11 +2437,13 @@ export default function HomePage() {
         currentUserFuzzCircleColor={session.user.fuzzCircleColor ?? null}
         selfLocation={selfLocation}
         focusCoords={focusCoords}
+        initialViewport={initialMapViewport}
+        fitAllNonce={fitAllNonce}
         draftPlace={draftPlace}
         pickingPlace={isPickingPlace}
         labelLanguage={labelLanguage}
         mapTheme={resolvedMapTheme}
-        onViewportChange={setMapViewport}
+        onViewportChange={handleMapViewportChange}
         onMapSelectCoords={(lat, lon) => {
           if (!isPickingPlace) return;
           setPlaceLat(String(lat));
@@ -4107,6 +4187,26 @@ export default function HomePage() {
               {label}
             </button>
           ))}
+          {(locations.length > 0 || selfLocation) && (
+            <>
+              <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true" />
+              <button
+                type="button"
+                title="Fit all group members"
+                aria-label="Fit all group members"
+                onClick={() => {
+                  setSelectedUserId(null);
+                  setSelectedPlaceId(null);
+                  setMapViewMode((prev) => (prev === 'places' ? 'live' : prev));
+                  setFitAllNonce((n) => n + 1);
+                }}
+                className="lo-press flex items-center gap-1 rounded-lg px-2 py-1.5 text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Fit All</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
 

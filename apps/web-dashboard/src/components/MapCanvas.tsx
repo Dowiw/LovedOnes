@@ -20,6 +20,7 @@ import {
   type LocationBroadcast,
   type MapRegion,
   type MatchedUserTrail,
+  type SavedMapViewport,
   type TrailDisplayMode,
 } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
@@ -510,12 +511,19 @@ interface MapCanvasProps {
   currentUserFuzzCircleColor?: string | null;
   selfLocation?: SelfLocationFix | null;
   focusCoords?: FocusCoordsRequest | null;
+  initialViewport?: SavedMapViewport | null;
+  fitAllNonce?: number;
   draftPlace?: DraftPlaceCoords | null;
   pickingPlace?: boolean;
   labelLanguage?: MapLabelLanguage;
   mapTheme?: ResolvedMapTheme;
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
-  onViewportChange?: (viewport: { latitude: number; longitude: number; zoom: number }) => void;
+  onViewportChange?: (viewport: {
+    latitude: number;
+    longitude: number;
+    zoom: number;
+    bearing: number;
+  }) => void;
   className?: string;
 }
 
@@ -536,6 +544,8 @@ export function MapCanvas({
   currentUserFuzzCircleColor = null,
   selfLocation = null,
   focusCoords = null,
+  initialViewport = null,
+  fitAllNonce = 0,
   draftPlace = null,
   pickingPlace = false,
   labelLanguage = 'en',
@@ -557,7 +567,14 @@ export function MapCanvas({
   const trailPopupRef = useRef<maplibregl.Popup | null>(null);
   const pickingPlaceRef = useRef(pickingPlace);
   pickingPlaceRef.current = pickingPlace;
-  const hasAutoFramedRef = useRef(false);
+  const initialViewportRef = useRef<SavedMapViewport | null>(initialViewport);
+  const hasSavedViewportRef = useRef<boolean>(Boolean(initialViewport));
+  const hasAutoFramedRef = useRef<boolean>(Boolean(initialViewport));
+  const lastFlownSelectedUserIdRef = useRef<string | null>(
+    initialViewport?.focusedUserId ?? null,
+  );
+  const locationsRef = useRef<LocationBroadcast[]>(locations);
+  locationsRef.current = locations;
   const labelLanguageRef = useRef<MapLabelLanguage>(labelLanguage);
   labelLanguageRef.current = labelLanguage;
   const mapThemeRef = useRef<ResolvedMapTheme>(mapTheme);
@@ -744,12 +761,14 @@ export function MapCanvas({
     registerCompositePmtilesProtocol(tilesBase);
 
     const styleUrl = `${tilesBase}/tiles/style.json?v=7`;
+    const savedStart = initialViewportRef.current;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: styleUrl,
-      center: [13.405, 52.52],
-      zoom: 13.2,
+      center: savedStart ? savedStart.center : [13.405, 52.52],
+      zoom: savedStart ? savedStart.zoom : 13.2,
+      bearing: savedStart ? savedStart.bearing : 0,
       attributionControl: false,
       transformRequest: (url) => {
         if (tilesBase && url.startsWith('pmtiles:///tiles/')) {
@@ -768,6 +787,7 @@ export function MapCanvas({
         latitude: Number(center.lat.toFixed(6)),
         longitude: Number(center.lng.toFixed(6)),
         zoom: map.getZoom(),
+        bearing: map.getBearing(),
       });
     };
 
@@ -779,6 +799,9 @@ export function MapCanvas({
       emitViewport();
     });
     map.on('moveend', emitViewport);
+    map.on('zoomend', emitViewport);
+    const handleBeforeUnload = () => emitViewport();
+    window.addEventListener('beforeunload', handleBeforeUnload);
     map.on('error', () => {
       if (!map.isStyleLoaded()) {
         map.setStyle({
@@ -817,6 +840,8 @@ export function MapCanvas({
     }
 
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      emitViewport();
       resizeObserver?.disconnect();
       styleReadyRef.current = false;
       for (const frameId of markerAnimFramesRef.current.values()) {
@@ -960,34 +985,72 @@ export function MapCanvas({
     }
 
     if (selectedUserId) {
-      const target = locations.find((l) => l.userId === selectedUserId);
-      if (target) {
-        hasAutoFramedRef.current = true;
-        map.flyTo({
-          center: [target.longitude, target.latitude],
-          zoom: 13.5,
-          duration: 850,
-          curve: 1.35,
-          essential: true,
-        });
+      if (selectedUserId !== lastFlownSelectedUserIdRef.current) {
+        const target = locations.find((l) => l.userId === selectedUserId);
+        if (target) {
+          lastFlownSelectedUserIdRef.current = selectedUserId;
+          hasAutoFramedRef.current = true;
+          map.flyTo({
+            center: [target.longitude, target.latitude],
+            zoom: Math.max(map.getZoom(), 13.5),
+            duration: 850,
+            curve: 1.35,
+            essential: true,
+          });
+        }
       }
-    } else if (locations.length === 0) {
-      hasAutoFramedRef.current = false;
-    } else if (!hasAutoFramedRef.current) {
-      hasAutoFramedRef.current = true;
-      if (locations.length === 1) {
-        map.flyTo({
-          center: [locations[0].longitude, locations[0].latitude],
-          zoom: 13.5,
-          duration: 850,
-          curve: 1.35,
-          essential: true,
-        });
-      } else {
-        map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 800, essential: true });
+    } else {
+      lastFlownSelectedUserIdRef.current = null;
+      if (locations.length === 0) {
+        if (!hasSavedViewportRef.current) {
+          hasAutoFramedRef.current = false;
+        }
+      } else if (!hasAutoFramedRef.current) {
+        hasAutoFramedRef.current = true;
+        if (locations.length === 1) {
+          map.flyTo({
+            center: [locations[0].longitude, locations[0].latitude],
+            zoom: 13.5,
+            duration: 850,
+            curve: 1.35,
+            essential: true,
+          });
+        } else {
+          map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 800, essential: true });
+        }
       }
     }
   }, [locations, selectedUserId, currentUserId, currentUserAvatarUrl, currentUserHaloColor]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !fitAllNonce) return;
+    const currentLocations = locationsRef.current;
+    hasAutoFramedRef.current = true;
+    if (currentLocations.length >= 2) {
+      const bounds = new maplibregl.LngLatBounds();
+      for (const loc of currentLocations) {
+        bounds.extend([loc.longitude, loc.latitude]);
+      }
+      map.fitBounds(bounds, { padding: 110, maxZoom: 14, duration: 800, essential: true });
+    } else if (currentLocations.length === 1) {
+      map.flyTo({
+        center: [currentLocations[0].longitude, currentLocations[0].latitude],
+        zoom: 13.5,
+        duration: 850,
+        curve: 1.35,
+        essential: true,
+      });
+    } else if (selfLocationRef.current) {
+      map.flyTo({
+        center: [selfLocationRef.current.longitude, selfLocationRef.current.latitude],
+        zoom: 14.5,
+        duration: 850,
+        curve: 1.35,
+        essential: true,
+      });
+    }
+  }, [fitAllNonce]);
 
   useEffect(() => {
     const map = mapRef.current;

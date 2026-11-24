@@ -42,6 +42,13 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
       }
       return null;
     },
+    async findAccountByUsername(username) {
+      const lower = username.toLowerCase();
+      for (const acc of accounts.values()) {
+        if (acc.username.toLowerCase() === lower) return acc;
+      }
+      return null;
+    },
     async countAccounts() {
       return accounts.size;
     },
@@ -119,6 +126,13 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
       }
     },
     findAccountByEmail: txStore.findAccountByEmail,
+    findAccountByUsername: txStore.findAccountByUsername,
+    async findAccountByIdentifier(identifier) {
+      return (
+        (await txStore.findAccountByEmail(identifier)) ??
+        (await txStore.findAccountByUsername!(identifier))
+      );
+    },
     async findAccountByVerifiedRecoveryEmail(recoveryEmail) {
       const lower = recoveryEmail.toLowerCase();
       for (const acc of accounts.values()) {
@@ -149,7 +163,15 @@ function createInMemoryAuthGroupStore(): AuthGroupStore & {
         }
         acc.email = lower;
       }
-      if (patch.username !== undefined) acc.username = patch.username;
+      if (patch.username !== undefined) {
+        const lowerName = patch.username.toLowerCase();
+        for (const other of accounts.values()) {
+          if (other.id !== userId && other.username.toLowerCase() === lowerName) {
+            return { status: 'username_conflict' as const };
+          }
+        }
+        acc.username = patch.username;
+      }
       if (patch.avatarUrl !== undefined) acc.avatarUrl = patch.avatarUrl;
       const { passwordHash: _ignored, ...pub } = acc;
       return { status: 'ok' as const, account: pub };
@@ -366,6 +388,21 @@ describe('AuthGroupModule domain interface', () => {
         username: 'Dup',
         password: 'Password1234',
       }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    await expect(
+      mod.register({
+        email: 'unique@example.com',
+        username: 'host',
+        password: 'Password1234',
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    const byUsername = await mod.login({ identifier: 'host', password: 'Password1234' });
+    expect(byUsername.user.id).toBe(first.user.id);
+
+    await expect(
+      mod.updateProfile(second.user.id, { username: 'HOST' }),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
