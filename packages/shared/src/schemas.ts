@@ -380,6 +380,83 @@ export const AccountRemovedEventSchema = z.object({
 });
 export type AccountRemovedEvent = z.infer<typeof AccountRemovedEventSchema>;
 
+export const MotionActivitySchema = z.enum([
+  'stationary',
+  'walking',
+  'running',
+  'cycling',
+  'automotive',
+  'unknown',
+]);
+export type MotionActivity = z.infer<typeof MotionActivitySchema>;
+
+export const TrailActivityModeSchema = z.enum([
+  'stationary',
+  'walking',
+  'running',
+  'cycling',
+  'transit',
+  'driving',
+]);
+export type TrailActivityMode = z.infer<typeof TrailActivityModeSchema>;
+
+const MOTION_ACTIVITY_PRIORITY: Record<MotionActivity, number> = {
+  automotive: 5,
+  cycling: 4,
+  running: 3,
+  walking: 2,
+  stationary: 1,
+  unknown: 0,
+};
+
+/** Normalizes a single third-party or OS motion string into a canonical MotionActivity. */
+export function normalizeMotionActivityValue(raw: unknown): MotionActivity | null {
+  if (typeof raw !== 'string') return null;
+  const normalized = raw.trim().toLowerCase();
+  switch (normalized) {
+    case 'stationary':
+      return 'stationary';
+    case 'walking':
+      return 'walking';
+    case 'running':
+      return 'running';
+    case 'cycling':
+      return 'cycling';
+    case 'automotive':
+    case 'driving':
+      return 'automotive';
+    case 'unknown':
+      return 'unknown';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Picks the highest-priority motion state from OwnTracks `motionactivities` or
+ * Overland `properties.motion` (e.g., prefers active travel over stationary).
+ */
+export function normalizeMotionActivityArray(raw: unknown): MotionActivity | null {
+  if (raw === null || raw === undefined) return null;
+  const values = Array.isArray(raw) ? raw : [raw];
+  let best: MotionActivity | null = null;
+  for (const entry of values) {
+    const candidate = normalizeMotionActivityValue(entry);
+    if (!candidate) continue;
+    if (!best || MOTION_ACTIVITY_PRIORITY[candidate] > MOTION_ACTIVITY_PRIORITY[best]) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function normalizeHeadingDegrees(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 360) {
+    return null;
+  }
+  return raw === 360 ? 0 : raw;
+}
+
 export const LocationPointSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
@@ -387,6 +464,7 @@ export const LocationPointSchema = z.object({
   accuracy: z.number().min(0).nullable().optional(),
   speed: z.number().min(0).nullable().optional(),
   heading: z.number().min(0).max(360).nullable().optional(),
+  activity: MotionActivitySchema.nullable().optional(),
   batteryLevel: z.number().int().min(0).max(100).nullable().optional(),
   recordedAt: z.string().datetime(),
 });
@@ -442,6 +520,7 @@ export const LocationBroadcastSchema = z.object({
   accuracy: z.number().min(0).nullable().optional(),
   speed: z.number().nullable().optional(),
   heading: z.number().min(0).max(360).nullable().optional(),
+  activity: MotionActivitySchema.nullable().optional(),
   batteryLevel: z.number().nullable().optional(),
   recordedAt: z.string(),
   lastHeartbeatAt: z.string().nullable().optional(),
@@ -890,6 +969,9 @@ export const OwnTracksLocationItemSchema = z
     alt: z.number().nullable().optional(),
     acc: z.number().nullable().optional(),
     vel: z.number().nullable().optional(),
+    cog: z.number().nullable().optional(),
+    m: z.number().nullable().optional(),
+    motionactivities: z.union([z.array(z.string()), z.string()]).nullable().optional(),
     batt: z.number().nullable().optional(),
   })
   .passthrough();
@@ -949,6 +1031,8 @@ export function normalizeOwnTracksToPoints(
     const altitude =
       typeof item.alt === 'number' && Number.isFinite(item.alt) ? item.alt : null;
     const accuracy = parseNonNegativeFinite(item.acc);
+    const heading = normalizeHeadingDegrees(item.cog);
+    const activity = normalizeMotionActivityArray(item.motionactivities);
 
     points.push({
       latitude: item.lat,
@@ -956,6 +1040,8 @@ export function normalizeOwnTracksToPoints(
       altitude,
       accuracy,
       speed,
+      ...(heading !== null ? { heading } : {}),
+      ...(activity !== null ? { activity } : {}),
       batteryLevel,
       recordedAt,
     });
@@ -977,6 +1063,8 @@ export const OverlandFeatureSchema = z
         altitude: z.number().nullable().optional(),
         horizontal_accuracy: z.number().nullable().optional(),
         speed: z.number().nullable().optional(),
+        course: z.number().nullable().optional(),
+        motion: z.union([z.array(z.string()), z.string()]).nullable().optional(),
         battery_level: z.number().nullable().optional(),
       })
       .passthrough()
@@ -1036,6 +1124,8 @@ export function normalizeOverlandToPoints(
           ? coordAlt
           : null;
     const accuracy = parseNonNegativeFinite(props?.horizontal_accuracy);
+    const heading = normalizeHeadingDegrees(props?.course);
+    const activity = normalizeMotionActivityArray(props?.motion);
 
     points.push({
       latitude,
@@ -1043,6 +1133,8 @@ export function normalizeOverlandToPoints(
       altitude,
       accuracy,
       speed,
+      ...(heading !== null ? { heading } : {}),
+      ...(activity !== null ? { activity } : {}),
       batteryLevel,
       recordedAt,
     });
@@ -1234,6 +1326,7 @@ export const TrailPathSegmentSchema = z.object({
   kind: TrailSegmentKindSchema,
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
   roadKind: z.string().optional(),
+  activityMode: TrailActivityModeSchema.optional(),
 });
 
 export const AveragedTrailStopSchema = z.object({
@@ -1260,6 +1353,8 @@ export const TrailStopVisitSchema = z.object({
   isDwell: z.boolean().optional(),
   accuracyMeters: z.number().nullable().optional(),
   headingDeg: z.number().nullable().optional(),
+  activity: MotionActivitySchema.nullable().optional(),
+  activityMode: TrailActivityModeSchema.optional(),
 });
 
 export const MatchedUserTrailSchema = z.object({

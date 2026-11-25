@@ -23,6 +23,7 @@ import {
   LocationSnapshotQuerySchema,
   MatchedUserTrail,
   MemberPresenceUpdate,
+  MotionActivity,
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
   parseBoundingBox,
@@ -180,7 +181,13 @@ function crossTrackMeters(
  * ordered chronologically so callers can safely take the last element as latest.
  */
 export function filterAnomalousLocationPoints<
-  T extends { latitude: number; longitude: number; accuracy?: number | null; recordedAt: string },
+  T extends {
+    latitude: number;
+    longitude: number;
+    accuracy?: number | null;
+    activity?: MotionActivity | null;
+    recordedAt: string;
+  },
 >(points: readonly T[], options: CoordinateFilterOptions = {}): T[] {
   const maxAccuracyMeters = options.maxAccuracyMeters ?? DEFAULT_MAX_ACCURACY_METERS;
   const maxJumpSpeedMps = options.maxJumpSpeedMps ?? DEFAULT_MAX_JUMP_SPEED_MPS;
@@ -220,6 +227,19 @@ export function filterAnomalousLocationPoints<
       );
       const maxAllowedDistance = Math.max(minJumpDistanceMeters, maxJumpSpeedMps * dtSeconds);
       if (distanceMeters > maxAllowedDistance) {
+        continue;
+      }
+      const ptAccuracy =
+        typeof item.pt.accuracy === 'number' && Number.isFinite(item.pt.accuracy)
+          ? item.pt.accuracy
+          : null;
+      if (
+        lastAccepted.pt.activity === 'stationary' &&
+        item.pt.activity === 'stationary' &&
+        dtSeconds <= 180 &&
+        distanceMeters > 40 &&
+        ((ptAccuracy !== null && ptAccuracy >= 35) || distanceMeters <= 250)
+      ) {
         continue;
       }
     }
@@ -322,6 +342,7 @@ function toPrivacySafeBroadcast(
     accuracy: fuzzed.isFuzzed ? null : (row.accuracy ?? null),
     speed: row.speed,
     heading: fuzzed.isFuzzed ? null : (row.heading ?? null),
+    activity: fuzzed.isFuzzed ? null : (row.activity ?? null),
     batteryLevel: presence?.batteryLevel ?? row.batteryLevel,
     recordedAt: row.recordedAt,
     lastHeartbeatAt: presence?.lastHeartbeatAt ?? null,
@@ -495,15 +516,24 @@ export class RealtimeModule {
             const anchorAcc = anchor.accuracy ?? 15;
             const ptSpeed = pt.speed ?? 0;
             const anchorSpeed = anchor.speed ?? 0;
+            const isStationaryDriftBounce =
+              dtSec <= 120 &&
+              (pt.activity === 'stationary' || anchor.activity === 'stationary') &&
+              ptSpeed <= 1.5 &&
+              anchorSpeed <= 1.5 &&
+              distMeters > 35 &&
+              ((typeof ptAcc === 'number' && Number.isFinite(ptAcc) && ptAcc >= 35) ||
+                distMeters <= 250);
             if (
-              dtSec <= 60 &&
-              typeof ptAcc === 'number' &&
-              Number.isFinite(ptAcc) &&
-              ptAcc >= 75 &&
-              anchorAcc <= 30 &&
-              ptSpeed <= 2.2 &&
-              anchorSpeed <= 1.8 &&
-              distMeters > Math.max(55, ptAcc * 0.6)
+              isStationaryDriftBounce ||
+              (dtSec <= 60 &&
+                typeof ptAcc === 'number' &&
+                Number.isFinite(ptAcc) &&
+                ptAcc >= 75 &&
+                anchorAcc <= 30 &&
+                ptSpeed <= 2.2 &&
+                anchorSpeed <= 1.8 &&
+                distMeters > Math.max(55, ptAcc * 0.6))
             ) {
               continue;
             }
@@ -617,6 +647,7 @@ export class RealtimeModule {
         accuracy: fuzzed.isFuzzed ? null : (latest.accuracy ?? null),
         speed: latest.speed ?? null,
         heading: fuzzed.isFuzzed ? null : (latest.heading ?? null),
+        activity: fuzzed.isFuzzed ? null : (latest.activity ?? null),
         batteryLevel: activePresence.batteryLevel,
         recordedAt: latest.recordedAt,
         lastHeartbeatAt: activePresence.lastHeartbeatAt,

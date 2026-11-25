@@ -15,7 +15,10 @@ import {
   haversineMeters,
   MatchedUserTrail,
   mergeTrailCoordinates,
+  MotionActivity,
+  resolveSegmentActivityMode,
   splitVisitsIntoTrips,
+  TrailActivityMode,
   TrailPathSegment,
   TrailPingLike,
   TrailStopVisit,
@@ -982,11 +985,74 @@ function findSnapCandidates(graph: RoadGraph, lat: number, lon: number): SnapCan
   return selected;
 }
 
+const LEG_ACTIVITY_PRIORITY: Record<MotionActivity, number> = {
+  automotive: 5,
+  cycling: 4,
+  running: 3,
+  walking: 2,
+  stationary: 1,
+  unknown: 0,
+};
+
+function mergeLegActivity(
+  a?: MotionActivity | null,
+  b?: MotionActivity | null,
+  speedMps?: number | null,
+): MotionActivity | null {
+  let picked: MotionActivity | null;
+  if (!a) picked = b ?? null;
+  else if (!b) picked = a;
+  else picked = LEG_ACTIVITY_PRIORITY[b] >= LEG_ACTIVITY_PRIORITY[a] ? b : a;
+
+  if (
+    speedMps !== null &&
+    speedMps !== undefined &&
+    speedMps >= 4.2 &&
+    !b &&
+    (picked === 'walking' || picked === 'stationary')
+  ) {
+    return null;
+  }
+  return picked;
+}
+
+function roadSplitGroup(roadKind?: string): string {
+  if (roadKind === 'rail') return 'rail';
+  if (roadKind === 'path') return 'path';
+  return 'road';
+}
+
 /**
- * Weights road and transit edges by Protomaps `kind` and implied trip speed so walking trips
- * use footpaths/side streets, driving uses roads, and transit speeds can follow rail/tram tracks.
+ * Weights road and transit edges by Protomaps `kind`, sensor motion activity, and implied trip speed
+ * so walking/running prefer footpaths/side streets, cycling avoids highways, driving uses roads,
+ * and transit speeds can follow rail/tram tracks.
  */
-function roadCostFactor(kind: string, speedMps: number | null): number {
+function roadCostFactor(
+  kind: string,
+  speedMps: number | null,
+  activity?: MotionActivity | null,
+): number {
+  if (activity === 'walking' || activity === 'running') {
+    if (kind === 'path') return 0.9;
+    if (kind === 'rail') return 2.8;
+    if (kind === 'highway') return 2.8;
+    if (kind === 'major_road' || kind === 'medium_road') return 1.2;
+    return 1.0;
+  }
+  if (activity === 'cycling') {
+    if (kind === 'path') return 0.9;
+    if (kind === 'rail') return 3.0;
+    if (kind === 'highway') return 3.2;
+    if (kind === 'major_road' || kind === 'medium_road') return 1.15;
+    return 1.0;
+  }
+  if (activity === 'automotive') {
+    if (kind === 'highway') return 0.9;
+    if (kind === 'major_road' || kind === 'medium_road') return 1.0;
+    if (kind === 'rail') return 2.2;
+    if (kind === 'path') return 4.0;
+    return 1.1;
+  }
   if (speedMps !== null && speedMps <= 1.8) {
     if (kind === 'path') return 1.0;
     if (kind === 'rail') return 2.8;
@@ -1018,13 +1084,14 @@ function emissionCost(
   cand: SnapCandidate,
   visit: TrailStopVisit,
   speedMps: number | null,
+  activity?: MotionActivity | null,
 ): number {
   const sigma =
     typeof visit.accuracyMeters === 'number' && Number.isFinite(visit.accuracyMeters)
       ? Math.max(12, Math.min(120, visit.accuracyMeters))
       : 22;
   const distTerm = cand.distMeters * (22 / sigma) * 1.35 + (cand.distMeters / sigma) ** 2 * 14;
-  const roadPenalty = (roadCostFactor(cand.kind, speedMps) - 1) * 15;
+  const roadPenalty = (roadCostFactor(cand.kind, speedMps, activity ?? visit.activity) - 1) * 15;
   let headingPenalty = 0;
   if (
     typeof visit.headingDeg === 'number' &&
@@ -1089,10 +1156,11 @@ function routeBetweenCandidates(
   goal: SnapCandidate,
   speedMps: number | null,
   maxDetourMeters: number,
+  activity?: MotionActivity | null,
 ): RoutedLegResult | null {
   const isRailToRail = start.kind === 'rail' && goal.kind === 'rail';
   const effectiveEdgeCostFactor = (kind: string) =>
-    isRailToRail && kind === 'rail' ? 1.0 : roadCostFactor(kind, speedMps);
+    isRailToRail && kind === 'rail' ? 1.0 : roadCostFactor(kind, speedMps, activity);
 
   if (start.segmentId === goal.segmentId) {
     const dist = haversineMeters(start.lat, start.lon, goal.lat, goal.lon);
@@ -1116,6 +1184,7 @@ function routeBetweenCandidates(
   const distScore = new Map<number, number>();
   const parentNode = new Map<number, number>();
   const parentKind = new Map<number, string>();
+  const parentLen = new Map<number, number>();
   const closed = new Set<number>();
   const heap: AStarHeapNode[] = [];
   const maxAllowedCost = maxDetourMeters * 2.5;
@@ -1133,6 +1202,7 @@ function routeBetweenCandidates(
       distScore.set(nodeId, distFromSnap);
       parentNode.set(nodeId, VIRTUAL_START);
       parentKind.set(nodeId, startSeg.kind);
+      parentLen.set(nodeId, distFromSnap);
       pushAStar(heap, { nodeId, f: edgeCost + hToGoal(node.lat, node.lon) });
     }
   };
@@ -1172,6 +1242,7 @@ function routeBetweenCandidates(
         distScore.set(VIRTUAL_GOAL, nextDist);
         parentNode.set(VIRTUAL_GOAL, cur.nodeId);
         parentKind.set(VIRTUAL_GOAL, goalSeg.kind);
+        parentLen.set(VIRTUAL_GOAL, remDist);
         pushAStar(heap, { nodeId: VIRTUAL_GOAL, f: nextCost });
       }
     }
@@ -1193,6 +1264,7 @@ function routeBetweenCandidates(
         distScore.set(edge.to, nextDist);
         parentNode.set(edge.to, cur.nodeId);
         parentKind.set(edge.to, edge.kind);
+        parentLen.set(edge.to, edge.lengthMeters);
         const targetNode = graph.nodes[edge.to];
         pushAStar(heap, { nodeId: edge.to, f: nextCost + hToGoal(targetNode.lat, targetNode.lon) });
       }
@@ -1206,28 +1278,30 @@ function routeBetweenCandidates(
   const revCoords: [number, number][] = [
     [Number(goal.lon.toFixed(6)), Number(goal.lat.toFixed(6))],
   ];
-  const kindCounts = new Map<string, number>();
+  const kindMeters = new Map<string, number>();
   let walker = parentNode.get(VIRTUAL_GOAL);
   const goalEdgeKind = parentKind.get(VIRTUAL_GOAL);
-  if (goalEdgeKind) {
-    kindCounts.set(goalEdgeKind, (kindCounts.get(goalEdgeKind) ?? 0) + 1);
+  const goalEdgeLen = parentLen.get(VIRTUAL_GOAL) ?? 0;
+  if (goalEdgeKind && goalEdgeLen > 0) {
+    kindMeters.set(goalEdgeKind, (kindMeters.get(goalEdgeKind) ?? 0) + goalEdgeLen);
   }
 
   while (walker !== undefined && walker !== VIRTUAL_START) {
     const n = graph.nodes[walker];
     revCoords.push([Number(n.lon.toFixed(6)), Number(n.lat.toFixed(6))]);
     const k = parentKind.get(walker);
-    if (k) kindCounts.set(k, (kindCounts.get(k) ?? 0) + 1);
+    const len = parentLen.get(walker) ?? 0;
+    if (k && len > 0) kindMeters.set(k, (kindMeters.get(k) ?? 0) + len);
     walker = parentNode.get(walker);
   }
   revCoords.push([Number(start.lon.toFixed(6)), Number(start.lat.toFixed(6))]);
   revCoords.reverse();
 
   let dominantRoadKind = start.kind;
-  let bestCount = -1;
-  for (const [k, cnt] of kindCounts.entries()) {
-    if (cnt > bestCount) {
-      bestCount = cnt;
+  let bestMeters = -1;
+  for (const [k, m] of kindMeters.entries()) {
+    if (m > bestMeters) {
+      bestMeters = m;
       dominantRoadKind = k;
     }
   }
@@ -1552,6 +1626,7 @@ export class RoadTrailMatcher {
           currVisit.longitude,
         );
         const speedMps = estimateLegSpeedMps(prevVisit, currVisit, straightDist);
+        const legActivity = mergeLegActivity(prevVisit.activity, currVisit.activity, speedMps);
         const maxDetour = Math.max(800, straightDist * 3.5 + 500);
         const prevCands = candidatesByStop[idx - 1];
 
@@ -1577,6 +1652,9 @@ export class RoadTrailMatcher {
         const skipSpeedMps = skipPrevVisit
           ? estimateLegSpeedMps(skipPrevVisit, currVisit, skipStraightDist)
           : null;
+        const skipLegActivity = skipPrevVisit
+          ? mergeLegActivity(skipPrevVisit.activity, currVisit.activity)
+          : null;
         const skipMaxDetour = Math.max(800, skipStraightDist * 3.5 + 500);
         const skipCands = canSkipPrev ? candidatesByStop[idx - 2] : [];
         const skipRow = canSkipPrev ? dpCost[dpCost.length - 2] : [];
@@ -1592,7 +1670,7 @@ export class RoadTrailMatcher {
 
         for (let ci = 0; ci < currCands.length; ci += 1) {
           const currCand = currCands[ci];
-          const emission = emissionCost(currCand, currVisit, speedMps);
+          const emission = emissionCost(currCand, currVisit, speedMps, legActivity);
           let bestTotal = Infinity;
           let bestPrevIdx = -1;
           let bestStepOffset = 1;
@@ -1608,6 +1686,7 @@ export class RoadTrailMatcher {
               currCand,
               speedMps,
               maxDetour,
+              legActivity,
             );
             let modeTransferPenalty = 0;
             if (!routed && (prevCand.kind === 'rail') !== (currCand.kind === 'rail')) {
@@ -1619,7 +1698,14 @@ export class RoadTrailMatcher {
                 if ((altCand.kind === 'rail') !== (currCand.kind === 'rail')) continue;
                 const transferDist = haversineMeters(prevCand.lat, prevCand.lon, altCand.lat, altCand.lon);
                 if (transferDist > 45) continue;
-                const altRouted = routeBetweenCandidates(graph, altCand, currCand, speedMps, maxDetour);
+                const altRouted = routeBetweenCandidates(
+                  graph,
+                  altCand,
+                  currCand,
+                  speedMps,
+                  maxDetour,
+                  legActivity,
+                );
                 if (altRouted) {
                   const altDetour = Math.max(0, altRouted.distanceMeters + transferDist - straightDist);
                   const altScore = altRouted.cost * 0.35 + altDetour * 0.35 + transferDist * 1.3;
@@ -1643,7 +1729,14 @@ export class RoadTrailMatcher {
                 if ((altCand.kind === 'rail') !== (prevCand.kind === 'rail')) continue;
                 const transferDist = haversineMeters(currCand.lat, currCand.lon, altCand.lat, altCand.lon);
                 if (transferDist > 45) continue;
-                const altRouted = routeBetweenCandidates(graph, prevCand, altCand, speedMps, maxDetour);
+                const altRouted = routeBetweenCandidates(
+                  graph,
+                  prevCand,
+                  altCand,
+                  speedMps,
+                  maxDetour,
+                  legActivity,
+                );
                 if (altRouted) {
                   const altDetour = Math.max(0, altRouted.distanceMeters + transferDist - straightDist);
                   const altScore = altRouted.cost * 0.35 + altDetour * 0.35 + transferDist * 1.3;
@@ -1697,7 +1790,7 @@ export class RoadTrailMatcher {
           }
 
           if (canSkipPrev) {
-            const skipEmission = emissionCost(currCand, currVisit, skipSpeedMps);
+            const skipEmission = emissionCost(currCand, currVisit, skipSpeedMps, skipLegActivity);
             for (let ppi = 0; ppi < skipCands.length; ppi += 1) {
               if (!Number.isFinite(skipRow[ppi])) continue;
               const routed = routeBetweenCandidates(
@@ -1706,6 +1799,7 @@ export class RoadTrailMatcher {
                 currCand,
                 skipSpeedMps,
                 skipMaxDetour,
+                skipLegActivity,
               );
               if (!routed) continue;
               const isSkipDwellSwitch = Boolean(skipPrevVisit?.isDwell || currVisit.isDwell);
@@ -1795,6 +1889,7 @@ export class RoadTrailMatcher {
     const emittedSpurs = new Set<string>();
     let pendingRoadCoords: [number, number][][] = [];
     let pendingRoadKind: string | undefined;
+    let pendingActivityMode: TrailActivityMode | undefined;
     let hasRoadMatches = false;
 
     const flushRoad = () => {
@@ -1805,11 +1900,13 @@ export class RoadTrailMatcher {
           kind: 'road',
           coordinates: merged,
           ...(pendingRoadKind ? { roadKind: pendingRoadKind } : {}),
+          ...(pendingActivityMode ? { activityMode: pendingActivityMode } : {}),
         });
         hasRoadMatches = true;
       }
       pendingRoadCoords = [];
       pendingRoadKind = undefined;
+      pendingActivityMode = undefined;
     };
 
     const maybeAddSpur = (visit: TrailStopVisit, snapped: SnapCandidate | null) => {
@@ -1838,10 +1935,37 @@ export class RoadTrailMatcher {
       }
       const legEntry = legRoutes[i];
       if (legEntry && legEntry.route.coordinates.length >= 2) {
-        maybeAddSpur(activeVisits[i], chosenCandidate[i]);
+        const startVisit = activeVisits[i];
+        const endVisit = activeVisits[legEntry.nextIdx];
+        const legSpeedMps = estimateLegSpeedMps(
+          startVisit,
+          endVisit,
+          legEntry.route.distanceMeters,
+        );
+        const legActivity = mergeLegActivity(
+          startVisit.activity,
+          endVisit.activity,
+          legSpeedMps,
+        );
+        const legActivityMode = resolveSegmentActivityMode({
+          activity: legActivity,
+          maxSpeedMps: legSpeedMps,
+          roadKind: legEntry.route.dominantRoadKind,
+          isMovingLeg: true,
+          isFuzzed: startVisit.isFuzzed || endVisit.isFuzzed,
+        });
+        if (
+          pendingRoadCoords.length > 0 &&
+          (pendingActivityMode !== legActivityMode ||
+            roadSplitGroup(pendingRoadKind) !== roadSplitGroup(legEntry.route.dominantRoadKind))
+        ) {
+          flushRoad();
+        }
+        maybeAddSpur(startVisit, chosenCandidate[i]);
         pendingRoadCoords.push(legEntry.route.coordinates);
         pendingRoadKind = pendingRoadKind ?? legEntry.route.dominantRoadKind;
-        maybeAddSpur(activeVisits[legEntry.nextIdx], chosenCandidate[legEntry.nextIdx]);
+        pendingActivityMode = pendingActivityMode ?? legActivityMode;
+        maybeAddSpur(endVisit, chosenCandidate[legEntry.nextIdx]);
         i = legEntry.nextIdx;
       } else {
         flushRoad();
@@ -1851,12 +1975,21 @@ export class RoadTrailMatcher {
         }
         const a = activeVisits[i];
         const b = activeVisits[nextIdx];
+        const directDistMeters = haversineMeters(a.latitude, a.longitude, b.latitude, b.longitude);
+        const directSpeedMps = estimateLegSpeedMps(a, b, directDistMeters);
+        const directActivityMode = resolveSegmentActivityMode({
+          activity: mergeLegActivity(a.activity, b.activity, directSpeedMps),
+          maxSpeedMps: directSpeedMps,
+          isMovingLeg: true,
+          isFuzzed: a.isFuzzed || b.isFuzzed,
+        });
         segments.push({
           kind: 'direct',
           coordinates: [
             [a.longitude, a.latitude],
             [b.longitude, b.latitude],
           ],
+          ...(directActivityMode ? { activityMode: directActivityMode } : {}),
         });
         i = nextIdx;
       }
@@ -1893,7 +2026,7 @@ export class RoadTrailMatcher {
         rawPings
           .map(
             (p) =>
-              `${p.userId}:${p.latitude.toFixed(6)},${p.longitude.toFixed(6)}:${p.recordedAt}:${p.isFuzzed ? 1 : 0}:${p.accuracy ?? ''}:${p.heading ?? ''}`,
+              `${p.userId}:${p.latitude.toFixed(6)},${p.longitude.toFixed(6)}:${p.recordedAt}:${p.isFuzzed ? 1 : 0}:${p.accuracy ?? ''}:${p.heading ?? ''}:${p.speed ?? ''}:${p.activity ?? ''}`,
           )
           .join('|'),
       )

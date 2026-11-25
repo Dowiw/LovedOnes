@@ -178,6 +178,7 @@ describe('@loved-ones/db PostGIS integration', () => {
           longitude: 13.41,
           accuracy: 11.5,
           heading: 184,
+          activity: 'cycling',
           recordedAt: '2026-11-19T10:30:00.000Z',
         },
         { latitude: 48.1351, longitude: 11.582, recordedAt: '2026-11-19T11:00:00.000Z' },
@@ -199,6 +200,7 @@ describe('@loved-ones/db PostGIS integration', () => {
       expect(trails[0].recordedAt).toBe('2026-11-19T10:30:00.000Z');
       expect(trails[0].accuracy).toBe(11.5);
       expect(trails[0].heading).toBe(184);
+      expect(trails[0].activity).toBe('cycling');
     } finally {
       await pool.query('DELETE FROM groups WHERE id = $1', [groupId]);
       await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[visibleId, ghostId]]);

@@ -128,12 +128,16 @@ describe('@loved-ones/mobile-app', () => {
         {
           latitude: 37.7749,
           longitude: -122.4194,
+          heading: 185,
+          activity: 'cycling',
           batteryLevel: 81,
           recordedAt: '2026-11-14T22:00:00.000Z',
         },
         {
           latitude: 37.7751,
           longitude: -122.4191,
+          heading: 190,
+          activity: 'cycling',
           batteryLevel: 80,
           recordedAt: '2026-11-14T22:01:00.000Z',
         },
@@ -142,7 +146,12 @@ describe('@loved-ones/mobile-app', () => {
     );
     expect(await getPendingLocationCount(storage)).toBe(2);
 
-    const mockFetch = vi.fn(async () => {
+    const sentBodies: Array<{ points?: Array<{ activity?: string | null; heading?: number | null }> }> =
+      [];
+    const mockFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.body) {
+        sentBodies.push(JSON.parse(String(init.body)));
+      }
       return new Response(JSON.stringify({ inserted: 2 }), { status: 200 });
     }) as unknown as typeof fetch;
 
@@ -156,6 +165,8 @@ describe('@loved-ones/mobile-app', () => {
     expect(result).toEqual({ flushed: 2, remaining: 0 });
     expect(await getPendingLocationCount(storage)).toBe(0);
     expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(sentBodies[0]?.points?.[0]?.activity).toBe('cycling');
+    expect(sentBodies[0]?.points?.[0]?.heading).toBe(185);
   });
 
   it('builds remote and local cached PMTiles URLs and MapLibre style', () => {

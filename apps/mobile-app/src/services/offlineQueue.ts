@@ -51,28 +51,38 @@ export async function getSqliteQueueStorage(): Promise<OfflineQueueStorage> {
           altitude REAL,
           accuracy REAL,
           speed REAL,
+          heading REAL,
+          activity TEXT,
           battery_level INTEGER,
           recorded_at TEXT NOT NULL
         );
       `);
-      // Migrate existing device queues created before accuracy tracking was added
-      try {
-        await db.execAsync('ALTER TABLE queued_locations ADD COLUMN accuracy REAL;');
-      } catch {
-        // Column already exists
+      // Migrate existing device queues created before accuracy, heading, or activity tracking were added
+      for (const ddl of [
+        'ALTER TABLE queued_locations ADD COLUMN accuracy REAL;',
+        'ALTER TABLE queued_locations ADD COLUMN heading REAL;',
+        'ALTER TABLE queued_locations ADD COLUMN activity TEXT;',
+      ]) {
+        try {
+          await db.execAsync(ddl);
+        } catch {
+          // Column already exists
+        }
       }
 
       return {
         async enqueue(points: LocationPoint[]) {
           for (const pt of points) {
             await db.runAsync(
-              `INSERT INTO queued_locations (latitude, longitude, altitude, accuracy, speed, battery_level, recorded_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO queued_locations (latitude, longitude, altitude, accuracy, speed, heading, activity, battery_level, recorded_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               pt.latitude,
               pt.longitude,
               pt.altitude ?? null,
               pt.accuracy ?? null,
               pt.speed ?? null,
+              pt.heading ?? null,
+              pt.activity ?? null,
               pt.batteryLevel ?? null,
               pt.recordedAt,
             );
@@ -86,6 +96,8 @@ export async function getSqliteQueueStorage(): Promise<OfflineQueueStorage> {
             altitude: number | null;
             accuracy: number | null;
             speed: number | null;
+            heading: number | null;
+            activity: LocationPoint['activity'];
             battery_level: number | null;
             recorded_at: string;
           }>('SELECT * FROM queued_locations ORDER BY id ASC LIMIT ?', limit);
@@ -97,6 +109,8 @@ export async function getSqliteQueueStorage(): Promise<OfflineQueueStorage> {
             altitude: r.altitude,
             accuracy: r.accuracy,
             speed: r.speed,
+            heading: r.heading ?? null,
+            activity: r.activity ?? null,
             batteryLevel: r.battery_level,
             recordedAt: r.recorded_at,
           }));
@@ -230,6 +244,8 @@ export async function flushOfflineLocations(
     altitude: row.altitude ?? null,
     accuracy: row.accuracy ?? null,
     speed: row.speed ?? null,
+    heading: row.heading ?? null,
+    activity: row.activity ?? null,
     batteryLevel: row.batteryLevel ?? null,
     recordedAt: row.recordedAt,
   }));

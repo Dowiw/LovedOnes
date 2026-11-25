@@ -1199,4 +1199,69 @@ describe('RealtimeModule domain interface', () => {
     expect(teleportSingleInserted).toBe(0);
     expect(harness.locationBroadcasts).toHaveLength(countBefore);
   });
+
+  it('propagates OwnTracks and Overland motion activity, freezes stationary drift, and scrubs activity when FUZZED', async () => {
+    const drifted = filterAnomalousLocationPoints([
+      {
+        latitude: 52.52,
+        longitude: 13.405,
+        accuracy: 15,
+        activity: 'stationary',
+        recordedAt: '2026-11-24T12:00:00.000Z',
+      },
+      {
+        latitude: 52.52045, // ~50m indoor Wi-Fi drift while both pings report stationary
+        longitude: 13.405,
+        accuracy: 65,
+        activity: 'stationary',
+        recordedAt: '2026-11-24T12:00:45.000Z',
+      },
+      {
+        latitude: 52.521,
+        longitude: 13.407,
+        accuracy: 12,
+        activity: 'walking',
+        recordedAt: '2026-11-24T12:02:00.000Z',
+      },
+    ]);
+    expect(drifted).toHaveLength(2);
+    expect(drifted.map((p) => p.activity)).toEqual(['stationary', 'walking']);
+
+    const harness = createInMemoryRealtimeHarness();
+    await harness.mod.ingestOwnTracks(alice, {
+      _type: 'location',
+      lat: 52.52,
+      lon: 13.405,
+      tst: 1_795_520_000,
+      vel: 18,
+      cog: 145,
+      motionactivities: ['cycling'],
+    });
+    const exactOt = harness.locationBroadcasts.find((b) => b.groupId === GROUP_EXACT);
+    const fuzzedOt = harness.locationBroadcasts.find((b) => b.groupId === GROUP_FUZZED);
+    expect(exactOt?.activity).toBe('cycling');
+    expect(exactOt?.heading).toBe(145);
+    expect(fuzzedOt?.activity).toBeNull();
+    expect(fuzzedOt?.heading).toBeNull();
+
+    await harness.mod.ingestOverland(alice, {
+      locations: [
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [13.42, 52.53] },
+          properties: {
+            timestamp: '2026-11-24T14:00:00.000Z',
+            speed: 14,
+            course: 360,
+            motion: ['driving'],
+          },
+        },
+      ],
+    });
+    const latestExact = harness.locationBroadcasts
+      .filter((b) => b.groupId === GROUP_EXACT)
+      .at(-1);
+    expect(latestExact?.activity).toBe('automotive');
+    expect(latestExact?.heading).toBe(0);
+  });
 });

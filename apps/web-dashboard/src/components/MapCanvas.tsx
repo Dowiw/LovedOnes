@@ -17,12 +17,14 @@ import {
   isSafeHexColor,
   resolveMemberPresenceStatus,
   resolveTrailPointDetails,
+  TRAIL_ACTIVITY_META,
   WORLD_LAND_GEOJSON,
   type GroupPlace,
   type LocationBroadcast,
   type MapRegion,
   type MatchedUserTrail,
   type SavedMapViewport,
+  type TrailActivityMode,
   type TrailDisplayMode,
 } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
@@ -786,6 +788,7 @@ interface MapCanvasProps {
   trails?: LocationBroadcast[];
   matchedTrails?: MatchedUserTrail[];
   trailMode?: TrailDisplayMode;
+  colorTrailsByActivity?: boolean;
   regions?: MapRegion[];
   regionsRevision?: number;
   showTrails?: boolean;
@@ -825,6 +828,7 @@ export function MapCanvas({
   trails = [],
   matchedTrails = [],
   trailMode = 'roads',
+  colorTrailsByActivity = true,
   regions,
   regionsRevision = 0,
   showTrails = false,
@@ -1745,6 +1749,29 @@ export function MapCanvas({
     const map = mapRef.current;
     if (!map) return;
 
+    const getTrailStrokeColor = (
+      fallbackColor: string,
+    ): string | maplibregl.ExpressionSpecification =>
+      colorTrailsByActivity
+        ? ([
+            'match',
+            ['get', 'activityMode'],
+            'walking',
+            TRAIL_ACTIVITY_META.walking.color,
+            'running',
+            TRAIL_ACTIVITY_META.running.color,
+            'cycling',
+            TRAIL_ACTIVITY_META.cycling.color,
+            'transit',
+            TRAIL_ACTIVITY_META.transit.color,
+            'driving',
+            TRAIL_ACTIVITY_META.driving.color,
+            'stationary',
+            TRAIL_ACTIVITY_META.stationary.color,
+            fallbackColor,
+          ] as maplibregl.ExpressionSpecification)
+        : fallbackColor;
+
     const applyTrailsLayer = () => {
       const { features } = showTrails
         ? buildTrailGeoJsonFeatures({
@@ -1755,10 +1782,19 @@ export function MapCanvas({
           })
         : { features: [] };
 
+      const monoPrimary = mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b';
+      const roadLineColor = getTrailStrokeColor(monoPrimary);
+      const directLineColor = getTrailStrokeColor(monoPrimary);
       const geojson = { type: 'FeatureCollection' as const, features };
       const existingSource = map.getSource(TRAIL_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
       if (existingSource) {
         existingSource.setData(geojson);
+        if (map.getLayer(TRAIL_LINE_LAYER_ID)) {
+          map.setPaintProperty(TRAIL_LINE_LAYER_ID, 'line-color', roadLineColor);
+        }
+        if (map.getLayer(TRAIL_DIRECT_LINE_LAYER_ID)) {
+          map.setPaintProperty(TRAIL_DIRECT_LINE_LAYER_ID, 'line-color', directLineColor);
+        }
         return;
       }
       map.addSource(TRAIL_SOURCE_ID, { type: 'geojson', data: geojson });
@@ -1772,7 +1808,7 @@ export function MapCanvas({
           'line-join': 'round',
         },
         paint: {
-          'line-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
+          'line-color': roadLineColor,
           'line-width': 3.5,
           'line-opacity': 0.9,
         },
@@ -1787,7 +1823,7 @@ export function MapCanvas({
           'line-join': 'round',
         },
         paint: {
-          'line-color': mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b',
+          'line-color': directLineColor,
           'line-width': 2.5,
           'line-dasharray': [2, 1.5],
           'line-opacity': 0.75,
@@ -1910,6 +1946,10 @@ export function MapCanvas({
             typeof props.isFuzzed === 'boolean'
               ? props.isFuzzed
               : props.isFuzzed === 'true',
+          activityMode:
+            typeof props.activityMode === 'string' && props.activityMode in TRAIL_ACTIVITY_META
+              ? (props.activityMode as TrailActivityMode)
+              : undefined,
           matchedPlaceName:
             typeof props.matchedPlaceName === 'string'
               ? props.matchedPlaceName
@@ -1939,6 +1979,10 @@ export function MapCanvas({
         const placeLine = details.matchedPlaceName
           ? `<div class="text-[11px] font-medium text-zinc-800 dark:text-zinc-200">At ${escapeHtml(details.matchedPlaceName)}${details.matchedPlaceIsPrivate ? ' (Private)' : ''}</div>`
           : '';
+        const activityMeta = details.activityMode ? TRAIL_ACTIVITY_META[details.activityMode] : null;
+        const activityBadge = activityMeta
+          ? `<span class="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><span style="display:inline-block;width:6px;height:6px;border-radius:9999px;background:${activityMeta.color}"></span>${escapeHtml(activityMeta.label)}</span>`
+          : '';
         const stayLine =
           details.stayDurationMs > 0
             ? `Stayed ${escapeHtml(details.durationLabel)}`
@@ -1948,7 +1992,10 @@ export function MapCanvas({
           <div class="text-xs space-y-1 min-w-[175px]">
             <div class="flex items-center justify-between gap-2">
               <span class="font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(details.username)}</span>
-              <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">${details.isDwell ? 'Stop' : 'Waypoint'}</span>
+              <div class="flex items-center gap-1">
+                ${activityBadge}
+                <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">${details.isDwell ? 'Stop' : 'Waypoint'}</span>
+              </div>
             </div>
             ${placeLine}
             <div class="text-[11px] text-zinc-600 dark:text-zinc-300">${escapeHtml(timeRange)}</div>
@@ -1970,7 +2017,7 @@ export function MapCanvas({
     } else {
       map.once('load', applyTrailsLayer);
     }
-  }, [trails, matchedTrails, trailMode, showTrails]);
+  }, [trails, matchedTrails, trailMode, showTrails, colorTrailsByActivity, mapTheme]);
 
   useEffect(() => {
     const map = mapRef.current;

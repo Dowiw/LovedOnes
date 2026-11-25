@@ -42,6 +42,7 @@ import {
   isSafeHexColor,
   parseInviteInput,
   resolveTrailPointDetails,
+  TRAIL_ACTIVITY_META,
   withMinDelay,
   WORLD_LAND_GEOJSON,
   type AppVersionInfo,
@@ -53,6 +54,7 @@ import {
   type MapDownloadJob,
   type MapRegion,
   type MatchedUserTrail,
+  type TrailActivityMode,
   type MemberPresenceUpdate,
   type PlaceTransitionEvent,
   type PrivacyMode,
@@ -221,6 +223,7 @@ export function MobileMapScreen({
   const [memberTrailPoints, setMemberTrailPoints] = useState<LocationBroadcast[]>([]);
   const [memberMatchedTrails, setMemberMatchedTrails] = useState<MatchedUserTrail[]>([]);
   const [trailDisplayMode, setTrailDisplayMode] = useState<TrailDisplayMode>('roads');
+  const [colorTrailsByActivity, setColorTrailsByActivity] = useState(true);
   const [trailBusy, setTrailBusy] = useState(false);
   const [trailMessage, setTrailMessage] = useState<string | null>(null);
   const [selectedTrailPoint, setSelectedTrailPoint] = useState<
@@ -2438,6 +2441,10 @@ export function MobileMapScreen({
                 typeof props.isFuzzed === 'boolean'
                   ? props.isFuzzed
                   : props.isFuzzed === 'true',
+              activityMode:
+                typeof props.activityMode === 'string' && props.activityMode in TRAIL_ACTIVITY_META
+                  ? (props.activityMode as TrailActivityMode)
+                  : undefined,
               matchedPlaceName:
                 typeof props.matchedPlaceName === 'string'
                   ? props.matchedPlaceName
@@ -2462,7 +2469,27 @@ export function MobileMapScreen({
               'line-join': 'round',
             }}
             paint={{
-              'line-color': resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+              'line-color': colorTrailsByActivity
+                ? ([
+                    'match',
+                    ['get', 'activityMode'],
+                    'walking',
+                    TRAIL_ACTIVITY_META.walking.color,
+                    'running',
+                    TRAIL_ACTIVITY_META.running.color,
+                    'cycling',
+                    TRAIL_ACTIVITY_META.cycling.color,
+                    'transit',
+                    TRAIL_ACTIVITY_META.transit.color,
+                    'driving',
+                    TRAIL_ACTIVITY_META.driving.color,
+                    'stationary',
+                    TRAIL_ACTIVITY_META.stationary.color,
+                    resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+                  ] as unknown as string)
+                : resolvedMapTheme === 'dark'
+                  ? '#f4f4f5'
+                  : '#18181b',
               'line-width': 3.5,
               'line-opacity': 0.9,
             }}
@@ -2476,7 +2503,27 @@ export function MobileMapScreen({
               'line-join': 'round',
             }}
             paint={{
-              'line-color': resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+              'line-color': colorTrailsByActivity
+                ? ([
+                    'match',
+                    ['get', 'activityMode'],
+                    'walking',
+                    TRAIL_ACTIVITY_META.walking.color,
+                    'running',
+                    TRAIL_ACTIVITY_META.running.color,
+                    'cycling',
+                    TRAIL_ACTIVITY_META.cycling.color,
+                    'transit',
+                    TRAIL_ACTIVITY_META.transit.color,
+                    'driving',
+                    TRAIL_ACTIVITY_META.driving.color,
+                    'stationary',
+                    TRAIL_ACTIVITY_META.stationary.color,
+                    resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+                  ] as unknown as string)
+                : resolvedMapTheme === 'dark'
+                  ? '#f4f4f5'
+                  : '#18181b',
               'line-width': 2.5,
               'line-opacity': 0.78,
               'line-dasharray': [2, 1.5],
@@ -2818,6 +2865,10 @@ export function MobileMapScreen({
                 ? `Stayed ${selectedTrailPoint.durationLabel}`
                 : selectedTrailPoint.durationLabel;
 
+            const activityLabel = selectedTrailPoint.activityMode
+              ? TRAIL_ACTIVITY_META[selectedTrailPoint.activityMode].label
+              : null;
+
             return (
               <View style={styles.trailPointCard}>
                 <View style={styles.chatToastTextWrap}>
@@ -2827,6 +2878,7 @@ export function MobileMapScreen({
                       : `${selectedTrailPoint.username} · ${selectedTrailPoint.isDwell ? 'Stop' : 'Waypoint'}`}
                   </Text>
                   <Text style={styles.trailPointMeta} numberOfLines={1}>
+                    {activityLabel ? `${activityLabel} · ` : ''}
                     {timeLabel} · {stayText}
                     {selectedTrailPoint.pingCount > 1 ? ` · ${selectedTrailPoint.pingCount} pings` : ''}
                   </Text>
@@ -3268,29 +3320,71 @@ export function MobileMapScreen({
                   {activeTrailUserId === selectedMember.userId &&
                     memberTrailPoints.length > 0 &&
                     !selectedMember.isFuzzed && (
-                      <View style={styles.trailModePillRow}>
-                        {(['roads', 'raw'] as const).map((mode) => (
+                      <View style={{ gap: 6 }}>
+                        <View style={styles.trailModePillRow}>
+                          {(['roads', 'raw'] as const).map((mode) => (
+                            <TouchableOpacity
+                              key={mode}
+                              style={[
+                                styles.trailModePill,
+                                trailDisplayMode === mode && styles.trailModePillActive,
+                              ]}
+                              onPress={() => {
+                                setTrailDisplayMode(mode);
+                                setSelectedTrailPoint(null);
+                              }}
+                            >
+                              <Text
+                                style={[
+                                  styles.trailModePillText,
+                                  trailDisplayMode === mode && styles.trailModePillTextActive,
+                                ]}
+                              >
+                                {mode === 'roads' ? 'Clean' : 'Raw'}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
                           <TouchableOpacity
-                            key={mode}
                             style={[
                               styles.trailModePill,
-                              trailDisplayMode === mode && styles.trailModePillActive,
+                              colorTrailsByActivity && styles.trailModePillActive,
                             ]}
-                            onPress={() => {
-                              setTrailDisplayMode(mode);
-                              setSelectedTrailPoint(null);
-                            }}
+                            onPress={() => setColorTrailsByActivity((prev) => !prev)}
                           >
                             <Text
                               style={[
                                 styles.trailModePillText,
-                                trailDisplayMode === mode && styles.trailModePillTextActive,
+                                colorTrailsByActivity && styles.trailModePillTextActive,
                               ]}
                             >
-                              {mode === 'roads' ? 'Clean' : 'Raw'}
+                              Activity
                             </Text>
                           </TouchableOpacity>
-                        ))}
+                        </View>
+                        {colorTrailsByActivity && (
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                            {(
+                              ['walking', 'running', 'cycling', 'transit', 'driving', 'stationary'] as const
+                            ).map((modeKey) => (
+                              <View
+                                key={modeKey}
+                                style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                              >
+                                <View
+                                  style={{
+                                    width: 7,
+                                    height: 7,
+                                    borderRadius: 4,
+                                    backgroundColor: TRAIL_ACTIVITY_META[modeKey].color,
+                                  }}
+                                />
+                                <Text style={styles.settingsHint}>
+                                  {TRAIL_ACTIVITY_META[modeKey].shortLabel}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
                       </View>
                     )}
 
