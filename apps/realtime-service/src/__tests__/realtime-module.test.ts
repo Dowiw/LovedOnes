@@ -813,6 +813,16 @@ describe('RealtimeModule domain interface', () => {
     await expect(mod.getGroupTrails(outsider, GROUP_EXACT, {})).rejects.toMatchObject({
       statusCode: 403,
     });
+
+    // 3. getGroupTrailsWithMatches returns meta and supports zoom/simplifyMeters reduction
+    const withMatches = await mod.getGroupTrailsWithMatches(alice, GROUP_EXACT, {
+      from: '2026-11-19T09:00:00.000Z',
+      to: '2026-11-19T13:00:00.000Z',
+      zoom: 10,
+    });
+    expect(withMatches.meta.truncated).toBe(false);
+    expect(withMatches.meta.totalCount).toBeGreaterThanOrEqual(2);
+    expect(withMatches.meta.returnedCount).toBe(withMatches.trails.length);
   });
 
   it('supports expiring check-in overrides and privacy-restricted geofenced place alerts', async () => {

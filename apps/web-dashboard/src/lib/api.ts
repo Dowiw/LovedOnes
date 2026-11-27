@@ -887,17 +887,44 @@ export async function apiDeletePlace(
 export async function apiFetchGroupTrails(
   accessToken: string,
   groupId: string,
-  options: { from?: string; to?: string; limit?: number } = {},
-): Promise<{ trails: LocationBroadcast[]; matchedTrails: MatchedUserTrail[] }> {
+  options: {
+    from?: string;
+    to?: string;
+    userId?: string;
+    bbox?: string;
+    limit?: number;
+    zoom?: number;
+  } = {},
+): Promise<{
+  trails: LocationBroadcast[];
+  matchedTrails: MatchedUserTrail[];
+  meta?: {
+    truncated: boolean;
+    totalCount: number;
+    returnedCount: number;
+    simplifiedCount?: number;
+  };
+}> {
   const { realtimeBase } = getServiceBaseUrls();
   const params = new URLSearchParams();
   if (options.from) params.set('from', options.from);
   if (options.to) params.set('to', options.to);
+  if (options.userId) params.set('userId', options.userId);
+  if (options.bbox) params.set('bbox', options.bbox);
   if (options.limit) params.set('limit', String(options.limit));
+  if (typeof options.zoom === 'number' && Number.isFinite(options.zoom)) {
+    params.set('zoom', String(options.zoom));
+  }
   const qs = params.toString();
   const res = await requestAuthedJson<{
     trails: LocationBroadcast[];
     matchedTrails?: MatchedUserTrail[];
+    meta?: {
+      truncated: boolean;
+      totalCount: number;
+      returnedCount: number;
+      simplifiedCount?: number;
+    };
   }>(
     `${realtimeBase}/api/realtime/groups/${groupId}/trails${qs ? `?${qs}` : ''}`,
     accessToken,
@@ -905,6 +932,7 @@ export async function apiFetchGroupTrails(
   return {
     trails: res.trails ?? [],
     matchedTrails: res.matchedTrails ?? [],
+    meta: res.meta,
   };
 }
 

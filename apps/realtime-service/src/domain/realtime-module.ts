@@ -3,6 +3,7 @@ import {
   GroupMemberLocationRow,
   GroupMembershipPrivacyInfo,
   GroupTrailQueryOptions,
+  GroupTrailSampledResult,
   RespondLocationRequestDbResult,
 } from '@loved-ones/db';
 import {
@@ -31,10 +32,13 @@ import {
   PrivacyMode,
   RespondLocationRequestSchema,
   SendMessageSchema,
+  simplifyTrailPings,
   STATIONARY_COALESCE_RADIUS_METERS,
   TrackingState,
   TrailQuerySchema,
+  TrailsResponseMeta,
   UserPresenceRecord,
+  zoomToSimplifyToleranceMeters,
 } from '@loved-ones/shared';
 import { RoadTrailMatcher } from './road-trail-matcher.js';
 export { haversineMeters };
@@ -62,6 +66,7 @@ export interface RealtimeStore {
   getLatestUserLocation(userId: string): Promise<LocationPoint | null>;
   getLatestGroupLocations(groupId: string, now?: Date): Promise<GroupMemberLocationRow[]>;
   getGroupTrails(options: GroupTrailQueryOptions): Promise<GroupMemberLocationRow[]>;
+  getGroupTrailsSampled?(options: GroupTrailQueryOptions): Promise<GroupTrailSampledResult>;
   getGroupMessages(groupId: string, limit?: number): Promise<ChatMessage[]>;
   insertChatMessage(
     groupId: string,
@@ -782,11 +787,18 @@ export class RealtimeModule {
     return snapshot.locations;
   }
 
-  async getGroupTrails(
+  private async fetchPrivacySafeTrails(
     user: JwtUserPayload,
     groupId: string,
     rawQuery: unknown = {},
-  ): Promise<LocationBroadcast[]> {
+  ): Promise<{
+    trails: LocationBroadcast[];
+    meta: TrailsResponseMeta;
+    fromDate: Date;
+    toDate: Date;
+    zoom?: number;
+    simplifyMeters?: number;
+  }> {
     const parsed = TrailQuerySchema.safeParse(rawQuery ?? {});
     if (!parsed.success) {
       throw new DomainError(400, 'Invalid trail query', parsed.error.flatten());
@@ -800,11 +812,18 @@ export class RealtimeModule {
       ? new Date(parsed.data.from)
       : new Date(toDate.getTime() - 24 * 60 * 60 * 1000);
     if (fromDate > toDate) {
-      return [];
+      return {
+        trails: [],
+        meta: { truncated: false, totalCount: 0, returnedCount: 0 },
+        fromDate,
+        toDate,
+        zoom: parsed.data.zoom,
+        simplifyMeters: parsed.data.simplifyMeters,
+      };
     }
 
     const requestedBbox = parsed.data.bbox ? (parseBoundingBox(parsed.data.bbox) ?? undefined) : undefined;
-    const rows = await this.store.getGroupTrails({
+    const queryOptions: GroupTrailQueryOptions = {
       groupId,
       from: fromDate,
       to: toDate,
@@ -813,7 +832,21 @@ export class RealtimeModule {
       userId: parsed.data.userId,
       limit: Math.min(parsed.data.limit * 2, 10000),
       now: new Date(this.now()),
-    });
+    };
+
+    let rows: GroupMemberLocationRow[];
+    let totalCount: number;
+    let dbTruncated: boolean;
+    if (this.store.getGroupTrailsSampled) {
+      const res = await this.store.getGroupTrailsSampled(queryOptions);
+      rows = res.rows;
+      totalCount = res.totalCount;
+      dbTruncated = res.truncated;
+    } else {
+      rows = await this.store.getGroupTrails(queryOptions);
+      totalCount = rows.length;
+      dbTruncated = false;
+    }
 
     const filtered: LocationBroadcast[] = [];
     for (const row of rows) {
@@ -825,23 +858,65 @@ export class RealtimeModule {
       filtered.push(safe);
       if (filtered.length >= parsed.data.limit) break;
     }
-    return filtered;
+
+    const truncated = dbTruncated || filtered.length >= parsed.data.limit && rows.length > parsed.data.limit;
+    return {
+      trails: filtered,
+      meta: {
+        truncated,
+        totalCount: Math.max(totalCount, filtered.length),
+        returnedCount: filtered.length,
+      },
+      fromDate,
+      toDate,
+      zoom: parsed.data.zoom,
+      simplifyMeters: parsed.data.simplifyMeters,
+    };
+  }
+
+  async getGroupTrails(
+    user: JwtUserPayload,
+    groupId: string,
+    rawQuery: unknown = {},
+  ): Promise<LocationBroadcast[]> {
+    const res = await this.fetchPrivacySafeTrails(user, groupId, rawQuery);
+    return res.trails;
   }
 
   async getGroupTrailsWithMatches(
     user: JwtUserPayload,
     groupId: string,
     rawQuery: unknown = {},
-  ): Promise<{ trails: LocationBroadcast[]; matchedTrails: MatchedUserTrail[] }> {
-    const trails = await this.getGroupTrails(user, groupId, rawQuery);
-    if (!this.roadMatcher || trails.length === 0) {
-      return { trails, matchedTrails: [] };
+  ): Promise<{
+    trails: LocationBroadcast[];
+    matchedTrails: MatchedUserTrail[];
+    meta: TrailsResponseMeta;
+  }> {
+    const { trails, meta, fromDate, toDate, zoom, simplifyMeters } =
+      await this.fetchPrivacySafeTrails(user, groupId, rawQuery);
+
+    const spanMs = Math.max(0, toDate.getTime() - fromDate.getTime());
+    const toleranceMeters =
+      simplifyMeters ??
+      (zoom !== undefined || trails.length > 400
+        ? zoomToSimplifyToleranceMeters(zoom ?? null, spanMs)
+        : 0);
+    const effectiveTrails =
+      toleranceMeters > 0 ? simplifyTrailPings(trails, toleranceMeters) : trails;
+    const responseMeta: TrailsResponseMeta = {
+      ...meta,
+      returnedCount: effectiveTrails.length,
+      ...(effectiveTrails.length < trails.length ? { simplifiedCount: effectiveTrails.length } : {}),
+    };
+
+    if (!this.roadMatcher || effectiveTrails.length === 0) {
+      return { trails: effectiveTrails, matchedTrails: [], meta: responseMeta };
     }
     try {
-      const matchedTrails = await this.roadMatcher.matchTrails(trails);
-      return { trails, matchedTrails };
+      const matchedTrails = await this.roadMatcher.matchTrails(effectiveTrails);
+      return { trails: effectiveTrails, matchedTrails, meta: responseMeta };
     } catch {
-      return { trails, matchedTrails: [] };
+      return { trails: effectiveTrails, matchedTrails: [], meta: responseMeta };
     }
   }
 

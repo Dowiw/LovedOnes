@@ -11,6 +11,7 @@ import {
   getDatabaseTelemetry,
   getGroupMembershipPrivacyInfo,
   getGroupTrails,
+  getGroupTrailsSampled,
   getLatestGroupLocations,
   insertLocationBatch,
   listLocationRequestsForUser,
@@ -201,6 +202,28 @@ describe('@loved-ones/db PostGIS integration', () => {
       expect(trails[0].accuracy).toBe(11.5);
       expect(trails[0].heading).toBe(184);
       expect(trails[0].activity).toBe('cycling');
+
+      // Uniform chronological sampling across a wider window when rows exceed limit
+      await insertLocationBatch(
+        pool,
+        visibleId,
+        Array.from({ length: 12 }, (_, idx) => ({
+          latitude: 52.52 + idx * 0.001,
+          longitude: 13.4 + idx * 0.001,
+          recordedAt: new Date(Date.UTC(2026, 10, 19, 12, idx * 5, 0)).toISOString(),
+        })),
+      );
+      const sampled = await getGroupTrailsSampled(pool, {
+        groupId,
+        from: new Date('2026-11-19T12:00:00.000Z'),
+        to: new Date('2026-11-19T13:00:00.000Z'),
+        limit: 5,
+      });
+      expect(sampled.totalCount).toBe(12);
+      expect(sampled.truncated).toBe(true);
+      expect(sampled.rows.length).toBeLessThanOrEqual(5);
+      expect(sampled.rows[0].recordedAt).toBe('2026-11-19T12:00:00.000Z');
+      expect(sampled.rows[sampled.rows.length - 1].recordedAt).toBe('2026-11-19T12:55:00.000Z');
     } finally {
       await pool.query('DELETE FROM groups WHERE id = $1', [groupId]);
       await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[visibleId, ghostId]]);
