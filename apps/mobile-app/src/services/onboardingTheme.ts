@@ -1,3 +1,8 @@
+import {
+  resolveInterfaceThemeTokens,
+  type UserCustomization,
+} from '@loved-ones/shared';
+
 export type OnboardingColorScheme = 'light' | 'dark';
 
 export const ONBOARDING_COLOR_PRESETS = [
@@ -149,12 +154,32 @@ export function getGeometricFonts(platformOs: string): GeometricFontFamily {
 }
 
 /**
- * Returns monochrome palette tokens matching the OS Light/Dark color scheme.
+ * Returns monochrome or customized per-user palette tokens matching Light/Dark color scheme.
  */
 export function getOnboardingPalette(
   scheme: 'light' | 'dark' | null | undefined,
+  customization?: UserCustomization | null,
 ): OnboardingPalette {
-  return scheme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE;
+  const resolvedScheme: OnboardingColorScheme = scheme === 'dark' ? 'dark' : 'light';
+  const base = resolvedScheme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE;
+  if (!customization) return base;
+
+  const tokens = resolveInterfaceThemeTokens(customization, resolvedScheme);
+  if (tokens.isDefaultMonochrome) {
+    return base;
+  }
+
+  return {
+    ...base,
+    canvas: tokens.canvasBg,
+    surface: tokens.surfaceBg,
+    surfaceMuted: tokens.surfaceMutedBg,
+    border: tokens.borderColor,
+    borderFocus: tokens.accentBg,
+    ctaBg: tokens.accentBg,
+    ctaText: tokens.accentFg,
+    electricGlow: tokens.glowColor,
+  };
 }
 
 /**

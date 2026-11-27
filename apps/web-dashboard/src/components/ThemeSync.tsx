@@ -8,6 +8,11 @@ import {
   resolveMapTheme,
   THEME_CHANGE_EVENT,
 } from '@/lib/mapTheme';
+import {
+  isCustomizationStorageKey,
+  syncActiveDocumentCustomization,
+  USER_CUSTOMIZATION_EVENT,
+} from '@/lib/customization';
 
 export function ThemeSync() {
   useEffect(() => {
@@ -15,23 +20,33 @@ export function ThemeSync() {
     const sync = () => {
       const pref = readStoredThemePreference();
       applyDocumentTheme(resolveMapTheme(pref, media.matches));
+      syncActiveDocumentCustomization(media.matches);
     };
 
     sync();
 
     const onMediaChange = () => sync();
     const onStorage = (event: StorageEvent) => {
-      if (!event.key || event.key === MAP_THEME_STORAGE_KEY) sync();
+      if (
+        !event.key ||
+        event.key === MAP_THEME_STORAGE_KEY ||
+        event.key === 'lovedones_session_v1' ||
+        isCustomizationStorageKey(event.key)
+      ) {
+        sync();
+      }
     };
     const onThemeEvent = () => sync();
 
     media.addEventListener('change', onMediaChange);
     window.addEventListener('storage', onStorage);
     window.addEventListener(THEME_CHANGE_EVENT, onThemeEvent);
+    window.addEventListener(USER_CUSTOMIZATION_EVENT, onThemeEvent);
     return () => {
       media.removeEventListener('change', onMediaChange);
       window.removeEventListener('storage', onStorage);
       window.removeEventListener(THEME_CHANGE_EVENT, onThemeEvent);
+      window.removeEventListener(USER_CUSTOMIZATION_EVENT, onThemeEvent);
     };
   }, []);
 

@@ -11,6 +11,7 @@ import {
   Filter,
   ListFilter,
   Maximize2,
+  Palette,
   Pause,
   Play,
   Repeat,
@@ -30,6 +31,7 @@ import {
   TIMELAPSE_SPEED_OPTIONS,
   TRAIL_ACTIVITY_META,
   virtualToRealMs,
+  type ActivityColorsMap,
   type GroupPlace,
   type LocationBroadcast,
   type MatchedUserTrail,
@@ -78,6 +80,8 @@ interface TrailsTimelapseOverlayProps {
   hideBottomBarOnMedium?: boolean;
   closePopoversNonce?: number;
   onRequestCloseOtherPanels?: () => void;
+  activityColors?: ActivityColorsMap;
+  onOpenCustomizeMapColors?: () => void;
 }
 
 function formatShortDistance(meters: number, approx: boolean): string {
@@ -212,6 +216,8 @@ export function TrailsTimelapseOverlay({
   hideBottomBarOnMedium = false,
   closePopoversNonce = 0,
   onRequestCloseOtherPanels,
+  activityColors,
+  onOpenCustomizeMapColors,
 }: TrailsTimelapseOverlayProps) {
   const [controlsExpanded, setControlsExpanded] = useState(false);
   const [tripsOpen, setTripsOpen] = useState(false);
@@ -659,7 +665,10 @@ export function TrailsTimelapseOverlay({
                           <span className="inline-flex items-center gap-1 rounded-full bg-black/10 px-1.5 py-0.5 text-[10px] font-medium dark:bg-white/10">
                             <span
                               className="h-1.5 w-1.5 rounded-full"
-                              style={{ backgroundColor: actMeta.color }}
+                              style={{
+                                backgroundColor:
+                                  activityColors?.[actMeta.mode] ?? actMeta.color,
+                              }}
                             />
                             {actMeta.shortLabel}
                           </span>
@@ -770,11 +779,25 @@ export function TrailsTimelapseOverlay({
                     <span key={modeKey} className="inline-flex items-center gap-1">
                       <span
                         className="inline-block h-2 w-2 rounded-full"
-                        style={{ backgroundColor: TRAIL_ACTIVITY_META[modeKey].color }}
+                        style={{
+                          backgroundColor:
+                            activityColors?.[modeKey] ?? TRAIL_ACTIVITY_META[modeKey].color,
+                        }}
                       />
                       {TRAIL_ACTIVITY_META[modeKey].shortLabel}
                     </span>
                   ),
+                )}
+                {onOpenCustomizeMapColors && (
+                  <button
+                    type="button"
+                    onClick={onOpenCustomizeMapColors}
+                    title="Customize activity & map colors"
+                    className="ml-1 inline-flex items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-semibold text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                  >
+                    <Palette className="h-2.5 w-2.5" />
+                    Colors
+                  </button>
                 )}
               </div>
             )}

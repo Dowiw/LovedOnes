@@ -19,6 +19,7 @@ import {
   resolveTrailPointDetails,
   TRAIL_ACTIVITY_META,
   WORLD_LAND_GEOJSON,
+  type ActivityColorsMap,
   type GroupPlace,
   type LocationBroadcast,
   type MapRegion,
@@ -821,6 +822,9 @@ interface MapCanvasProps {
   mapTheme?: ResolvedMapTheme;
   projection?: MapProjectionMode;
   showTerminator?: boolean;
+  activityColors?: ActivityColorsMap;
+  fallbackTrailColor?: string | null;
+  placeColors?: { group: string; private: string };
   onMapSelectCoords?: (latitude: number, longitude: number) => void;
   onProjectionFallback?: (resolved: MapProjectionMode) => void;
   onBearingChange?: (bearingDeg: number) => void;
@@ -868,6 +872,9 @@ export function MapCanvas({
   mapTheme = 'light',
   projection = 'globe',
   showTerminator = true,
+  activityColors,
+  fallbackTrailColor = null,
+  placeColors,
   onMapSelectCoords,
   onProjectionFallback,
   onBearingChange,
@@ -1624,9 +1631,13 @@ export function MapCanvas({
     if (!map) return;
 
     const activePlaceIds = new Set<string>();
+    const groupColor = placeColors?.group ?? '#0d9488';
+    const privateColor = placeColors?.private ?? '#4f46e5';
+
     for (const place of places) {
       activePlaceIds.add(place.id);
       const existing = placeMarkersRef.current.get(place.id);
+      const targetColor = place.isPrivate ? privateColor : groupColor;
       const safeName = escapeHtml(place.name);
       const visibilityTag = place.isPrivate ? 'Private' : 'Shared Group';
       const placeMapsHtml = buildExternalMapsPopupRowHtml(
@@ -1644,6 +1655,12 @@ export function MapCanvas({
       if (existing) {
         existing.setLngLat([place.longitude, place.latitude]);
         existing.getPopup()?.setHTML(popupHtml);
+        const dotEl = existing.getElement().querySelector<HTMLElement>('[data-lo-place-dot]');
+        const innerEl = existing.getElement().querySelector<HTMLElement>('[data-lo-place-inner]');
+        const labelEl = existing.getElement().querySelector<HTMLElement>('[data-lo-place-label]');
+        if (dotEl) dotEl.style.borderColor = targetColor;
+        if (innerEl) innerEl.style.backgroundColor = targetColor;
+        if (labelEl) labelEl.style.borderColor = hexToRgba(targetColor, 0.55);
       } else {
         const el = document.createElement('div');
         el.className = 'cursor-pointer select-none';
@@ -1651,16 +1668,20 @@ export function MapCanvas({
         innerWrap.className =
           'lo-pin-drop flex flex-col items-center transition-transform duration-200 ease-out hover:scale-110';
         const label = document.createElement('div');
-        label.className = place.isPrivate
-          ? 'rounded-lg border border-indigo-200/90 bg-indigo-50/95 px-2.5 py-0.5 text-[10px] font-semibold text-indigo-950 shadow-sm backdrop-blur dark:border-indigo-500/40 dark:bg-indigo-950/90 dark:text-indigo-200'
-          : 'rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-900 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-100';
+        label.setAttribute('data-lo-place-label', '1');
+        label.className =
+          'rounded-lg border bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-900 shadow-sm backdrop-blur dark:bg-zinc-900/95 dark:text-zinc-100';
+        label.style.borderColor = hexToRgba(targetColor, 0.55);
         label.textContent = `${place.name} · ${Math.round(place.radiusMeters)}m${place.isPrivate ? ' (Private)' : ''}`;
         const dot = document.createElement('div');
-        dot.className = place.isPrivate
-          ? 'mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-dashed border-indigo-600 bg-white/80 shadow'
-          : 'mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-dashed border-zinc-800 bg-white/80 shadow';
+        dot.setAttribute('data-lo-place-dot', '1');
+        dot.className =
+          'mt-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-dashed bg-white/85 shadow';
+        dot.style.borderColor = targetColor;
         const inner = document.createElement('div');
-        inner.className = 'h-1.5 w-1.5 rounded-full bg-zinc-900';
+        inner.setAttribute('data-lo-place-inner', '1');
+        inner.className = 'h-1.5 w-1.5 rounded-full';
+        inner.style.backgroundColor = targetColor;
         dot.appendChild(inner);
         innerWrap.append(label, dot);
         el.appendChild(innerWrap);
@@ -1692,7 +1713,7 @@ export function MapCanvas({
         });
       }
     }
-  }, [places, selectedPlaceId]);
+  }, [places, selectedPlaceId, placeColors]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1794,17 +1815,17 @@ export function MapCanvas({
             'match',
             ['get', 'activityMode'],
             'walking',
-            TRAIL_ACTIVITY_META.walking.color,
+            activityColors?.walking ?? TRAIL_ACTIVITY_META.walking.color,
             'running',
-            TRAIL_ACTIVITY_META.running.color,
+            activityColors?.running ?? TRAIL_ACTIVITY_META.running.color,
             'cycling',
-            TRAIL_ACTIVITY_META.cycling.color,
+            activityColors?.cycling ?? TRAIL_ACTIVITY_META.cycling.color,
             'transit',
-            TRAIL_ACTIVITY_META.transit.color,
+            activityColors?.transit ?? TRAIL_ACTIVITY_META.transit.color,
             'driving',
-            TRAIL_ACTIVITY_META.driving.color,
+            activityColors?.driving ?? TRAIL_ACTIVITY_META.driving.color,
             'stationary',
-            TRAIL_ACTIVITY_META.stationary.color,
+            activityColors?.stationary ?? TRAIL_ACTIVITY_META.stationary.color,
             fallbackColor,
           ] as maplibregl.ExpressionSpecification)
         : fallbackColor;
@@ -1838,7 +1859,8 @@ export function MapCanvas({
                 places,
               }).features;
 
-      const monoPrimary = mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b';
+      const monoPrimary =
+        fallbackTrailColor ?? (mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b');
       const roadLineColor = getTrailStrokeColor(monoPrimary);
       const directLineColor = getTrailStrokeColor(monoPrimary);
       const geojson = {
@@ -2061,8 +2083,12 @@ export function MapCanvas({
           ? `<div class="text-[11px] font-medium text-zinc-800 dark:text-zinc-200">At ${escapeHtml(details.matchedPlaceName)}${details.matchedPlaceIsPrivate ? ' (Private)' : ''}</div>`
           : '';
         const activityMeta = details.activityMode ? TRAIL_ACTIVITY_META[details.activityMode] : null;
-        const activityBadge = activityMeta
-          ? `<span class="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><span style="display:inline-block;width:6px;height:6px;border-radius:9999px;background:${activityMeta.color}"></span>${escapeHtml(activityMeta.label)}</span>`
+        const activityHex =
+          details.activityMode
+            ? activityColors?.[details.activityMode] ?? TRAIL_ACTIVITY_META[details.activityMode].color
+            : null;
+        const activityBadge = activityMeta && activityHex
+          ? `<span class="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><span style="display:inline-block;width:6px;height:6px;border-radius:9999px;background:${activityHex}"></span>${escapeHtml(activityMeta.label)}</span>`
           : '';
         const stayLine =
           details.stayDurationMs > 0
@@ -2113,6 +2139,8 @@ export function MapCanvas({
     timelapseFrame,
     places,
     mapTheme,
+    activityColors,
+    fallbackTrailColor,
   ]);
 
   // Synchronize 60 FPS moving Timelapse cursor markers & Follow Camera
@@ -2129,8 +2157,8 @@ export function MapCanvas({
         m.isFuzzed
           ? '#f59e0b'
           : m.activityMode
-            ? TRAIL_ACTIVITY_META[m.activityMode].color
-            : '#18181b';
+            ? activityColors?.[m.activityMode] ?? TRAIL_ACTIVITY_META[m.activityMode].color
+            : fallbackTrailColor ?? '#18181b';
       const sig = `${m.username}|${m.isFuzzed ? '1' : '0'}|${actColor}`;
       const existing = timelapseMarkersRef.current.get(m.userId);
 
@@ -2179,7 +2207,7 @@ export function MapCanvas({
         map.jumpTo({ center: [target.longitude, target.latitude] });
       }
     }
-  }, [timelapseFrame, showTrails, followUserId]);
+  }, [timelapseFrame, showTrails, followUserId, activityColors, fallbackTrailColor]);
 
   // Fit map bounds onto focused Trip when selected
   useEffect(() => {

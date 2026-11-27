@@ -36,6 +36,7 @@ import {
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
   DEFAULT_FUZZED_HALO_COLOR,
+  DEFAULT_USER_CUSTOMIZATION,
   findCoveringRegions,
   FUZZED_AREA_RADIUS_METERS,
   hexToRgba,
@@ -43,6 +44,10 @@ import {
   isSafeAvatarUrl,
   isSafeHexColor,
   parseInviteInput,
+  parseUserCustomization,
+  resolveActivityColors,
+  resolveFallbackTrailColor,
+  resolveInterfaceThemeTokens,
   resolveTrailPointDetails,
   sampleTimelapseFrame,
   sortTrailTrips,
@@ -69,8 +74,13 @@ import {
   type TrailsResponseMeta,
   type TrailTripSort,
   type TrailTripSummary,
+  type UserCustomization,
 } from '@loved-ones/shared';
 import { ColorPickerSheet } from '../components/ColorPickerSheet';
+import {
+  MobileCustomizeModal,
+  type MobileCustomizeTab,
+} from '../components/MobileCustomizeModal';
 import {
   ChatTabIcon,
   CompassNeedleIcon,
@@ -143,16 +153,19 @@ import {
 import { useSafeAreaInsets } from '../services/safeArea';
 import {
   clearSessionConfig,
+  clearUserCustomization,
   getBackgroundTrackingEnabled,
   getMapThemePreference,
   getSavedMapViewport,
   getShowTerminatorPreference,
+  getUserCustomization,
   type MobileMapThemePreference,
   MobileStoredConfig,
   saveMapThemePreference,
   saveSavedMapViewport,
   saveShowTerminatorPreference,
   saveStoredConfig,
+  saveUserCustomization,
 } from '../services/secureConfig';
 import {
   createMobileShareLink,
@@ -196,7 +209,30 @@ export function MobileMapScreen({
     setMapThemePreference(initialThemePreference);
   }, [initialThemePreference]);
   const resolvedMapTheme = resolveMobileMapTheme(mapThemePreference, systemColorScheme);
-  const ui = useMemo(() => getOnboardingPalette(resolvedMapTheme), [resolvedMapTheme]);
+  const [customization, setCustomization] = useState<UserCustomization>(
+    DEFAULT_USER_CUSTOMIZATION,
+  );
+  const [customizeModalOpen, setCustomizeModalOpen] = useState(false);
+  const [customizeTab, setCustomizeTab] = useState<MobileCustomizeTab>('interface');
+  const [pinColorsExpanded, setPinColorsExpanded] = useState(false);
+  const ui = useMemo(
+    () => getOnboardingPalette(resolvedMapTheme, customization),
+    [resolvedMapTheme, customization],
+  );
+  const resolvedInterfaceTokens = useMemo(
+    () => resolveInterfaceThemeTokens(customization, resolvedMapTheme),
+    [customization, resolvedMapTheme],
+  );
+  const activityColors = useMemo(() => resolveActivityColors(customization), [customization]);
+  const resolvedFallbackTrailColor = useMemo(
+    () =>
+      resolveFallbackTrailColor(
+        customization,
+        resolvedInterfaceTokens,
+        resolvedMapTheme,
+      ),
+    [customization, resolvedInterfaceTokens, resolvedMapTheme],
+  );
   const styles = useMemo(() => createMobileStyles(resolvedMapTheme, ui), [resolvedMapTheme, ui]);
   const fonts = getGeometricFonts(Platform.OS);
   const { height: windowHeight } = useWindowDimensions();
@@ -641,6 +677,39 @@ export function MobileMapScreen({
       .then((enabled) => setShowTerminator(enabled))
       .catch(() => {});
   }, [onThemePreferenceChange, refreshQueueCount]);
+
+  const customizationUserId = userProfile?.id ?? config.user?.id ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    void getUserCustomization(customizationUserId)
+      .then((loaded) => {
+        if (!cancelled) setCustomization(loaded);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [customizationUserId]);
+
+  const updateCustomization = useCallback(
+    (updater: (prev: UserCustomization) => UserCustomization) => {
+      setCustomization((prev) => {
+        const next = parseUserCustomization(JSON.stringify(updater(prev)));
+        if (customizationUserId) {
+          void saveUserCustomization(customizationUserId, next).catch(() => {});
+        }
+        return next;
+      });
+    },
+    [customizationUserId],
+  );
+
+  const resetCustomization = useCallback(() => {
+    setCustomization(DEFAULT_USER_CUSTOMIZATION);
+    if (customizationUserId) {
+      void clearUserCustomization(customizationUserId).catch(() => {});
+    }
+  }, [customizationUserId]);
 
   useEffect(() => {
     if (!showTerminator) return;
@@ -2789,22 +2858,20 @@ export function MobileMapScreen({
                     'match',
                     ['get', 'activityMode'],
                     'walking',
-                    TRAIL_ACTIVITY_META.walking.color,
+                    activityColors.walking,
                     'running',
-                    TRAIL_ACTIVITY_META.running.color,
+                    activityColors.running,
                     'cycling',
-                    TRAIL_ACTIVITY_META.cycling.color,
+                    activityColors.cycling,
                     'transit',
-                    TRAIL_ACTIVITY_META.transit.color,
+                    activityColors.transit,
                     'driving',
-                    TRAIL_ACTIVITY_META.driving.color,
+                    activityColors.driving,
                     'stationary',
-                    TRAIL_ACTIVITY_META.stationary.color,
-                    resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+                    activityColors.stationary,
+                    resolvedFallbackTrailColor,
                   ] as unknown as string)
-                : resolvedMapTheme === 'dark'
-                  ? '#f4f4f5'
-                  : '#18181b',
+                : resolvedFallbackTrailColor,
               'line-width': 3.5,
               'line-opacity': 0.9,
             }}
@@ -2823,22 +2890,20 @@ export function MobileMapScreen({
                     'match',
                     ['get', 'activityMode'],
                     'walking',
-                    TRAIL_ACTIVITY_META.walking.color,
+                    activityColors.walking,
                     'running',
-                    TRAIL_ACTIVITY_META.running.color,
+                    activityColors.running,
                     'cycling',
-                    TRAIL_ACTIVITY_META.cycling.color,
+                    activityColors.cycling,
                     'transit',
-                    TRAIL_ACTIVITY_META.transit.color,
+                    activityColors.transit,
                     'driving',
-                    TRAIL_ACTIVITY_META.driving.color,
+                    activityColors.driving,
                     'stationary',
-                    TRAIL_ACTIVITY_META.stationary.color,
-                    resolvedMapTheme === 'dark' ? '#f4f4f5' : '#18181b',
+                    activityColors.stationary,
+                    resolvedFallbackTrailColor,
                   ] as unknown as string)
-                : resolvedMapTheme === 'dark'
-                  ? '#f4f4f5'
-                  : '#18181b',
+                : resolvedFallbackTrailColor,
               'line-width': 2.5,
               'line-opacity': 0.78,
               'line-dasharray': [2, 1.5],
@@ -2942,7 +3007,11 @@ export function MobileMapScreen({
               <View
                 style={[
                   styles.placeMarkerDot,
-                  { borderColor: place.isPrivate ? '#4f46e5' : '#0d9488' },
+                  {
+                    borderColor: place.isPrivate
+                      ? customization.mapAccents.privatePlaceColor
+                      : customization.mapAccents.groupPlaceColor,
+                  },
                 ]}
               />
             </TouchableOpacity>
@@ -3034,8 +3103,8 @@ export function MobileMapScreen({
             const dotColor = m.isFuzzed
               ? '#f59e0b'
               : m.activityMode
-                ? TRAIL_ACTIVITY_META[m.activityMode].color
-                : '#18181b';
+                ? activityColors[m.activityMode]
+                : resolvedFallbackTrailColor;
             return (
               <Marker key={`tl-${m.userId}`} id={`tl-${m.userId}`} lngLat={[m.longitude, m.latitude]}>
                 <View style={styles.marker}>
@@ -3524,6 +3593,18 @@ export function MobileMapScreen({
                 })}
               </View>
             </View>
+
+            <TouchableOpacity
+              style={[styles.mapOptionsPillBtn, { marginTop: 6, alignSelf: 'stretch', alignItems: 'center' }]}
+              activeOpacity={0.85}
+              onPress={() => {
+                setMapOptionsOpen(false);
+                setCustomizeTab('map');
+                setCustomizeModalOpen(true);
+              }}
+            >
+              <Text style={styles.mapOptionsPillText}>Trail &amp; Map Colors →</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -3731,6 +3812,11 @@ export function MobileMapScreen({
                 meta={trailsMeta}
                 busy={trailBusy}
                 message={trailMessage}
+                activityColors={activityColors}
+                onOpenCustomizeColors={() => {
+                  setCustomizeTab('map');
+                  setCustomizeModalOpen(true);
+                }}
               />
             ) : drawerMode === 'people' ? (
               selectedMember ? (
@@ -3914,7 +4000,7 @@ export function MobileMapScreen({
                                     width: 7,
                                     height: 7,
                                     borderRadius: 4,
-                                    backgroundColor: TRAIL_ACTIVITY_META[modeKey].color,
+                                    backgroundColor: activityColors[modeKey],
                                   }}
                                 />
                                 <Text style={styles.settingsHint}>
@@ -4413,12 +4499,29 @@ export function MobileMapScreen({
                   }}
                 >
                   <View style={styles.flexOne}>
-                    <Text style={styles.settingsSectionTitle}>Account, Photo & Colors</Text>
+                    <Text style={styles.settingsSectionTitle}>Account, Photo &amp; Security</Text>
                     <Text style={styles.settingsHint}>
-                      1:1 photo crop, halo/fuzz colors, backup email & password
+                      1:1 photo crop, marker halo, backup email &amp; password
                     </Text>
                   </View>
                   <Text style={styles.menuRowAction}>Edit →</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.menuRow}
+                  onPress={() => {
+                    setProfileHubOpen(false);
+                    setCustomizeTab('interface');
+                    setCustomizeModalOpen(true);
+                  }}
+                >
+                  <View style={styles.flexOne}>
+                    <Text style={styles.settingsSectionTitle}>Theme &amp; Activity Colors</Text>
+                    <Text style={styles.settingsHint}>
+                      Interface hue, activity color palettes &amp; place colors
+                    </Text>
+                  </View>
+                  <Text style={styles.menuRowAction}>Customize →</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -4757,13 +4860,26 @@ export function MobileMapScreen({
                             <View
                               style={[
                                 styles.chatBubble,
-                                item.isMine ? styles.chatBubbleMine : styles.chatBubbleOther,
+                                item.isMine
+                                  ? customization.mapAccents.chatBubbleStyle === 'tinted'
+                                    ? {
+                                        backgroundColor: resolvedInterfaceTokens.accentSoftBg,
+                                        borderWidth: 1,
+                                        borderColor: resolvedInterfaceTokens.accentBorder,
+                                        borderBottomRightRadius: 4,
+                                      }
+                                    : styles.chatBubbleMine
+                                  : styles.chatBubbleOther,
                               ]}
                             >
                               <Text
                                 style={[
                                   styles.chatBody,
-                                  item.isMine ? styles.chatBodyMine : styles.chatBodyOther,
+                                  item.isMine
+                                    ? customization.mapAccents.chatBubbleStyle === 'tinted'
+                                      ? { color: resolvedInterfaceTokens.accentSoftText }
+                                      : styles.chatBodyMine
+                                    : styles.chatBodyOther,
                                 ]}
                               >
                                 {item.message.content}
@@ -4906,6 +5022,26 @@ export function MobileMapScreen({
                   placeholderTextColor={ui.placeholder}
                 />
 
+                <TouchableOpacity
+                  style={styles.menuRow}
+                  onPress={() => setPinColorsExpanded((v) => !v)}
+                >
+                  <View style={styles.flexOne}>
+                    <Text style={styles.settingsSectionTitle}>
+                      Map Pin Halo &amp; Fuzz Ring
+                    </Text>
+                    <Text style={styles.settingsHint}>
+                      Group-visible marker accent ring ·{' '}
+                      {pinColorsExpanded ? 'Tap to hide' : 'Tap to customize'}
+                    </Text>
+                  </View>
+                  <Text style={styles.menuRowAction}>
+                    {pinColorsExpanded ? 'Hide ▲' : 'Edit ▼'}
+                  </Text>
+                </TouchableOpacity>
+
+                {pinColorsExpanded && (
+                  <View style={{ gap: 8, paddingTop: 4 }}>
                 <Text style={styles.fieldLabel}>User Halo Color</Text>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                   {MOBILE_COLOR_PRESETS.map((hex) => (
@@ -4965,6 +5101,25 @@ export function MobileMapScreen({
                     </TouchableOpacity>
                   )}
                 </View>
+                  </View>
+                )}
+
+                <TouchableOpacity
+                  style={styles.menuRow}
+                  onPress={() => {
+                    setAccountOpen(false);
+                    setCustomizeTab('interface');
+                    setCustomizeModalOpen(true);
+                  }}
+                >
+                  <View style={styles.flexOne}>
+                    <Text style={styles.settingsSectionTitle}>App Theme &amp; Activity Colors</Text>
+                    <Text style={styles.settingsHint}>
+                      Personalize interface hue &amp; trail palettes (local cache)
+                    </Text>
+                  </View>
+                  <Text style={styles.menuRowAction}>Open →</Text>
+                </TouchableOpacity>
 
                 {accountError && <Text style={styles.errorText}>{accountError}</Text>}
                 {accountMessage && <Text style={styles.successText}>{accountMessage}</Text>}
@@ -5132,6 +5287,18 @@ export function MobileMapScreen({
           setColorPickerTarget(null);
         }}
         onClose={() => setColorPickerTarget(null)}
+      />
+
+      <MobileCustomizeModal
+        visible={customizeModalOpen}
+        initialTab={customizeTab}
+        username={userProfile?.username ?? config.user?.username ?? 'You'}
+        scheme={resolvedMapTheme}
+        fonts={fonts}
+        customization={customization}
+        onUpdate={updateCustomization}
+        onResetAll={resetCustomization}
+        onClose={() => setCustomizeModalOpen(false)}
       />
 
       {/* Guest Share Links Modal */}

@@ -30,6 +30,7 @@ import {
   Monitor,
   Moon,
   Navigation,
+  Palette,
   PanelRight,
   Plus,
   QrCode,
@@ -53,6 +54,8 @@ import {
   isSafeAvatarUrl,
   isSafeLoginBackgroundUrl,
   resolveMemberPresenceStatus,
+  resolveFallbackTrailColor,
+  resolveInterfaceThemeTokens,
   withMinDelay,
   type AppVersionInfo,
   type ChatMessage,
@@ -75,6 +78,11 @@ import {
 } from '@loved-ones/shared';
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
 import { BrandMark } from '@/components/BrandMark';
+import {
+  CustomizeAppearanceModal,
+  type CustomizeAppearanceTab,
+} from '@/components/CustomizeAppearanceModal';
+import { useUserCustomization } from '@/lib/customization';
 import { createGeoWarmupGate } from '@/lib/geoWarmup';
 import {
   MapCanvas,
@@ -414,6 +422,8 @@ export default function HomePage() {
   );
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [customizeTab, setCustomizeTab] = useState<CustomizeAppearanceTab>('interface');
 
   const leftDockRef = useRef<HTMLDivElement | null>(null);
   const mobileControlsRef = useRef<HTMLDivElement | null>(null);
@@ -663,6 +673,23 @@ export default function HomePage() {
   }, []);
 
   const resolvedMapTheme = resolveMapTheme(mapThemePreference, systemPrefersDark);
+  const { customization, activityColors, updateCustomization, resetCustomization } =
+    useUserCustomization(session?.user.id ?? null, resolvedMapTheme);
+  const resolvedInterfaceTokens = useMemo(
+    () => resolveInterfaceThemeTokens(customization, resolvedMapTheme),
+    [customization, resolvedMapTheme],
+  );
+  const resolvedFallbackTrailColor = useMemo(
+    () => resolveFallbackTrailColor(customization, resolvedInterfaceTokens, resolvedMapTheme),
+    [customization, resolvedInterfaceTokens, resolvedMapTheme],
+  );
+  const resolvedPlaceColors = useMemo(
+    () => ({
+      group: customization.mapAccents.groupPlaceColor,
+      private: customization.mapAccents.privatePlaceColor,
+    }),
+    [customization.mapAccents.groupPlaceColor, customization.mapAccents.privatePlaceColor],
+  );
 
   function handleToggleChatAlerts() {
     setChatAlertsEnabled((prev) => {
@@ -2661,6 +2688,9 @@ export default function HomePage() {
         mapTheme={resolvedMapTheme}
         projection={globeSupported ? mapProjection : 'mercator'}
         showTerminator={showTerminator}
+        activityColors={activityColors}
+        fallbackTrailColor={resolvedFallbackTrailColor}
+        placeColors={resolvedPlaceColors}
         onProjectionFallback={(resolved) => {
           if (resolved === 'mercator') {
             setGlobeSupported(false);
@@ -3552,6 +3582,25 @@ export default function HomePage() {
                 <Settings className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
               </button>
 
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setCustomizeTab('interface');
+                  setCustomizeOpen(true);
+                }}
+                className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                <span className="flex items-center gap-2 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                  <Palette className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                  Theme &amp; Activity Colors
+                </span>
+                <span
+                  className="h-3 w-3 rounded-full border border-white/70 shadow-sm dark:border-zinc-700"
+                  style={{ backgroundColor: resolvedInterfaceTokens.accentBg }}
+                />
+              </button>
+
               {session.user.role === 'HOST_ADMIN' && (
                 <>
                   <Link
@@ -3814,7 +3863,7 @@ export default function HomePage() {
                         <div
                           className={`max-w-[85%] rounded-lg px-3 py-2 text-xs ${
                             mine
-                              ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                              ? 'lo-chat-mine bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
                               : 'border border-zinc-200/80 bg-zinc-50 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100'
                           }`}
                         >
@@ -4309,6 +4358,11 @@ export default function HomePage() {
           }
           hideBottomBarOnMedium={desktopMapOptionsOpen}
           closePopoversNonce={closeTrailPopoversNonce}
+          activityColors={activityColors}
+          onOpenCustomizeMapColors={() => {
+            setCustomizeTab('map');
+            setCustomizeOpen(true);
+          }}
           onRequestCloseOtherPanels={() => {
             setMenuOpen(false);
             setGroupPopoverOpen(false);
@@ -4580,6 +4634,24 @@ export default function HomePage() {
                 ))}
               </div>
             </div>
+
+            <div className="border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileControlsOpen(false);
+                  setCustomizeTab('map');
+                  setCustomizeOpen(true);
+                }}
+                className="flex w-full items-center justify-between rounded-lg bg-zinc-50 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100 dark:bg-zinc-800/80 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Palette className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                  Trail &amp; Map Colors
+                </span>
+                <span className="text-[10px] text-zinc-500 dark:text-zinc-400">Customize →</span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -4792,6 +4864,24 @@ export default function HomePage() {
               </div>
             </div>
 
+            <div className="border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setDesktopMapOptionsOpen(false);
+                  setCustomizeTab('map');
+                  setCustomizeOpen(true);
+                }}
+                className="flex w-full items-center justify-between rounded-lg bg-zinc-50 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100 dark:bg-zinc-800/80 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Palette className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                  Trail &amp; Map Colors
+                </span>
+                <span className="text-[10px] text-zinc-500 dark:text-zinc-400">Customize →</span>
+              </button>
+            </div>
+
             {/* Location Beacon Actions */}
             <div className="space-y-1.5 border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
               <div className="flex items-center gap-1.5">
@@ -4935,6 +5025,10 @@ export default function HomePage() {
         open={accountSettingsOpen}
         session={session}
         onClose={() => setAccountSettingsOpen(false)}
+        onOpenCustomize={() => {
+          setCustomizeTab('interface');
+          setCustomizeOpen(true);
+        }}
         onSessionUpdated={(next) => {
           setSession(next);
           setLocations((prev) =>
@@ -4955,6 +5049,17 @@ export default function HomePage() {
             })),
           );
         }}
+      />
+
+      <CustomizeAppearanceModal
+        open={customizeOpen}
+        initialTab={customizeTab}
+        username={session.user.username}
+        resolvedTheme={resolvedMapTheme}
+        customization={customization}
+        onUpdate={updateCustomization}
+        onResetAll={resetCustomization}
+        onClose={() => setCustomizeOpen(false)}
       />
     </div>
   );

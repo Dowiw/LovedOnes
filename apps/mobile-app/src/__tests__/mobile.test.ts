@@ -36,6 +36,7 @@ import {
 import {
   clearPendingRegistration,
   clearSessionConfig,
+  clearUserCustomization,
   createMemoryKeyValueStore,
   extractInviteCandidateFromUrl,
   getBackgroundTrackingEnabled,
@@ -46,6 +47,7 @@ import {
   getSavedMapViewport,
   getShowTerminatorPreference,
   getStoredConfig,
+  getUserCustomization,
   isPendingRecordActive,
   parseAndBindQrInvite,
   saveMapThemePreference,
@@ -54,8 +56,10 @@ import {
   saveSavedMapViewport,
   saveShowTerminatorPreference,
   saveStoredConfig,
+  saveUserCustomization,
   setBackgroundTrackingEnabled,
 } from '../services/secureConfig';
+import { DEFAULT_USER_CUSTOMIZATION } from '@loved-ones/shared';
 import {
   createMobileShareLink,
   listMobileShareLinks,
@@ -1082,5 +1086,32 @@ describe('@loved-ones/mobile-app', () => {
 
     await saveShowTerminatorPreference(true, store);
     expect(await getShowTerminatorPreference(store)).toBe(true);
+  });
+
+  it('persists per-user mobile theme & activity customization in SecureStore and resolves palette tokens', async () => {
+    const store = createMemoryKeyValueStore();
+    expect(await getUserCustomization(null, store)).toEqual(DEFAULT_USER_CUSTOMIZATION);
+
+    const saved = await saveUserCustomization(
+      'mobile-user-1',
+      {
+        ...DEFAULT_USER_CUSTOMIZATION,
+        themeMode: 'preset',
+        interfacePreset: 'sky',
+        activityPaletteId: 'colorblind',
+      },
+      store,
+    );
+
+    expect(saved.interfacePreset).toBe('sky');
+    expect((await getUserCustomization('mobile-user-1', store)).interfacePreset).toBe('sky');
+    expect((await getUserCustomization('mobile-user-2', store)).interfacePreset).toBe('default');
+
+    const skyDarkPalette = getOnboardingPalette('dark', saved);
+    expect(skyDarkPalette.ctaBg).toBe('#38bdf8');
+    expect(skyDarkPalette.ctaText).toBe('#09090b');
+
+    await clearUserCustomization('mobile-user-1', store);
+    expect((await getUserCustomization('mobile-user-1', store)).interfacePreset).toBe('default');
   });
 });

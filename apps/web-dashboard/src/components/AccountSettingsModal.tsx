@@ -1,7 +1,19 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Check, KeyRound, Loader2, Mail, ShieldCheck, Trash2, User, X } from 'lucide-react';
+import {
+  Camera,
+  Check,
+  ChevronDown,
+  KeyRound,
+  Loader2,
+  Mail,
+  Palette,
+  ShieldCheck,
+  Trash2,
+  User,
+  X,
+} from 'lucide-react';
 import {
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
@@ -34,6 +46,7 @@ interface AccountSettingsModalProps {
   session: StoredSession;
   onClose: () => void;
   onSessionUpdated: (next: StoredSession) => void;
+  onOpenCustomize?: () => void;
 }
 
 const AVATAR_SIZE = 192;
@@ -82,8 +95,11 @@ export function AccountSettingsModal({
   session,
   onClose,
   onSessionUpdated,
+  onOpenCustomize,
 }: AccountSettingsModalProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [pinColorsExpanded, setPinColorsExpanded] = useState(false);
+  const [securityExpanded, setSecurityExpanded] = useState(false);
 
   const [username, setUsername] = useState(session.user.username);
   const [email, setEmail] = useState(session.user.email);
@@ -441,48 +457,62 @@ export function AccountSettingsModal({
             />
           </div>
 
-          {/* Map Marker Halo & Fuzzed Area Circle Colors */}
-          <div className="space-y-3 rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-3.5 dark:border-zinc-800 dark:bg-zinc-950/60">
-            <div className="flex items-center justify-between gap-2">
+          {/* Map Marker Halo & Fuzzed Area Circle Colors (Progressive Disclosure) */}
+          <div className="rounded-lg border border-zinc-200/80 bg-zinc-50/70 dark:border-zinc-800 dark:bg-zinc-950/60">
+            <button
+              type="button"
+              onClick={() => setPinColorsExpanded((v) => !v)}
+              className="flex w-full items-center justify-between gap-2 p-3.5 text-left"
+            >
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-200">
-                  Map Pin Appearance
+                  Map Pin Appearance (Visible to Group)
                 </div>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Customize your marker halo and transparent fuzzed area ring.
+                  Your marker halo &amp; fuzzed area circle shared across devices.
                 </p>
               </div>
-              <div
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-dashed"
-                style={{
-                  backgroundColor: hexToRgba(
-                    isSafeHexColor(fuzzCircleColor)
-                      ? fuzzCircleColor
-                      : DEFAULT_FUZZ_CIRCLE_COLOR,
-                    0.18,
-                  ),
-                  borderColor: hexToRgba(
-                    isSafeHexColor(fuzzCircleColor)
-                      ? fuzzCircleColor
-                      : DEFAULT_FUZZ_CIRCLE_COLOR,
-                    0.7,
-                  ),
-                }}
-                title="Live fuzzed area & halo preview"
-              >
+              <div className="flex shrink-0 items-center gap-2.5">
                 <div
-                  className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-[9px] font-bold text-white"
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-dashed"
                   style={{
-                    boxShadow: `0 0 0 3px ${hexToRgba(
-                      isSafeHexColor(haloColor) ? haloColor : DEFAULT_EXACT_HALO_COLOR,
-                      0.45,
-                    )}`,
+                    backgroundColor: hexToRgba(
+                      isSafeHexColor(fuzzCircleColor)
+                        ? fuzzCircleColor
+                        : DEFAULT_FUZZ_CIRCLE_COLOR,
+                      0.18,
+                    ),
+                    borderColor: hexToRgba(
+                      isSafeHexColor(fuzzCircleColor)
+                        ? fuzzCircleColor
+                        : DEFAULT_FUZZ_CIRCLE_COLOR,
+                      0.7,
+                    ),
                   }}
+                  title="Live fuzzed area & halo preview"
                 >
-                  {(username || session.user.username).slice(0, 1).toUpperCase()}
+                  <div
+                    className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-[9px] font-bold text-white"
+                    style={{
+                      boxShadow: `0 0 0 3px ${hexToRgba(
+                        isSafeHexColor(haloColor) ? haloColor : DEFAULT_EXACT_HALO_COLOR,
+                        0.45,
+                      )}`,
+                    }}
+                  >
+                    {(username || session.user.username).slice(0, 1).toUpperCase()}
+                  </div>
                 </div>
+                <ChevronDown
+                  className={`h-4 w-4 text-zinc-400 transition-transform ${
+                    pinColorsExpanded ? 'rotate-180 text-zinc-800 dark:text-zinc-200' : ''
+                  }`}
+                />
               </div>
-            </div>
+            </button>
+
+            {pinColorsExpanded && (
+              <div className="lo-tab-enter space-y-3 border-t border-zinc-200/70 p-3.5 dark:border-zinc-800">
 
             <div>
               <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
@@ -575,6 +605,8 @@ export function AccountSettingsModal({
                 </label>
               </div>
             </div>
+              </div>
+            )}
           </div>
 
           {profileError && (
@@ -604,9 +636,61 @@ export function AccountSettingsModal({
           </button>
         </form>
 
-        {/* Backup / Recovery Email Verification */}
-        <div className="my-5 border-t border-zinc-100 dark:border-zinc-800" />
+        {onOpenCustomize && (
+          <>
+            <div className="my-4 border-t border-zinc-100 dark:border-zinc-800" />
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenCustomize();
+              }}
+              className="lo-press flex w-full items-center justify-between rounded-lg border border-zinc-200/80 bg-zinc-50/75 px-3.5 py-2.5 text-left transition hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-800/50 dark:hover:bg-zinc-800"
+            >
+              <span className="flex items-center gap-2 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                <Palette className="h-3.5 w-3.5 text-zinc-600 dark:text-zinc-300" />
+                Local Interface Theme, Hue &amp; Activity Colors
+              </span>
+              <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+                Customize →
+              </span>
+            </button>
+          </>
+        )}
 
+        {/* Security & Password Recovery (Progressive Disclosure) */}
+        <div className="my-4 border-t border-zinc-100 dark:border-zinc-800" />
+
+        <div className="rounded-lg border border-zinc-200/80 dark:border-zinc-800">
+          <button
+            type="button"
+            onClick={() => setSecurityExpanded((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 p-3.5 text-left"
+          >
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-3.5 w-3.5 text-zinc-700 dark:text-zinc-300" />
+              <div>
+                <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
+                  Security &amp; Password Recovery
+                </div>
+                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                  {session.user.recoveryEmail && session.user.recoveryEmailVerified
+                    ? `Backup email verified (${session.user.recoveryEmail})`
+                    : session.user.recoveryEmail
+                      ? 'Backup email unverified'
+                      : 'Backup email not configured · Change password'}
+                </div>
+              </div>
+            </div>
+            <ChevronDown
+              className={`h-4 w-4 text-zinc-400 transition-transform ${
+                securityExpanded ? 'rotate-180 text-zinc-800 dark:text-zinc-200' : ''
+              }`}
+            />
+          </button>
+
+          {securityExpanded && (
+            <div className="lo-tab-enter border-t border-zinc-100 p-3.5 dark:border-zinc-800">
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-xs font-bold text-zinc-900 dark:text-zinc-100">
@@ -775,6 +859,9 @@ export function AccountSettingsModal({
             <span>{passwordBusy ? 'Updating Password...' : 'Update Password'}</span>
           </button>
         </form>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
