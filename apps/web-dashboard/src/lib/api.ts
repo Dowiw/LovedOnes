@@ -1,6 +1,7 @@
 import type {
   AppVersionInfo,
   ChatMessage,
+  FeaturePolicies,
   GroupPlace,
   GroupRole,
   LocationBroadcast,
@@ -20,9 +21,13 @@ import type {
   RegistrationRequestItem,
   ResourceLimitsSettings,
   ResourcePruneResult,
+  ScheduleSystemUpdateInput,
   SystemRole,
   SystemTelemetry,
   SystemUpdateStatus,
+  TileDownloadPolicy,
+  TileDownloadRequestItem,
+  UpdateFeaturePoliciesInput,
   UpdateLogRetentionInput,
   UpdateResourceLimitsInput,
 } from '@loved-ones/shared';
@@ -940,6 +945,8 @@ export async function apiFetchMapRegions(): Promise<{
   regions: MapRegion[];
   jobs: MapDownloadJob[];
   allowMemberDownloads: boolean;
+  tileDownloadPolicy?: TileDownloadPolicy;
+  featurePolicies?: FeaturePolicies;
 }> {
   const { authBase } = getServiceBaseUrls();
   const res = await fetch(`${authBase}/api/maps/regions`);
@@ -950,6 +957,8 @@ export async function apiFetchMapRegions(): Promise<{
     regions: MapRegion[];
     jobs: MapDownloadJob[];
     allowMemberDownloads: boolean;
+    tileDownloadPolicy?: TileDownloadPolicy;
+    featurePolicies?: FeaturePolicies;
   };
 }
 
@@ -958,6 +967,8 @@ export async function apiRequestMapDownload(
   payload: { latitude: number; longitude: number; cityName?: string; radiusKm?: number },
 ): Promise<{
   alreadyCovered: boolean;
+  pendingApproval?: boolean;
+  request?: TileDownloadRequestItem;
   region?: MapRegion;
   regions?: MapRegion[];
   job?: MapDownloadJob;
@@ -965,6 +976,8 @@ export async function apiRequestMapDownload(
   const { authBase } = getServiceBaseUrls();
   return requestAuthedJson<{
     alreadyCovered: boolean;
+    pendingApproval?: boolean;
+    request?: TileDownloadRequestItem;
     region?: MapRegion;
     regions?: MapRegion[];
     job?: MapDownloadJob;
@@ -972,6 +985,96 @@ export async function apiRequestMapDownload(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function apiFetchFeaturePolicies(accessToken: string): Promise<{
+  policies: FeaturePolicies;
+  scheduledUpdateFor: string | null;
+}> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{
+    policies: FeaturePolicies;
+    scheduledUpdateFor: string | null;
+  }>(`${authBase}/api/auth/feature-policies`, accessToken);
+}
+
+export async function apiFetchAdminFeaturePolicies(
+  accessToken: string,
+): Promise<FeaturePolicies> {
+  const { authBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ policies: FeaturePolicies }>(
+    `${authBase}/api/admin/feature-policies`,
+    accessToken,
+  );
+  return res.policies;
+}
+
+export async function apiUpdateAdminFeaturePolicies(
+  accessToken: string,
+  input: UpdateFeaturePoliciesInput,
+): Promise<FeaturePolicies> {
+  const { authBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ policies: FeaturePolicies }>(
+    `${authBase}/api/admin/feature-policies`,
+    accessToken,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  );
+  return res.policies;
+}
+
+export async function apiFetchMyMapDownloadRequest(accessToken: string): Promise<{
+  hasRequested: boolean;
+  request: TileDownloadRequestItem | null;
+}> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{
+    hasRequested: boolean;
+    request: TileDownloadRequestItem | null;
+  }>(`${authBase}/api/maps/requests/me`, accessToken);
+}
+
+export async function apiFetchAdminMapRequests(
+  accessToken: string,
+): Promise<TileDownloadRequestItem[]> {
+  const { authBase } = getServiceBaseUrls();
+  const res = await requestAuthedJson<{ requests: TileDownloadRequestItem[] }>(
+    `${authBase}/api/admin/maps/requests`,
+    accessToken,
+  );
+  return res.requests;
+}
+
+export async function apiApproveAdminMapRequest(
+  accessToken: string,
+  requestId: string,
+): Promise<{
+  request: TileDownloadRequestItem;
+  alreadyCovered: boolean;
+  job?: MapDownloadJob;
+}> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{
+    request: TileDownloadRequestItem;
+    alreadyCovered: boolean;
+    job?: MapDownloadJob;
+  }>(`${authBase}/api/admin/maps/requests/${encodeURIComponent(requestId)}/approve`, accessToken, {
+    method: 'POST',
+  });
+}
+
+export async function apiDenyAdminMapRequest(
+  accessToken: string,
+  requestId: string,
+): Promise<{ request: TileDownloadRequestItem }> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<{ request: TileDownloadRequestItem }>(
+    `${authBase}/api/admin/maps/requests/${encodeURIComponent(requestId)}/deny`,
+    accessToken,
+    { method: 'POST' },
+  );
 }
 
 export async function apiRequestWorldOverviewDownload(
@@ -1042,6 +1145,32 @@ export async function apiDismissSystemUpdateError(
     `${authBase}/api/admin/system/update/dismiss`,
     accessToken,
     { method: 'POST' },
+  );
+}
+
+export async function apiScheduleSystemUpdate(
+  accessToken: string,
+  input: ScheduleSystemUpdateInput,
+): Promise<SystemUpdateStatus> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<SystemUpdateStatus>(
+    `${authBase}/api/admin/system/update/schedule`,
+    accessToken,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function apiCancelScheduledSystemUpdate(
+  accessToken: string,
+): Promise<SystemUpdateStatus> {
+  const { authBase } = getServiceBaseUrls();
+  return requestAuthedJson<SystemUpdateStatus>(
+    `${authBase}/api/admin/system/update/schedule`,
+    accessToken,
+    { method: 'DELETE' },
   );
 }
 

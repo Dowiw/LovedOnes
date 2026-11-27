@@ -9,6 +9,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import {
   createPool,
   enforceLocationQuotas,
+  getFeaturePolicies,
   resolveAuditContext,
   runMigrations,
 } from '@loved-ones/db';
@@ -211,6 +212,10 @@ export async function createRealtimeServer(options: RealtimeServiceOptions = {})
   const shareLinks = new ShareLinksModule({
     store: new PostgresShareLinkStore(pool),
     publicServerUrl: process.env.PUBLIC_SERVER_URL ?? '',
+    isShareLinksEnabled: async () => {
+      const policies = await getFeaturePolicies(pool);
+      return policies.shareLinksEnabled;
+    },
   });
 
   const resolveRequestOrigin = (request: {

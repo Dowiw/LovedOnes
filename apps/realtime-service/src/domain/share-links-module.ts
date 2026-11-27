@@ -117,15 +117,18 @@ export class ShareLinksModule {
   private readonly store: ShareLinkStore;
   private readonly publicServerUrl: string;
   private readonly now: () => number;
+  private readonly isShareLinksEnabled?: () => Promise<boolean>;
 
   constructor(deps: {
     store: ShareLinkStore;
     publicServerUrl?: string;
     now?: () => number;
+    isShareLinksEnabled?: () => Promise<boolean>;
   }) {
     this.store = deps.store;
     this.publicServerUrl = (deps.publicServerUrl ?? '').trim().replace(/\/$/, '');
     this.now = deps.now ?? (() => Date.now());
+    this.isShareLinksEnabled = deps.isShareLinksEnabled;
   }
 
   private resolveShareBaseUrl(requestOrigin?: string): string {
@@ -158,6 +161,10 @@ export class ShareLinksModule {
     rawInput: unknown,
     requestOrigin?: string,
   ): Promise<LocationShareLinkItem> {
+    if (this.isShareLinksEnabled && !(await this.isShareLinksEnabled())) {
+      throw new DomainError(403, 'Public share links are disabled by the Host Admin');
+    }
+
     const parsed = CreateLocationShareLinkSchema.safeParse(rawInput ?? {});
     if (!parsed.success) {
       throw new DomainError(400, 'Invalid share link payload', parsed.error.flatten());
