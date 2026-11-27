@@ -5,6 +5,7 @@ import {
   Camera,
   Check,
   ChevronDown,
+  ChevronRight,
   KeyRound,
   Loader2,
   Mail,
@@ -15,22 +16,9 @@ import {
   X,
 } from 'lucide-react';
 import {
-  DEFAULT_EXACT_HALO_COLOR,
-  DEFAULT_FUZZ_CIRCLE_COLOR,
-  hexToRgba,
   isSafeAvatarUrl,
-  isSafeHexColor,
   withMinDelay,
 } from '@loved-ones/shared';
-
-const COLOR_PRESETS = [
-  { label: 'Amber', hex: '#f59e0b' },
-  { label: 'Sky', hex: '#0ea5e9' },
-  { label: 'Emerald', hex: '#10b981' },
-  { label: 'Violet', hex: '#8b5cf6' },
-  { label: 'Rose', hex: '#f43f5e' },
-  { label: 'Ink', hex: '#18181b' },
-] as const;
 import {
   apiChangePassword,
   apiClearRecoveryEmail,
@@ -98,7 +86,6 @@ export function AccountSettingsModal({
   onOpenCustomize,
 }: AccountSettingsModalProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [pinColorsExpanded, setPinColorsExpanded] = useState(false);
   const [securityExpanded, setSecurityExpanded] = useState(false);
 
   const [username, setUsername] = useState(session.user.username);
@@ -457,158 +444,6 @@ export function AccountSettingsModal({
             />
           </div>
 
-          {/* Map Marker Halo & Fuzzed Area Circle Colors (Progressive Disclosure) */}
-          <div className="rounded-lg border border-zinc-200/80 bg-zinc-50/70 dark:border-zinc-800 dark:bg-zinc-950/60">
-            <button
-              type="button"
-              onClick={() => setPinColorsExpanded((v) => !v)}
-              className="flex w-full items-center justify-between gap-2 p-3.5 text-left"
-            >
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-200">
-                  Map Pin Appearance (Visible to Group)
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Your marker halo &amp; fuzzed area circle shared across devices.
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2.5">
-                <div
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-dashed"
-                  style={{
-                    backgroundColor: hexToRgba(
-                      isSafeHexColor(fuzzCircleColor)
-                        ? fuzzCircleColor
-                        : DEFAULT_FUZZ_CIRCLE_COLOR,
-                      0.18,
-                    ),
-                    borderColor: hexToRgba(
-                      isSafeHexColor(fuzzCircleColor)
-                        ? fuzzCircleColor
-                        : DEFAULT_FUZZ_CIRCLE_COLOR,
-                      0.7,
-                    ),
-                  }}
-                  title="Live fuzzed area & halo preview"
-                >
-                  <div
-                    className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-[9px] font-bold text-white"
-                    style={{
-                      boxShadow: `0 0 0 3px ${hexToRgba(
-                        isSafeHexColor(haloColor) ? haloColor : DEFAULT_EXACT_HALO_COLOR,
-                        0.45,
-                      )}`,
-                    }}
-                  >
-                    {(username || session.user.username).slice(0, 1).toUpperCase()}
-                  </div>
-                </div>
-                <ChevronDown
-                  className={`h-4 w-4 text-zinc-400 transition-transform ${
-                    pinColorsExpanded ? 'rotate-180 text-zinc-800 dark:text-zinc-200' : ''
-                  }`}
-                />
-              </div>
-            </button>
-
-            {pinColorsExpanded && (
-              <div className="lo-tab-enter space-y-3 border-t border-zinc-200/70 p-3.5 dark:border-zinc-800">
-
-            <div>
-              <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
-                <span>User Halo Color</span>
-                {haloColor && (
-                  <button
-                    type="button"
-                    onClick={() => setHaloColor(null)}
-                    className="text-[10px] text-zinc-500 underline hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {COLOR_PRESETS.map((preset) => {
-                  const selected = haloColor?.toLowerCase() === preset.hex;
-                  return (
-                    <button
-                      key={`halo-${preset.hex}`}
-                      type="button"
-                      title={preset.label}
-                      onClick={() => setHaloColor(preset.hex)}
-                      className={`h-6 w-6 rounded-full border-2 transition ${
-                        selected
-                          ? 'scale-110 border-zinc-950 ring-2 ring-zinc-900/20 dark:border-zinc-100 dark:ring-zinc-100/25'
-                          : 'border-white shadow-sm dark:border-zinc-800'
-                      }`}
-                      style={{ backgroundColor: preset.hex }}
-                    />
-                  );
-                })}
-                <label className="ml-1 inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700">
-                  <input
-                    type="color"
-                    aria-label="Custom halo color"
-                    value={isSafeHexColor(haloColor) ? haloColor : DEFAULT_EXACT_HALO_COLOR}
-                    onChange={(e) => setHaloColor(e.target.value.toLowerCase())}
-                    className="h-3.5 w-3.5 cursor-pointer border-0 bg-transparent p-0"
-                  />
-                  Custom
-                </label>
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
-                <span>Fuzzed Circle Color</span>
-                {fuzzCircleColor && (
-                  <button
-                    type="button"
-                    onClick={() => setFuzzCircleColor(null)}
-                    className="text-[10px] text-zinc-500 underline hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {COLOR_PRESETS.map((preset) => {
-                  const selected = fuzzCircleColor?.toLowerCase() === preset.hex;
-                  return (
-                    <button
-                      key={`fuzz-${preset.hex}`}
-                      type="button"
-                      title={preset.label}
-                      onClick={() => setFuzzCircleColor(preset.hex)}
-                      className={`h-6 w-6 rounded-full border-2 transition ${
-                        selected
-                          ? 'scale-110 border-zinc-950 ring-2 ring-zinc-900/20 dark:border-zinc-100 dark:ring-zinc-100/25'
-                          : 'border-white shadow-sm dark:border-zinc-800'
-                      }`}
-                      style={{ backgroundColor: preset.hex }}
-                    />
-                  );
-                })}
-                <label className="ml-1 inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700">
-                  <input
-                    type="color"
-                    aria-label="Custom fuzzed circle color"
-                    value={
-                      isSafeHexColor(fuzzCircleColor)
-                        ? fuzzCircleColor
-                        : DEFAULT_FUZZ_CIRCLE_COLOR
-                    }
-                    onChange={(e) => setFuzzCircleColor(e.target.value.toLowerCase())}
-                    className="h-3.5 w-3.5 cursor-pointer border-0 bg-transparent p-0"
-                  />
-                  Custom
-                </label>
-              </div>
-            </div>
-              </div>
-            )}
-          </div>
-
           {profileError && (
             <div className="lo-feedback-in rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-800/60 dark:bg-rose-950/50 dark:text-rose-300">
               {profileError}
@@ -649,11 +484,9 @@ export function AccountSettingsModal({
             >
               <span className="flex items-center gap-2 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
                 <Palette className="h-3.5 w-3.5 text-zinc-600 dark:text-zinc-300" />
-                Local Interface Theme, Hue &amp; Activity Colors
+                Personalized Theme &amp; Activity
               </span>
-              <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-                Customize →
-              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400 dark:text-zinc-500" />
             </button>
           </>
         )}

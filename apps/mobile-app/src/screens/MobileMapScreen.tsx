@@ -214,7 +214,6 @@ export function MobileMapScreen({
   );
   const [customizeModalOpen, setCustomizeModalOpen] = useState(false);
   const [customizeTab, setCustomizeTab] = useState<MobileCustomizeTab>('interface');
-  const [pinColorsExpanded, setPinColorsExpanded] = useState(false);
   const ui = useMemo(
     () => getOnboardingPalette(resolvedMapTheme, customization),
     [resolvedMapTheme, customization],
@@ -4516,12 +4515,14 @@ export function MobileMapScreen({
                   }}
                 >
                   <View style={styles.flexOne}>
-                    <Text style={styles.settingsSectionTitle}>Theme &amp; Activity Colors</Text>
+                    <Text style={styles.settingsSectionTitle}>
+                      Personalized Theme &amp; Activity
+                    </Text>
                     <Text style={styles.settingsHint}>
-                      Interface hue, activity color palettes &amp; place colors
+                      Interface mode, hue, activity palettes &amp; pin colors
                     </Text>
                   </View>
-                  <Text style={styles.menuRowAction}>Customize →</Text>
+                  <Text style={styles.menuRowAction}>→</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -5024,88 +5025,6 @@ export function MobileMapScreen({
 
                 <TouchableOpacity
                   style={styles.menuRow}
-                  onPress={() => setPinColorsExpanded((v) => !v)}
-                >
-                  <View style={styles.flexOne}>
-                    <Text style={styles.settingsSectionTitle}>
-                      Map Pin Halo &amp; Fuzz Ring
-                    </Text>
-                    <Text style={styles.settingsHint}>
-                      Group-visible marker accent ring ·{' '}
-                      {pinColorsExpanded ? 'Tap to hide' : 'Tap to customize'}
-                    </Text>
-                  </View>
-                  <Text style={styles.menuRowAction}>
-                    {pinColorsExpanded ? 'Hide ▲' : 'Edit ▼'}
-                  </Text>
-                </TouchableOpacity>
-
-                {pinColorsExpanded && (
-                  <View style={{ gap: 8, paddingTop: 4 }}>
-                <Text style={styles.fieldLabel}>User Halo Color</Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                  {MOBILE_COLOR_PRESETS.map((hex) => (
-                    <TouchableOpacity
-                      key={`mob-halo-${hex}`}
-                      onPress={() => setEditHaloColor(hex)}
-                      style={{
-                        width: 26,
-                        height: 26,
-                        borderRadius: 999,
-                        backgroundColor: hex,
-                        borderWidth: editHaloColor?.toLowerCase() === hex ? 3 : 1.5,
-                        borderColor:
-                          editHaloColor?.toLowerCase() === hex ? ui.ctaBg : ui.borderStrong,
-                      }}
-                    />
-                  ))}
-                  <TouchableOpacity
-                    style={styles.removePhotoBtn}
-                    onPress={() => setColorPickerTarget('halo')}
-                  >
-                    <Text style={styles.removePhotoText}>Custom</Text>
-                  </TouchableOpacity>
-                  {editHaloColor && (
-                    <TouchableOpacity onPress={() => setEditHaloColor(null)}>
-                      <Text style={styles.removePhotoText}>Reset</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                <Text style={styles.fieldLabel}>Fuzzed Circle Color</Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                  {MOBILE_COLOR_PRESETS.map((hex) => (
-                    <TouchableOpacity
-                      key={`mob-fuzz-${hex}`}
-                      onPress={() => setEditFuzzCircleColor(hex)}
-                      style={{
-                        width: 26,
-                        height: 26,
-                        borderRadius: 999,
-                        backgroundColor: hex,
-                        borderWidth: editFuzzCircleColor?.toLowerCase() === hex ? 3 : 1.5,
-                        borderColor:
-                          editFuzzCircleColor?.toLowerCase() === hex ? ui.ctaBg : ui.borderStrong,
-                      }}
-                    />
-                  ))}
-                  <TouchableOpacity
-                    style={styles.removePhotoBtn}
-                    onPress={() => setColorPickerTarget('fuzz')}
-                  >
-                    <Text style={styles.removePhotoText}>Custom</Text>
-                  </TouchableOpacity>
-                  {editFuzzCircleColor && (
-                    <TouchableOpacity onPress={() => setEditFuzzCircleColor(null)}>
-                      <Text style={styles.removePhotoText}>Reset</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-                  </View>
-                )}
-
-                <TouchableOpacity
-                  style={styles.menuRow}
                   onPress={() => {
                     setAccountOpen(false);
                     setCustomizeTab('interface');
@@ -5113,12 +5032,14 @@ export function MobileMapScreen({
                   }}
                 >
                   <View style={styles.flexOne}>
-                    <Text style={styles.settingsSectionTitle}>App Theme &amp; Activity Colors</Text>
+                    <Text style={styles.settingsSectionTitle}>
+                      Personalized Theme &amp; Activity
+                    </Text>
                     <Text style={styles.settingsHint}>
-                      Personalize interface hue &amp; trail palettes (local cache)
+                      Map theme, interface hue, activity palettes &amp; pin appearance
                     </Text>
                   </View>
-                  <Text style={styles.menuRowAction}>Open →</Text>
+                  <Text style={styles.menuRowAction}>→</Text>
                 </TouchableOpacity>
 
                 {accountError && <Text style={styles.errorText}>{accountError}</Text>}
@@ -5294,8 +5215,59 @@ export function MobileMapScreen({
         initialTab={customizeTab}
         username={userProfile?.username ?? config.user?.username ?? 'You'}
         scheme={resolvedMapTheme}
+        mapThemePreference={mapThemePreference}
         fonts={fonts}
         customization={customization}
+        haloColor={editHaloColor}
+        fuzzCircleColor={editFuzzCircleColor}
+        onChangeMapTheme={(pref) => {
+          setMapThemePreference(pref);
+          onThemePreferenceChange?.(pref);
+          void saveMapThemePreference(pref).catch(() => {});
+        }}
+        onSavePinAppearance={async (nextHalo, nextFuzz) => {
+          if (!serverUrl || !accessToken || !userProfile) return;
+          const res = await authedFetch('/api/auth/me', {
+            method: 'PATCH',
+            body: JSON.stringify({
+              username: userProfile.username,
+              email: userProfile.email,
+              avatarUrl: userProfile.avatarUrl ?? null,
+              haloColor: nextHalo,
+              fuzzCircleColor: nextFuzz,
+            }),
+          });
+          const body = (await res.json()) as {
+            error?: string;
+            accessToken?: string;
+            refreshToken?: string;
+            user?: MobileStoredConfig['user'];
+          };
+          if (!res.ok || !body.user) {
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
+          setEditHaloColor(body.user.haloColor ?? null);
+          setEditFuzzCircleColor(body.user.fuzzCircleColor ?? null);
+          setUserProfile(body.user);
+          if (body.accessToken) setAccessToken(body.accessToken);
+          if (body.refreshToken) setRefreshToken(body.refreshToken);
+          await saveStoredConfig({
+            accessToken: body.accessToken ?? accessToken,
+            refreshToken: body.refreshToken ?? refreshToken,
+            user: body.user,
+          });
+          setLocations((prev) =>
+            prev.map((loc) =>
+              loc.userId === body.user!.id
+                ? {
+                    ...loc,
+                    haloColor: body.user!.haloColor ?? null,
+                    fuzzCircleColor: body.user!.fuzzCircleColor ?? null,
+                  }
+                : loc,
+            ),
+          );
+        }}
         onUpdate={updateCustomization}
         onResetAll={resetCustomization}
         onClose={() => setCustomizeModalOpen(false)}

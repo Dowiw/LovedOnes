@@ -3593,7 +3593,7 @@ export default function HomePage() {
               >
                 <span className="flex items-center gap-2 text-xs font-medium text-zinc-700 dark:text-zinc-300">
                   <Palette className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
-                  Theme &amp; Activity Colors
+                  Personalized Theme &amp; Activity
                 </span>
                 <span
                   className="h-3 w-3 rounded-full border border-white/70 shadow-sm dark:border-zinc-700"
@@ -5055,8 +5055,25 @@ export default function HomePage() {
         open={customizeOpen}
         initialTab={customizeTab}
         username={session.user.username}
+        session={session}
+        mapThemePreference={mapThemePreference}
         resolvedTheme={resolvedMapTheme}
         customization={customization}
+        onChangeMapTheme={handleChangeMapTheme}
+        onSessionUpdated={(next) => {
+          setSession(next);
+          setLocations((prev) =>
+            prev.map((loc) =>
+              loc.userId === next.user.id
+                ? {
+                    ...loc,
+                    haloColor: next.user.haloColor ?? null,
+                    fuzzCircleColor: next.user.fuzzCircleColor ?? null,
+                  }
+                : loc,
+            ),
+          );
+        }}
         onUpdate={updateCustomization}
         onResetAll={resetCustomization}
         onClose={() => setCustomizeOpen(false)}

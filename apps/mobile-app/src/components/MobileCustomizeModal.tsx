@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Modal,
   ScrollView,
   StyleSheet,
@@ -10,10 +11,13 @@ import {
 import {
   ACTIVITY_MODE_LABELS,
   ACTIVITY_PALETTE_GROUPS,
+  DEFAULT_EXACT_HALO_COLOR,
+  DEFAULT_FUZZ_CIRCLE_COLOR,
   DEFAULT_USER_CUSTOMIZATION,
   hexToRgba,
   hslToHex,
   INTERFACE_THEME_PRESETS,
+  isSafeHexColor,
   resolveActivityColors,
   resolveInterfaceThemeTokens,
   type ActivityPaletteGroupId,
@@ -29,10 +33,12 @@ import { ColorPickerSheet } from './ColorPickerSheet';
 import {
   getOnboardingPalette,
   hexToHsv,
+  ONBOARDING_COLOR_PRESETS,
   type GeometricFontFamily,
   type OnboardingPalette,
 } from '../services/onboardingTheme';
 import { useSafeAreaInsets } from '../services/safeArea';
+import type { MobileMapThemePreference } from '../services/secureConfig';
 
 export type MobileCustomizeTab = 'interface' | 'map';
 
@@ -41,8 +47,13 @@ interface MobileCustomizeModalProps {
   initialTab?: MobileCustomizeTab;
   username: string;
   scheme: 'light' | 'dark';
+  mapThemePreference: MobileMapThemePreference;
   fonts: GeometricFontFamily;
   customization: UserCustomization;
+  haloColor: string | null;
+  fuzzCircleColor: string | null;
+  onChangeMapTheme: (pref: MobileMapThemePreference) => void;
+  onSavePinAppearance: (halo: string | null, fuzz: string | null) => Promise<void>;
   onUpdate: (updater: (prev: UserCustomization) => UserCustomization) => void;
   onResetAll: () => void;
   onClose: () => void;
@@ -62,15 +73,22 @@ type PickerTarget =
   | { kind: 'activity'; mode: TrailActivityMode; hex: string }
   | { kind: 'group-place'; hex: string }
   | { kind: 'private-place'; hex: string }
-  | { kind: 'fallback-trail'; hex: string };
+  | { kind: 'fallback-trail'; hex: string }
+  | { kind: 'pin-halo'; hex: string }
+  | { kind: 'pin-fuzz'; hex: string };
 
 export function MobileCustomizeModal({
   visible,
   initialTab = 'interface',
   username,
   scheme,
+  mapThemePreference,
   fonts,
   customization,
+  haloColor,
+  fuzzCircleColor,
+  onChangeMapTheme,
+  onSavePinAppearance,
   onUpdate,
   onResetAll,
   onClose,
@@ -79,13 +97,23 @@ export function MobileCustomizeModal({
   const [activeTab, setActiveTab] = useState<MobileCustomizeTab>(initialTab);
   const [visualStyleExpanded, setVisualStyleExpanded] = useState(false);
   const [mapDetailsExpanded, setMapDetailsExpanded] = useState(false);
+  const [pinExpanded, setPinExpanded] = useState(false);
+  const [draftHalo, setDraftHalo] = useState<string | null>(haloColor);
+  const [draftFuzz, setDraftFuzz] = useState<string | null>(fuzzCircleColor);
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinSaved, setPinSaved] = useState<string | null>(null);
+  const [pinError, setPinError] = useState<string | null>(null);
   const [pickerTarget, setPickerTarget] = useState<PickerTarget | null>(null);
 
   useEffect(() => {
     if (visible) {
       setActiveTab(initialTab);
+      setDraftHalo(haloColor);
+      setDraftFuzz(fuzzCircleColor);
+      setPinSaved(null);
+      setPinError(null);
     }
-  }, [visible, initialTab]);
+  }, [visible, initialTab, haloColor, fuzzCircleColor]);
 
   const ui = useMemo(() => getOnboardingPalette(scheme, customization), [scheme, customization]);
   const tokens = useMemo(
@@ -216,8 +244,26 @@ export function MobileCustomizeModal({
         ...prev,
         mapAccents: { ...prev.mapAccents, fallbackTrailColor: clean },
       }));
+    } else if (pickerTarget.kind === 'pin-halo') {
+      setDraftHalo(clean);
+    } else if (pickerTarget.kind === 'pin-fuzz') {
+      setDraftFuzz(clean);
     }
     setPickerTarget(null);
+  }
+
+  async function handleSavePins() {
+    setPinError(null);
+    setPinSaved(null);
+    setPinBusy(true);
+    try {
+      await onSavePinAppearance(draftHalo, draftFuzz);
+      setPinSaved('Map pin colors saved');
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message : 'Unable to save map pin colors');
+    } finally {
+      setPinBusy(false);
+    }
   }
 
   return (
@@ -230,7 +276,9 @@ export function MobileCustomizeModal({
       >
         <View style={s.header}>
           <View style={{ flex: 1 }}>
-            <Text style={[s.title, { fontFamily: fonts.display }]}>Theme &amp; Colors</Text>
+            <Text style={[s.title, { fontFamily: fonts.display }]}>
+              Personalized Theme &amp; Activity
+            </Text>
             <Text style={s.subtitle}>Saved locally for @{username} · Instant preview</Text>
           </View>
           <TouchableOpacity style={s.doneBtn} onPress={onClose}>
@@ -301,6 +349,38 @@ export function MobileCustomizeModal({
                     >
                       Chat
                     </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Map & Interface Mode (System / Light / Dark) */}
+              <View style={s.card}>
+                <View style={s.sectionRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.sectionHeading}>Map &amp; Interface Mode</Text>
+                    <Text style={s.hintText}>Light, Dark, or follow system</Text>
+                  </View>
+                  <View style={s.segSmall}>
+                    {(
+                      [
+                        ['system', 'System'],
+                        ['light', 'Light'],
+                        ['dark', 'Dark'],
+                      ] as const
+                    ).map(([pref, label]) => {
+                      const active = mapThemePreference === pref;
+                      return (
+                        <TouchableOpacity
+                          key={pref}
+                          style={[s.segSmallBtn, active && s.segSmallBtnActive]}
+                          onPress={() => onChangeMapTheme(pref)}
+                        >
+                          <Text style={[s.segSmallText, active && s.segSmallTextActive]}>
+                            {label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
                 </View>
               </View>
@@ -673,6 +753,119 @@ export function MobileCustomizeModal({
                         })}
                       </View>
                     </View>
+                  </View>
+                )}
+              </View>
+
+              {/* Map Pin Appearance (Visible to Group) */}
+              <View style={s.card}>
+                <TouchableOpacity
+                  style={s.sectionRow}
+                  onPress={() => setPinExpanded((v) => !v)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.sectionHeading}>Map Pin Appearance (Visible to Group)</Text>
+                    <Text style={s.hintText}>Your marker halo &amp; fuzzed area ring</Text>
+                  </View>
+                  <Text style={s.expandText}>{pinExpanded ? 'Hide ▲' : 'Show ▼'}</Text>
+                </TouchableOpacity>
+
+                {pinExpanded && (
+                  <View style={s.disclosureBody}>
+                    <View style={s.sectionRow}>
+                      <Text style={s.fieldLabel}>User Halo Color</Text>
+                      {draftHalo && (
+                        <TouchableOpacity onPress={() => setDraftHalo(null)}>
+                          <Text style={s.hintText}>Reset</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    <View style={s.dotsRow}>
+                      {ONBOARDING_COLOR_PRESETS.map((preset) => (
+                        <TouchableOpacity
+                          key={`pin-halo-${preset.hex}`}
+                          onPress={() => setDraftHalo(preset.hex)}
+                          style={{
+                            width: 24,
+                            height: 24,
+                            borderRadius: 999,
+                            backgroundColor: preset.hex,
+                            borderWidth: draftHalo?.toLowerCase() === preset.hex ? 3 : 1.5,
+                            borderColor:
+                              draftHalo?.toLowerCase() === preset.hex ? ui.ctaBg : ui.borderStrong,
+                          }}
+                        />
+                      ))}
+                      <TouchableOpacity
+                        style={s.miniPill}
+                        onPress={() =>
+                          setPickerTarget({
+                            kind: 'pin-halo',
+                            hex: isSafeHexColor(draftHalo) ? draftHalo : DEFAULT_EXACT_HALO_COLOR,
+                          })
+                        }
+                      >
+                        <Text style={s.miniPillText}>Custom</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={s.sectionRow}>
+                      <Text style={s.fieldLabel}>Fuzzed Circle Color</Text>
+                      {draftFuzz && (
+                        <TouchableOpacity onPress={() => setDraftFuzz(null)}>
+                          <Text style={s.hintText}>Reset</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    <View style={s.dotsRow}>
+                      {ONBOARDING_COLOR_PRESETS.map((preset) => (
+                        <TouchableOpacity
+                          key={`pin-fuzz-${preset.hex}`}
+                          onPress={() => setDraftFuzz(preset.hex)}
+                          style={{
+                            width: 24,
+                            height: 24,
+                            borderRadius: 999,
+                            backgroundColor: preset.hex,
+                            borderWidth: draftFuzz?.toLowerCase() === preset.hex ? 3 : 1.5,
+                            borderColor:
+                              draftFuzz?.toLowerCase() === preset.hex ? ui.ctaBg : ui.borderStrong,
+                          }}
+                        />
+                      ))}
+                      <TouchableOpacity
+                        style={s.miniPill}
+                        onPress={() =>
+                          setPickerTarget({
+                            kind: 'pin-fuzz',
+                            hex: isSafeHexColor(draftFuzz) ? draftFuzz : DEFAULT_FUZZ_CIRCLE_COLOR,
+                          })
+                        }
+                      >
+                        <Text style={s.miniPillText}>Custom</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {pinError ? <Text style={s.resetAllText}>{pinError}</Text> : null}
+                    {pinSaved ? (
+                      <Text style={{ color: ui.badgeSuccessText, fontSize: 11, fontWeight: '600' }}>
+                        {pinSaved}
+                      </Text>
+                    ) : null}
+
+                    <TouchableOpacity
+                      style={[
+                        s.tabBtnActive,
+                        { borderRadius: 10, paddingVertical: 9, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+                      ]}
+                      disabled={pinBusy}
+                      onPress={() => void handleSavePins()}
+                    >
+                      {pinBusy && <ActivityIndicator size="small" color={ui.ctaText} />}
+                      <Text style={s.tabBtnTextActive}>
+                        {pinBusy ? 'Saving Pin Colors...' : 'Save Pin Colors'}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 )}
               </View>
