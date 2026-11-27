@@ -9,4 +9,5 @@ export * from './presence.js';
 export * from './viewport.js';
 export * from './solar.js';
 export * from './groupCache.js';
+export * from './customization.js';
 export * from './data/world-land-110m.js';

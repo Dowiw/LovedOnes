@@ -1,12 +1,16 @@
 import {
+  DEFAULT_USER_CUSTOMIZATION,
   parseSavedMapViewport,
+  parseUserCustomization,
   QrInvitePayload,
   QrInvitePayloadSchema,
   RegistrationRequestStatus,
   SavedMapViewport,
   serializeSavedMapViewport,
   SystemRole,
+  type UserCustomization,
 } from '@loved-ones/shared';
+import * as SecureStore from 'expo-secure-store';
 import { formatUserError } from './errorFormatter';
 
 export interface MobileUser {
@@ -81,6 +85,7 @@ const KEYS = {
   adaptiveTrackingState: 'lovedones.adaptiveTrackingState',
   savedMapViewport: 'lovedones.savedMapViewport',
   showTerminator: 'lovedones.showTerminator',
+  userCustomizationPrefix: 'lovedones.customPrefs.v1.',
 } as const;
 
 export type MobileMapThemePreference = 'system' | 'light' | 'dark';
@@ -124,6 +129,40 @@ export async function saveShowTerminatorPreference(
 ): Promise<void> {
   const s = store ?? (await getExpoSecureStore());
   await s.setItemAsync(KEYS.showTerminator, enabled ? 'true' : 'false');
+}
+
+function getMobileCustomizationKey(userId: string): string {
+  const safeId = userId.trim().replace(/[^a-zA-Z0-9._-]/g, '_') || 'guest';
+  return `${KEYS.userCustomizationPrefix}${safeId}`;
+}
+
+export async function getUserCustomization(
+  userId: string | null | undefined,
+  store?: SecureKeyValueStore,
+): Promise<UserCustomization> {
+  if (!userId) return DEFAULT_USER_CUSTOMIZATION;
+  const s = store ?? (await getExpoSecureStore());
+  const raw = await s.getItemAsync(getMobileCustomizationKey(userId));
+  return parseUserCustomization(raw);
+}
+
+export async function saveUserCustomization(
+  userId: string,
+  customization: UserCustomization,
+  store?: SecureKeyValueStore,
+): Promise<UserCustomization> {
+  const safe = parseUserCustomization(JSON.stringify(customization));
+  const s = store ?? (await getExpoSecureStore());
+  await s.setItemAsync(getMobileCustomizationKey(userId), JSON.stringify(safe));
+  return safe;
+}
+
+export async function clearUserCustomization(
+  userId: string,
+  store?: SecureKeyValueStore,
+): Promise<void> {
+  const s = store ?? (await getExpoSecureStore());
+  await s.deleteItemAsync(getMobileCustomizationKey(userId));
 }
 
 /**

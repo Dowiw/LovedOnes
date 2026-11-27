@@ -13,6 +13,7 @@ import {
   formatStayDuration,
   TIMELAPSE_SPEED_OPTIONS,
   TRAIL_ACTIVITY_META,
+  type ActivityColorsMap,
   type TimelapseFrame,
   type TimelapseSpeedOption,
   type TimelapseTimeline,
@@ -84,6 +85,8 @@ interface MobileTrailsTabContentProps {
   meta: TrailsResponseMeta | null;
   busy: boolean;
   message: string | null;
+  activityColors?: ActivityColorsMap;
+  onOpenCustomizeColors?: () => void;
 }
 
 const SORT_OPTIONS: Array<{ key: TrailTripSort; label: string }> = [
@@ -118,6 +121,8 @@ export function MobileTrailsTabContent({
   meta,
   busy,
   message,
+  activityColors,
+  onOpenCustomizeColors,
 }: MobileTrailsTabContentProps) {
   const s = useMemo(() => createStyles(ui, isDark), [ui, isDark]);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -296,11 +301,22 @@ export function MobileTrailsTabContent({
                 (key) => (
                   <View key={key} style={s.legendItem}>
                     <View
-                      style={[s.legendDot, { backgroundColor: TRAIL_ACTIVITY_META[key].color }]}
+                      style={[
+                        s.legendDot,
+                        { backgroundColor: activityColors?.[key] ?? TRAIL_ACTIVITY_META[key].color },
+                      ]}
                     />
                     <Text style={s.legendText}>{TRAIL_ACTIVITY_META[key].shortLabel}</Text>
                   </View>
                 ),
+              )}
+              {onOpenCustomizeColors && (
+                <TouchableOpacity
+                  style={[s.smallPill, { marginLeft: 'auto' }]}
+                  onPress={onOpenCustomizeColors}
+                >
+                  <Text style={s.smallPillText}>Colors</Text>
+                </TouchableOpacity>
               )}
             </View>
           )}
@@ -390,7 +406,15 @@ export function MobileTrailsTabContent({
                 <View style={s.tripBadges}>
                   {actMeta && (
                     <View style={s.actBadge}>
-                      <View style={[s.legendDot, { backgroundColor: actMeta.color }]} />
+                      <View
+                      style={[
+                        s.legendDot,
+                        {
+                          backgroundColor:
+                            activityColors?.[actMeta.mode] ?? actMeta.color,
+                        },
+                      ]}
+                    />
                       <Text style={[s.actBadgeText, isSelected && s.tripTextActive]}>
                         {actMeta.shortLabel}
                       </Text>

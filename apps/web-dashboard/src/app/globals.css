@@ -344,3 +344,95 @@ html.dark .lo-popup-maps-secondary,
   border-color: #3f3f46 !important;
   color: #e4e4e7 !important;
 }
+
+/* Per-user custom interface theme, corner style, density, glass blur, and motion overrides */
+html[data-lo-custom-theme='on'] body {
+  background-color: var(--lo-canvas-wash);
+}
+
+html[data-lo-custom-theme='on'] [class*='bg-white/95'],
+html[data-lo-custom-theme='on'] [class*='bg-white/90'] {
+  background-color: var(--lo-surface-wash) !important;
+  border-color: var(--lo-border-wash) !important;
+}
+
+html[data-lo-custom-theme='on'] button.bg-zinc-950,
+html[data-lo-custom-theme='on'] a.bg-zinc-950,
+html[data-lo-custom-theme='on'] .lo-accent-fill,
+html.dark[data-lo-custom-theme='on'] button[class*='dark:bg-zinc-100'],
+html.dark[data-lo-custom-theme='on'] a[class*='dark:bg-zinc-100'] {
+  background-color: var(--lo-accent) !important;
+  color: var(--lo-accent-fg) !important;
+  border-color: var(--lo-accent-border) !important;
+}
+
+html[data-lo-custom-theme='on'] button.bg-zinc-950:hover:not(:disabled),
+html[data-lo-custom-theme='on'] a.bg-zinc-950:hover,
+html[data-lo-custom-theme='on'] .lo-accent-fill:hover:not(:disabled),
+html.dark[data-lo-custom-theme='on'] button[class*='dark:bg-zinc-100']:hover:not(:disabled),
+html.dark[data-lo-custom-theme='on'] a[class*='dark:bg-zinc-100']:hover {
+  background-color: var(--lo-accent-hover) !important;
+}
+
+html[data-lo-custom-theme='on'] .lo-chat-mine {
+  background-color: var(--lo-accent) !important;
+  color: var(--lo-accent-fg) !important;
+}
+
+html[data-lo-custom-theme='on'][data-lo-chat-bubble='tinted'] .lo-chat-mine {
+  background-color: var(--lo-accent-soft) !important;
+  color: var(--lo-accent-soft-text) !important;
+  border: 1px solid var(--lo-accent-border) !important;
+}
+
+html[data-lo-custom-theme='off'][data-lo-chat-bubble='tinted'] .lo-chat-mine {
+  background-color: var(--lo-accent-soft) !important;
+  color: var(--lo-accent-soft-text) !important;
+  border: 1px solid var(--lo-accent-border) !important;
+}
+
+html[data-lo-custom-theme='on'] input[type='checkbox'],
+html[data-lo-custom-theme='on'] input[type='range'] {
+  accent-color: var(--lo-accent);
+}
+
+html[data-lo-corner='crisp'] .rounded-xl,
+html[data-lo-corner='crisp'] .rounded-2xl {
+  border-radius: 8px !important;
+}
+
+html[data-lo-corner='soft'] .rounded-xl {
+  border-radius: 18px !important;
+}
+
+html[data-lo-corner='soft'] .rounded-2xl {
+  border-radius: 22px !important;
+}
+
+html[data-lo-glass='off'] [class*='backdrop-blur'] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html[data-lo-density='compact'] .lo-density-pad {
+  padding: 0.5rem 0.625rem;
+}
+
+html[data-lo-reduced-motion='on'] .lo-float-in,
+html[data-lo-reduced-motion='on'] .lo-modal-in,
+html[data-lo-reduced-motion='on'] .lo-backdrop-in,
+html[data-lo-reduced-motion='on'] .lo-tab-enter,
+html[data-lo-reduced-motion='on'] .lo-pin-drop,
+html[data-lo-reduced-motion='on'] .lo-bob,
+html[data-lo-reduced-motion='on'] .lo-orb-drift,
+html[data-lo-reduced-motion='on'] .lo-feedback-in,
+html[data-lo-reduced-motion='on'] .lo-progress-bar {
+  animation: none !important;
+}
+
+html[data-lo-reduced-motion='on'] .lo-press,
+html[data-lo-reduced-motion='on'] .lo-press:hover:not(:disabled),
+html[data-lo-reduced-motion='on'] .lo-press:active:not(:disabled) {
+  transition: none !important;
+  transform: none !important;
+}

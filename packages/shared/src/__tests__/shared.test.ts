@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  ACTIVITY_PALETTE_GROUPS,
   applyPrivacyFuzzing,
   averageNearbyTrailPings,
   buildExternalMapsUrls,
@@ -16,14 +17,18 @@ import {
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
   CreateRegistrationRequestSchema,
+  DEFAULT_USER_CUSTOMIZATION,
   detectExternalMapPlatform,
   evaluateClientVersion,
   findCoveringRegions,
   formatCountdownRemaining,
+  getUserCustomizationStorageKey,
   GroupSnapshotCache,
   haversineMeters,
   HeartbeatInputSchema,
   hexToRgba,
+  hslToHex,
+  INTERFACE_THEME_PRESETS,
   isPointCoveredByRegions,
   isRegionOperational,
   isSafeAvatarUrl,
@@ -42,8 +47,13 @@ import {
   parseBoundingBox,
   parseInviteInput,
   parseSavedMapViewport,
+  parseUserCustomization,
+  pickContrastForeground,
   PublicLoginConfigSchema,
   QrInvitePayloadSchema,
+  resolveActivityColors,
+  resolveFallbackTrailColor,
+  resolveInterfaceThemeTokens,
   resolveMemberPresenceStatus,
   resolveSegmentActivityMode,
   resolveTrailPointDetails,
@@ -1838,6 +1848,45 @@ describe('@loved-ones/shared', () => {
     expect(exactResumeFrame.markers[0].isFuzzed).toBe(false);
     expect(exactResumeFrame.markers[0].longitude).toBeCloseTo(13.42, 5);
     expect(exactResumeFrame.markers[0].latitude).toBeCloseTo(52.53, 5);
+  });
+
+  it('resolves interface presets, custom HSL hues, contrast foregrounds, and activity palette groups', () => {
+    expect(INTERFACE_THEME_PRESETS.map((p) => p.id)).toContain('pink');
+    expect(INTERFACE_THEME_PRESETS.map((p) => p.id)).toContain('navy');
+    expect(INTERFACE_THEME_PRESETS.map((p) => p.id)).toContain('sky');
+    expect(ACTIVITY_PALETTE_GROUPS.length).toBeGreaterThanOrEqual(5);
+
+    expect(hslToHex(0, 100, 50)).toBe('#ff0000');
+    expect(pickContrastForeground('#1e3a8a')).toBe('#ffffff');
+    expect(pickContrastForeground('#7dd3fc')).toBe('#09090b');
+
+    const pinkPrefs = parseUserCustomization(
+      JSON.stringify({ themeMode: 'preset', interfacePreset: 'pink', surfaceWash: 'subtle' }),
+    );
+    const pinkLight = resolveInterfaceThemeTokens(pinkPrefs, 'light');
+    expect(pinkLight.isDefaultMonochrome).toBe(false);
+    expect(pinkLight.accentBg).toBe('#ec4899');
+    expect(pinkLight.surfaceBg).not.toBe('rgba(255, 255, 255, 0.95)');
+
+    const customPrefs = parseUserCustomization(
+      JSON.stringify({
+        themeMode: 'custom',
+        customInterface: { hue: 210, saturation: 80, lightness: 45 },
+        surfaceWash: 'off',
+        activityPaletteId: 'colorblind',
+      }),
+    );
+    const customTokens = resolveInterfaceThemeTokens(customPrefs, 'light');
+    expect(customTokens.isDefaultMonochrome).toBe(false);
+    expect(customTokens.accentBg).toBe(hslToHex(210, 80, 45));
+    expect(customTokens.canvasBg).toBe('#f4f4f5');
+    expect(resolveActivityColors(customPrefs).walking).toBe('#009e73');
+    expect(resolveFallbackTrailColor(customPrefs, customTokens, 'light')).toBe(
+      customTokens.accentBg,
+    );
+
+    expect(parseUserCustomization('bad-json')).toEqual(DEFAULT_USER_CUSTOMIZATION);
+    expect(getUserCustomizationStorageKey('user-42')).toBe('lovedones:custom-prefs:v1:user-42');
   });
 
   it('tracks per-group cached vs uncached sections cleanly in GroupSnapshotCache', () => {
