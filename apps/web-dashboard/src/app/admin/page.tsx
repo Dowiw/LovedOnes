@@ -43,6 +43,7 @@ import {
   ResourceAllocationPanels,
 } from '@/components/AdminResourcePanels';
 import { LiveLogTerminal } from '@/components/LiveLogTerminal';
+import { LoadingInlineBadge, LoadingListSkeleton } from '@/components/LoadingSkeletons';
 import { NavBar } from '@/components/NavBar';
 import { QrInvitePanel } from '@/components/QrInviteModal';
 import {
@@ -120,6 +121,8 @@ async function resizeLoginBackgroundFile(file: File): Promise<string> {
 export default function AdminDashboardPage() {
   const [session, setSession] = useState<StoredSession | null>(null);
   const [telemetry, setTelemetry] = useState<SystemTelemetry | null>(null);
+  const [telemetryLoading, setTelemetryLoading] = useState(true);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
   const [mapJobs, setMapJobs] = useState<MapDownloadJob[]>([]);
@@ -155,7 +158,8 @@ export default function AdminDashboardPage() {
     return () => window.removeEventListener(ACCOUNT_REMOVED_EVENT, onRemoved);
   }, []);
 
-  const refreshData = useCallback(async (token: string) => {
+  const refreshData = useCallback(async (token: string, isManual = false) => {
+    if (isManual) setManualRefreshing(true);
     try {
       const [stats, grpList, regionsData, jobs, sysUpdate, regReqs, appearance] = await Promise.all([
         apiFetchTelemetry(token),
@@ -183,6 +187,9 @@ export default function AdminDashboardPage() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load telemetry');
+    } finally {
+      setTelemetryLoading(false);
+      if (isManual) setManualRefreshing(false);
     }
   }, []);
 
@@ -408,23 +415,31 @@ export default function AdminDashboardPage() {
 
       <main className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
-              System Telemetry
-            </h1>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Live 5s updates · Storage footprint · Per-account compute &amp; sockets
-            </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
+                  System Telemetry
+                </h1>
+                {telemetry === null && telemetryLoading && (
+                  <LoadingInlineBadge label="Loading telemetry…" />
+                )}
+              </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Live 5s updates · Storage footprint · Per-account compute &amp; sockets
+              </p>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void refreshData(session.accessToken)}
-              className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-4 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:text-white"
+              disabled={manualRefreshing}
+              onClick={() => void refreshData(session.accessToken, true)}
+              className="lo-press flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-4 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:text-white"
             >
-              <RefreshCw className="h-3.5 w-3.5" />
-              Refresh
+              <RefreshCw className={`h-3.5 w-3.5 ${manualRefreshing ? 'animate-spin' : ''}`} />
+              {manualRefreshing ? 'Refreshing…' : 'Refresh'}
             </button>
             <button
               type="button"
@@ -485,7 +500,11 @@ export default function AdminDashboardPage() {
             </span>
           </div>
 
-          {registrationRequests.length === 0 ? (
+          {telemetryLoading && telemetry === null && registrationRequests.length === 0 ? (
+            <div className="p-4">
+              <LoadingListSkeleton rows={2} variant="people" label="Checking account requests…" />
+            </div>
+          ) : registrationRequests.length === 0 ? (
             <div className="px-5 py-5 text-xs text-zinc-500 dark:text-zinc-400">
               No pending or recent account requests yet. New website and mobile account requests
               appear here with a 24-hour countdown timer.
@@ -946,9 +965,13 @@ export default function AdminDashboardPage() {
               <HardDrive className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
             </div>
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
-              {telemetry ? formatBytes(telemetry.logStorageBytes) : '—'}
+              {telemetry ? (
+                formatBytes(telemetry.logStorageBytes)
+              ) : (
+                <span className="inline-block h-7 w-24 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              )}
             </div>
-            <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+            <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-50">
               Limit: {telemetry ? formatBytes(telemetry.maxLogStorageBytes) : '—'} (
               {telemetry?.logStoragePercent ?? 0}%)
             </div>
@@ -960,7 +983,11 @@ export default function AdminDashboardPage() {
               <Database className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
             </div>
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
-              {telemetry ? formatBytes(telemetry.databaseBytes) : '—'}
+              {telemetry ? (
+                formatBytes(telemetry.databaseBytes)
+              ) : (
+                <span className="inline-block h-7 w-24 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              )}
             </div>
             <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
               {telemetry?.totalLocationPoints.toLocaleString() ?? 0} stored pings
@@ -973,7 +1000,11 @@ export default function AdminDashboardPage() {
               <Radio className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
             </div>
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
-              {telemetry?.totalActiveSockets ?? 0}
+              {telemetry ? (
+                telemetry.totalActiveSockets
+              ) : (
+                <span className="inline-block h-7 w-12 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              )}
             </div>
             <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
               Open live WebSocket clients
@@ -986,7 +1017,11 @@ export default function AdminDashboardPage() {
               <Cpu className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
             </div>
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">
-              {telemetry?.users.length ?? 0}
+              {telemetry ? (
+                telemetry.users.length
+              ) : (
+                <span className="inline-block h-7 w-12 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              )}
             </div>
             <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
               Sorted by recent compute
@@ -1021,6 +1056,17 @@ export default function AdminDashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {!telemetry && telemetryLoading && (
+                  <tr>
+                    <td colSpan={10} className="px-5 py-6">
+                      <LoadingListSkeleton
+                        rows={3}
+                        variant="compact"
+                        label="Loading account resource usage…"
+                      />
+                    </td>
+                  </tr>
+                )}
                 {telemetry?.users.map((u) => {
                   const isSelf = u.userId === session.user.id;
                   const confirming = confirmRemoveUserId === u.userId;

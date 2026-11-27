@@ -331,10 +331,16 @@ export function MobileTrailsTabContent({
       {/* Status / Sampled Notice / Focused Reset */}
       <View style={s.statusRow}>
         <Text style={s.statusHeading}>
-          Trips ({trips.length}){meta?.truncated ? ' · Sampled' : ''}
+          {busy ? 'Trips (…)' : `Trips (${trips.length})`}
+          {meta?.truncated ? ' · Sampled' : ''}
         </Text>
         <View style={s.statusRight}>
-          {busy && <ActivityIndicator size="small" color={ui.ink} />}
+          {busy && (
+            <View style={s.busyInline}>
+              <ActivityIndicator size="small" color={ui.ink} />
+              <Text style={s.busyInlineText}>Loading trails…</Text>
+            </View>
+          )}
           {focusedTrip && (
             <TouchableOpacity style={s.resetPill} onPress={() => onSelectTrip(null)}>
               <Text style={s.resetPillText}>Full range ✕</Text>
@@ -347,6 +353,12 @@ export function MobileTrailsTabContent({
 
       {/* Sortable Trip Cards */}
       <View style={s.tripList}>
+        {busy && trips.length === 0 && (
+          <View style={s.loadingSkeletonList}>
+            <View style={s.loadingSkeletonCard} />
+            <View style={[s.loadingSkeletonCard, { opacity: 0.65 }]} />
+          </View>
+        )}
         {trips.map((trip) => {
           const isSelected = focusedTrip?.id === trip.id;
           const actMeta = trip.primaryActivityMode
@@ -728,6 +740,16 @@ function createStyles(ui: OnboardingPalette, isDark: boolean) {
     },
     statusHeading: { color: ui.ink, fontSize: 13, fontWeight: '700' },
     statusRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    busyInline: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    busyInlineText: { color: ui.inkMuted, fontSize: 11, fontWeight: '600' },
+    loadingSkeletonList: { gap: 8 },
+    loadingSkeletonCard: {
+      height: 62,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: ui.border,
+      backgroundColor: ui.surfaceMuted,
+    },
     resetPill: {
       borderRadius: 999,
       backgroundColor: isDark ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.16)',
