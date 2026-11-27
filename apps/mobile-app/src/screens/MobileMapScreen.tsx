@@ -39,6 +39,7 @@ import {
   DEFAULT_USER_CUSTOMIZATION,
   findCoveringRegions,
   FUZZED_AREA_RADIUS_METERS,
+  GroupSnapshotCache,
   hexToRgba,
   isPointCoveredByRegions,
   isSafeAvatarUrl,
@@ -244,7 +245,9 @@ export function MobileMapScreen({
   const [groupsLoaded, setGroupsLoaded] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState<string>(config.activeGroupId ?? '');
   const [locations, setLocations] = useState<LocationBroadcast[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [chatText, setChatText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
@@ -299,6 +302,7 @@ export function MobileMapScreen({
   const [trailDisplayMode, setTrailDisplayMode] = useState<TrailDisplayMode>('roads');
   const [colorTrailsByActivity, setColorTrailsByActivity] = useState(true);
   const [trailBusy, setTrailBusy] = useState(false);
+  const trailFetchSeqRef = useRef(0);
   const [trailMessage, setTrailMessage] = useState<string | null>(null);
   const [selectedTrailPoint, setSelectedTrailPoint] = useState<
     (TrailPointDetails & { latitude: number; longitude: number }) | null
@@ -306,7 +310,16 @@ export function MobileMapScreen({
 
   // Places (Private + Group-Shared)
   const [places, setPlaces] = useState<GroupPlace[]>([]);
+  const [placesLoading, setPlacesLoading] = useState(false);
   const [placeTransitions, setPlaceTransitions] = useState<PlaceTransitionEvent[]>([]);
+  const groupCacheRef = useRef(
+    new GroupSnapshotCache<{
+      locations?: LocationBroadcast[];
+      messages?: ChatMessage[];
+      places?: GroupPlace[];
+      placeTransitions?: PlaceTransitionEvent[];
+    }>(),
+  );
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [placeFormOpen, setPlaceFormOpen] = useState(false);
   const [placeName, setPlaceName] = useState('');
@@ -407,6 +420,8 @@ export function MobileMapScreen({
   const [downloadProgress, setDownloadProgress] = useState<OfflineDownloadProgress | null>(null);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [shareLinks, setShareLinks] = useState<LocationShareLinkItem[]>([]);
+  const [shareLinksLoading, setShareLinksLoading] = useState(false);
+  const [shareLinksLoaded, setShareLinksLoaded] = useState(false);
   const [shareDurationMinutes, setShareDurationMinutes] = useState(60);
   const [shareLabelInput, setShareLabelInput] = useState('');
   const [shareAllowMutual, setShareAllowMutual] = useState(true);
@@ -477,13 +492,19 @@ export function MobileMapScreen({
 
   const refreshShareLinks = useCallback(async () => {
     if (!serverUrl || !accessToken) return;
+    if (!shareLinksLoaded) {
+      setShareLinksLoading(true);
+    }
     try {
       const list = await listMobileShareLinks(serverUrl, accessToken);
       setShareLinks(list);
+      setShareLinksLoaded(true);
     } catch {
       // ignore background refresh error
+    } finally {
+      setShareLinksLoading(false);
     }
-  }, [serverUrl, accessToken]);
+  }, [serverUrl, accessToken, shareLinksLoaded]);
 
   const handleOpenShareLinksModal = useCallback(() => {
     setProfileHubOpen(false);
@@ -771,7 +792,7 @@ export function MobileMapScreen({
   );
 
   const fetchPlacesSnapshot = useCallback(
-    async (groupId?: string) => {
+    async (groupId?: string, shouldApply?: () => boolean) => {
       if (!serverUrl || !accessToken) return;
       const qs = groupId ? `?groupId=${encodeURIComponent(groupId)}` : '';
       const res = await fetch(`${serverUrl}/api/realtime/places${qs}`, {
@@ -782,9 +803,17 @@ export function MobileMapScreen({
         places?: GroupPlace[];
         recentTransitions?: PlaceTransitionEvent[];
       };
-      setPlaces(data.places ?? []);
+      if (shouldApply && !shouldApply()) return;
+      const nextPlaces = data.places ?? [];
+      setPlaces(nextPlaces);
       if (data.recentTransitions) {
         setPlaceTransitions(data.recentTransitions);
+      }
+      if (groupId) {
+        groupCacheRef.current.patch(groupId, {
+          places: nextPlaces,
+          placeTransitions: data.recentTransitions,
+        });
       }
     },
     [serverUrl, accessToken],
@@ -1212,35 +1241,103 @@ export function MobileMapScreen({
     setActiveTrailUserId(null);
     setMemberTrailPoints([]);
     setMemberMatchedTrails([]);
+    setTrailsMeta(null);
+    setFocusedTrip(null);
     setTrailMessage(null);
+    trailFetchSeqRef.current += 1;
+    setTrailBusy(false);
 
     if (!serverUrl || !accessToken) return;
     if (!activeGroup) {
       setLocations([]);
+      setLocationsLoading(false);
       setMessages([]);
+      setMessagesLoading(false);
       setPlaceTransitions([]);
-      void fetchPlacesSnapshot().catch(() => {});
-      return;
+      setPlacesLoading(true);
+      let cancelledNoGroup = false;
+      void fetchPlacesSnapshot(undefined, () => !cancelledNoGroup)
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelledNoGroup) setPlacesLoading(false);
+        });
+      return () => {
+        cancelledNoGroup = true;
+      };
     }
 
-    socketRef.current?.emit('group:join', activeGroup.id);
-    setPlaceScopeGroupId(activeGroup.myRole === 'ADMIN' ? activeGroup.id : 'private');
+    const groupId = activeGroup.id;
+    socketRef.current?.emit('group:join', groupId);
+    setPlaceScopeGroupId(activeGroup.myRole === 'ADMIN' ? groupId : 'private');
 
-    void fetch(`${serverUrl}/api/realtime/groups/${activeGroup.id}/locations`, {
+    const cached = groupCacheRef.current.get(groupId);
+    if (cached?.locations !== undefined) {
+      setLocations(cached.locations);
+      setLocationsLoading(false);
+    } else {
+      setLocations([]);
+      setLocationsLoading(true);
+    }
+
+    if (cached?.messages !== undefined) {
+      setMessages(cached.messages);
+      setMessagesLoading(false);
+    } else {
+      setMessages([]);
+      setMessagesLoading(true);
+    }
+
+    if (cached?.places !== undefined) {
+      setPlaces(cached.places);
+      setPlaceTransitions(cached.placeTransitions ?? []);
+      setPlacesLoading(false);
+    } else {
+      setPlaces([]);
+      setPlaceTransitions([]);
+      setPlacesLoading(true);
+    }
+
+    let cancelled = false;
+
+    void fetch(`${serverUrl}/api/realtime/groups/${groupId}/locations`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
       .then((r) => r.json())
-      .then((d: { locations?: LocationBroadcast[] }) => setLocations(d.locations ?? []))
-      .catch(() => {});
+      .then((d: { locations?: LocationBroadcast[] }) => {
+        if (cancelled) return;
+        const locs = d.locations ?? [];
+        groupCacheRef.current.patch(groupId, { locations: locs });
+        setLocations(locs);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLocationsLoading(false);
+      });
 
-    void fetch(`${serverUrl}/api/realtime/groups/${activeGroup.id}/messages`, {
+    void fetch(`${serverUrl}/api/realtime/groups/${groupId}/messages`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
       .then((r) => r.json())
-      .then((d: { messages?: ChatMessage[] }) => setMessages(d.messages ?? []))
-      .catch(() => {});
+      .then((d: { messages?: ChatMessage[] }) => {
+        if (cancelled) return;
+        const msgs = d.messages ?? [];
+        groupCacheRef.current.patch(groupId, { messages: msgs });
+        setMessages(msgs);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setMessagesLoading(false);
+      });
 
-    void fetchPlacesSnapshot(activeGroup.id).catch(() => {});
+    void fetchPlacesSnapshot(groupId, () => !cancelled)
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setPlacesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [serverUrl, accessToken, activeGroup, fetchPlacesSnapshot]);
 
   async function captureFocusAndSyncPosition(): Promise<{ flushed: number; remaining: number } | null> {
@@ -1421,6 +1518,11 @@ export function MobileMapScreen({
       options: { fitOnLoad?: boolean } = {},
     ) => {
       if (!activeGroup || !serverUrl || !accessToken) return;
+      const reqSeq = ++trailFetchSeqRef.current;
+      const targetGroupId = activeGroup.id;
+      setMemberTrailPoints([]);
+      setMemberMatchedTrails([]);
+      setTrailsMeta(null);
       setTrailBusy(true);
       setTrailMessage(null);
       setSelectedTrailPoint(null);
@@ -1467,7 +1569,7 @@ export function MobileMapScreen({
         if (memberUserId) params.set('userId', memberUserId);
 
         const res = await withMinDelay(
-          fetch(`${serverUrl}/api/realtime/groups/${activeGroup.id}/trails?${params.toString()}`, {
+          fetch(`${serverUrl}/api/realtime/groups/${targetGroupId}/trails?${params.toString()}`, {
             headers: { Authorization: `Bearer ${accessToken}` },
           }),
           240,
@@ -1480,6 +1582,7 @@ export function MobileMapScreen({
           matchedTrails?: MatchedUserTrail[];
           meta?: TrailsResponseMeta;
         };
+        if (trailFetchSeqRef.current !== reqSeq) return;
         const points = data.trails ?? [];
         setMemberTrailPoints(points);
         setMemberMatchedTrails(data.matchedTrails ?? []);
@@ -1514,12 +1617,15 @@ export function MobileMapScreen({
           }
         }
       } catch (err) {
+        if (trailFetchSeqRef.current !== reqSeq) return;
         setMemberTrailPoints([]);
         setMemberMatchedTrails([]);
         setTrailsMeta(null);
         setTrailMessage(formatUserError(err, 'Unable to load trail right now.'));
       } finally {
-        setTrailBusy(false);
+        if (trailFetchSeqRef.current === reqSeq) {
+          setTrailBusy(false);
+        }
       }
     },
     [activeGroup, serverUrl, accessToken],
@@ -3344,6 +3450,17 @@ export function MobileMapScreen({
             );
           }
 
+          if (trailBusy && (drawerMode === 'trails' || activeTrailUserId !== null)) {
+            return (
+              <View pointerEvents="none" style={styles.loadingPillBanner}>
+                <ActivityIndicator size="small" color={ui.ink} />
+                <Text style={styles.loadingPillText} numberOfLines={1}>
+                  Loading trails &amp; matching roads…
+                </Text>
+              </View>
+            );
+          }
+
           if (uncoveredMobileTarget && dismissedUncoveredKey !== uncoveredMobileTarget.key) {
             return (
               <View style={styles.chatToastBanner}>
@@ -3699,7 +3816,9 @@ export function MobileMapScreen({
                   ? 'Trails & Timelapse'
                   : selectedMember
                     ? selectedMember.username
-                    : `${activeGroup?.name ?? 'LovedOnes'} · ${locations.length} visible`}
+                    : locationsLoading && locations.length === 0
+                      ? `${activeGroup?.name ?? 'LovedOnes'} · Loading…`
+                      : `${activeGroup?.name ?? 'LovedOnes'} · ${locations.length} visible`}
             </Text>
             {drawerSnap !== 'peek' && (
               <TouchableOpacity
@@ -3711,6 +3830,13 @@ export function MobileMapScreen({
             )}
           </View>
         </View>
+
+        {locationsLoading && locations.length === 0 && (
+          <View style={styles.loadingDrawerRow}>
+            <ActivityIndicator size="small" color={ui.ink} />
+            <Text style={styles.settingsHint}>Loading group members…</Text>
+          </View>
+        )}
 
         {locations.length > 0 && (
           <ScrollView
@@ -4014,6 +4140,13 @@ export function MobileMapScreen({
 
                   {trailMessage && <Text style={styles.settingsHint}>{trailMessage}</Text>}
                 </View>
+              ) : locationsLoading && locations.length === 0 ? (
+                <View style={styles.emptyDrawerBox}>
+                  <View style={styles.loadingDrawerRow}>
+                    <ActivityIndicator size="small" color={ui.ink} />
+                    <Text style={styles.settingsHint}>Loading group members &amp; pins…</Text>
+                  </View>
+                </View>
               ) : (
                 <View style={styles.emptyDrawerBox}>
                   <Text style={styles.settingsHint}>
@@ -4161,7 +4294,12 @@ export function MobileMapScreen({
                 )}
                 {!placeFormOpen && placeError && <Text style={styles.errorText}>{placeError}</Text>}
 
-                {places.length === 0 ? (
+                {placesLoading && places.length === 0 ? (
+                  <View style={styles.loadingDrawerRow}>
+                    <ActivityIndicator size="small" color={ui.ink} />
+                    <Text style={styles.settingsHint}>Loading saved places…</Text>
+                  </View>
+                ) : places.length === 0 ? (
                   <Text style={styles.settingsHint}>
                     No saved places yet. Tap "+ New Place" to add a private spot or share one with a
                     group.
@@ -4789,7 +4927,11 @@ export function MobileMapScreen({
             <View style={styles.modalHeader}>
               <View>
                 <Text style={styles.modalTitle}>{activeGroup?.name ?? 'Group'} Chat</Text>
-                <Text style={styles.modalSubtitle}>{messages.length} messages</Text>
+                <Text style={styles.modalSubtitle}>
+                  {messagesLoading && messages.length === 0
+                    ? 'Loading messages…'
+                    : `${messages.length} messages`}
+                </Text>
               </View>
               <TouchableOpacity style={styles.closePill} onPress={() => setChatOpen(false)}>
                 <Text style={styles.closeText}>Done</Text>
@@ -4807,7 +4949,14 @@ export function MobileMapScreen({
                 keyboardShouldPersistTaps="handled"
                 onContentSizeChange={() => chatScrollRef.current?.scrollToEnd({ animated: true })}
               >
-                {chatDisplayItems.length === 0 ? (
+                {messagesLoading && chatDisplayItems.length === 0 ? (
+                  <View style={[styles.chatEmptyWrap, { gap: 10 }]}>
+                    <ActivityIndicator size="small" color={ui.ink} />
+                    <Text style={styles.chatEmptyText}>
+                      Loading messages for {activeGroup?.name ?? 'your group'}…
+                    </Text>
+                  </View>
+                ) : chatDisplayItems.length === 0 ? (
                   <View style={styles.chatEmptyWrap}>
                     <Text style={styles.chatEmptyText}>
                       No messages yet. Say hello to {activeGroup?.name ?? 'your group'}!
@@ -5364,6 +5513,14 @@ export function MobileMapScreen({
               {shareError && <Text style={styles.errorText}>{shareError}</Text>}
 
               <ScrollView style={{ maxHeight: 200 }} contentContainerStyle={{ gap: 8 }}>
+                {shareLinksLoading && shareLinks.length === 0 ? (
+                  <View style={styles.loadingDrawerRow}>
+                    <ActivityIndicator size="small" color={ui.ink} />
+                    <Text style={styles.settingsHint}>Loading share links…</Text>
+                  </View>
+                ) : shareLinks.length === 0 && shareLinksLoaded ? (
+                  <Text style={styles.settingsHint}>No active share links yet.</Text>
+                ) : null}
                 {shareLinks.map((item) => {
                   const shareUrl = resolveMobileShareUrl(serverUrl, item);
                   return (
@@ -5997,6 +6154,35 @@ export function createMobileStyles(
       shadowRadius: 12,
       shadowOffset: { width: 0, height: 4 },
       elevation: 6,
+    },
+    loadingPillBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'center',
+      gap: 8,
+      backgroundColor: isDark ? 'rgba(24, 24, 27, 0.95)' : 'rgba(255, 255, 255, 0.96)',
+      borderRadius: 999,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderWidth: 1,
+      borderColor: ui.borderStrong,
+      shadowColor: '#000000',
+      shadowOpacity: 0.14,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 5,
+    },
+    loadingPillText: {
+      color: ui.ink,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    loadingDrawerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 4,
     },
     chatToastTextWrap: { flex: 1 },
     chatToastSender: { color: '#e4e4e7', fontSize: 11, fontWeight: '700' },

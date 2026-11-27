@@ -23,6 +23,7 @@ import {
   findCoveringRegions,
   formatCountdownRemaining,
   getUserCustomizationStorageKey,
+  GroupSnapshotCache,
   haversineMeters,
   HeartbeatInputSchema,
   hexToRgba,
@@ -1886,5 +1887,36 @@ describe('@loved-ones/shared', () => {
 
     expect(parseUserCustomization('bad-json')).toEqual(DEFAULT_USER_CUSTOMIZATION);
     expect(getUserCustomizationStorageKey('user-42')).toBe('lovedones:custom-prefs:v1:user-42');
+  });
+
+  it('tracks per-group cached vs uncached sections cleanly in GroupSnapshotCache', () => {
+    const cache = new GroupSnapshotCache<{
+      locations?: { userId: string }[];
+      messages?: { id: string }[];
+      places?: { id: string }[];
+    }>();
+
+    expect(cache.get('group-a')).toBeUndefined();
+    expect(cache.hasSection('group-a', 'locations')).toBe(false);
+
+    cache.patch('group-a', { locations: [{ userId: 'u1' }] });
+    expect(cache.hasSection('group-a', 'locations')).toBe(true);
+    expect(cache.hasSection('group-a', 'messages')).toBe(false);
+
+    // Patching messages preserves already cached locations without clobbering
+    cache.patch('group-a', { messages: [] });
+    expect(cache.hasSection('group-a', 'messages')).toBe(true);
+    expect(cache.get('group-a')?.locations).toEqual([{ userId: 'u1' }]);
+    expect(cache.get('group-a')?.messages).toEqual([]);
+
+    // Separate uncached group remains isolated
+    expect(cache.get('group-b')).toBeUndefined();
+
+    cache.delete('group-a');
+    expect(cache.get('group-a')).toBeUndefined();
+
+    cache.patch('group-b', { places: [{ id: 'p1' }] });
+    cache.clear();
+    expect(cache.get('group-b')).toBeUndefined();
   });
 });

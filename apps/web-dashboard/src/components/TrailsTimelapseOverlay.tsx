@@ -10,6 +10,7 @@ import {
   Eye,
   Filter,
   ListFilter,
+  Loader2,
   Maximize2,
   Palette,
   Pause,
@@ -43,6 +44,7 @@ import {
   type TrailTripSort,
   type TrailTripSummary,
 } from '@loved-ones/shared';
+import { LoadingInlineBadge, LoadingListSkeleton } from './LoadingSkeletons';
 
 export interface TrailsTimeRangeState {
   preset: TrailTimeRangePreset;
@@ -455,7 +457,7 @@ export function TrailsTimelapseOverlay({
             }`}
           >
             <RouteIcon className="h-3.5 w-3.5" />
-            <span>Trips ({trips.length})</span>
+            <span>{loading ? 'Trips (…)' : `Trips (${trips.length})`}</span>
           </button>
 
           {focusedTrip && (
@@ -470,11 +472,28 @@ export function TrailsTimelapseOverlay({
           )}
 
           {loading && (
-            <span className="ml-auto px-1.5 text-[10px] font-medium text-zinc-500 dark:text-zinc-400">
-              Loading…
+            <span
+              role="status"
+              aria-live="polite"
+              className="ml-auto inline-flex items-center gap-1 px-1.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-300"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span>Loading trails…</span>
             </span>
           )}
         </div>
+
+        {/* Non-blocking map banner while trails & road-matched segments resolve */}
+        {loading && !controlsExpanded && !tripsOpen && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="lo-float-in pointer-events-none flex items-center gap-2 rounded-full border border-zinc-200/85 bg-white/95 px-3 py-1.5 text-[11px] font-medium text-zinc-700 shadow-[0_8px_24px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-200"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-700 dark:text-zinc-200" />
+            <span>Loading trails &amp; matching roads…</span>
+          </div>
+        )}
 
         {/* Expanded Time Range + Member Filter (Progressive Disclosure) */}
         {controlsExpanded && (
@@ -708,7 +727,19 @@ export function TrailsTimelapseOverlay({
                   </button>
                 );
               })}
-              {trips.length === 0 && (
+              {loading && trips.length > 0 && (
+                <div className="flex items-center justify-center py-1">
+                  <LoadingInlineBadge label="Refreshing trips…" />
+                </div>
+              )}
+              {loading && trips.length === 0 && (
+                <LoadingListSkeleton
+                  rows={3}
+                  variant="trips"
+                  label="Loading trips & road routes…"
+                />
+              )}
+              {!loading && trips.length === 0 && (
                 <p className="py-5 text-center text-xs text-zinc-500 dark:text-zinc-400">
                   No movement trips in this window.
                 </p>

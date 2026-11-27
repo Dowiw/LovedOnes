@@ -47,6 +47,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  GroupSnapshotCache,
   buildExternalMapsUrls,
   formatCountdownRemaining,
   haversineMeters,
@@ -82,6 +83,7 @@ import {
   CustomizeAppearanceModal,
   type CustomizeAppearanceTab,
 } from '@/components/CustomizeAppearanceModal';
+import { LoadingInlineBadge, LoadingListSkeleton } from '@/components/LoadingSkeletons';
 import { useUserCustomization } from '@/lib/customization';
 import { createGeoWarmupGate } from '@/lib/geoWarmup';
 import {
@@ -247,6 +249,7 @@ export default function HomePage() {
   const [creatingGroup, setCreatingGroup] = useState(false);
 
   const [locations, setLocations] = useState<LocationBroadcast[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
   const [trails, setTrails] = useState<LocationBroadcast[]>([]);
   const [matchedTrails, setMatchedTrails] = useState<MatchedUserTrail[]>([]);
   const [trailsMeta, setTrailsMeta] = useState<TrailsResponseMeta | null>(null);
@@ -282,6 +285,7 @@ export default function HomePage() {
     : '';
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [chatInput, setChatInput] = useState('');
 
   const trailMemberOptions = useMemo(() => {
@@ -329,6 +333,8 @@ export default function HomePage() {
   const [shareLabelInput, setShareLabelInput] = useState('');
   const [shareAllowMutual, setShareAllowMutual] = useState(true);
   const [shareLinks, setShareLinks] = useState<LocationShareLinkItem[]>([]);
+  const [shareLinksLoading, setShareLinksLoading] = useState(false);
+  const [shareLinksLoaded, setShareLinksLoaded] = useState(false);
   const [shareLinkBusy, setShareLinkBusy] = useState(false);
   const [shareLinkError, setShareLinkError] = useState<string | null>(null);
 
@@ -337,6 +343,7 @@ export default function HomePage() {
   const [sendingTestPing, setSendingTestPing] = useState(false);
 
   const [locationRequests, setLocationRequests] = useState<LocationRequestItem[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
   const [myPrivacyOverrideUntil, setMyPrivacyOverrideUntil] = useState<string | null>(null);
   const [checkinTargetUserId, setCheckinTargetUserId] = useState<string>('');
   const [checkinDuration, setCheckinDuration] = useState<number>(15);
@@ -346,8 +353,19 @@ export default function HomePage() {
   const [checkinError, setCheckinError] = useState<string | null>(null);
 
   const [places, setPlaces] = useState<GroupPlace[]>([]);
+  const [placesLoading, setPlacesLoading] = useState(false);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [placeTransitions, setPlaceTransitions] = useState<PlaceTransitionEvent[]>([]);
+  const groupCacheRef = useRef(
+    new GroupSnapshotCache<{
+      locations?: LocationBroadcast[];
+      messages?: ChatMessage[];
+      places?: GroupPlace[];
+      placeTransitions?: PlaceTransitionEvent[];
+      locationRequests?: LocationRequestItem[];
+      myPrivacyOverrideUntil?: string | null;
+    }>(),
+  );
   const [placeName, setPlaceName] = useState('');
   const [placeLat, setPlaceLat] = useState('');
   const [placeLon, setPlaceLon] = useState('');
@@ -838,9 +856,14 @@ export default function HomePage() {
   useEffect(() => {
     if (!session) return;
     void refreshMapRegions(false);
+    setShareLinksLoading(true);
     void apiListShareLinks(session.accessToken)
-      .then(setShareLinks)
-      .catch(() => {});
+      .then((list) => {
+        setShareLinks(list);
+        setShareLinksLoaded(true);
+      })
+      .catch(() => {})
+      .finally(() => setShareLinksLoading(false));
   }, [session, refreshMapRegions]);
 
   async function handleCreateShareLink() {
@@ -1440,62 +1463,142 @@ export default function HomePage() {
     setChatToast(null);
     if (!session || !activeGroup) {
       setLocations([]);
+      setLocationsLoading(false);
       setTrails([]);
+      setMatchedTrails([]);
+      setTrailsMeta(null);
       setMessages([]);
+      setMessagesLoading(false);
       setLocationRequests([]);
+      setRequestsLoading(false);
       setMyPrivacyOverrideUntil(null);
       setPlaces([]);
       setPlaceTransitions([]);
+      setPlacesLoading(false);
       return;
     }
 
-    socketRef.current?.emit('group:join', activeGroup.id);
+    const groupId = activeGroup.id;
+    socketRef.current?.emit('group:join', groupId);
 
     const otherMembers = activeGroup.members.filter((m) => m.userId !== session.user.id);
     setCheckinTargetUserId((prev) =>
       prev && otherMembers.some((m) => m.userId === prev) ? prev : otherMembers[0]?.userId ?? '',
     );
 
+    const cached = groupCacheRef.current.get(groupId);
+    setTrails([]);
+    setMatchedTrails([]);
+    setTrailsMeta(null);
+
+    if (cached?.locations !== undefined) {
+      setLocations(cached.locations);
+      setLocationsLoading(false);
+    } else {
+      setLocations([]);
+      setLocationsLoading(true);
+    }
+
+    if (cached?.messages !== undefined) {
+      setMessages(cached.messages);
+      setMessagesLoading(false);
+    } else {
+      setMessages([]);
+      setMessagesLoading(true);
+    }
+
+    if (cached?.locationRequests !== undefined) {
+      setLocationRequests(cached.locationRequests);
+      setMyPrivacyOverrideUntil(cached.myPrivacyOverrideUntil ?? null);
+      setRequestsLoading(false);
+    } else {
+      setLocationRequests([]);
+      setMyPrivacyOverrideUntil(null);
+      setRequestsLoading(true);
+    }
+
+    if (cached?.places !== undefined) {
+      setPlaces(cached.places);
+      setPlaceTransitions(cached.placeTransitions ?? []);
+      setPlacesLoading(false);
+    } else {
+      setPlaces([]);
+      setPlaceTransitions([]);
+      setPlacesLoading(true);
+    }
+
     let cancelled = false;
     let locationsRetryTimer: number | null = null;
     const loadLocations = (attempt = 0) => {
-      void apiFetchGroupLocations(session.accessToken, activeGroup.id)
+      void apiFetchGroupLocations(session.accessToken, groupId)
         .then((locs) => {
-          if (!cancelled) setLocations(locs);
+          if (cancelled) return;
+          groupCacheRef.current.patch(groupId, { locations: locs });
+          setLocations(locs);
+          setLocationsLoading(false);
         })
         .catch(() => {
           if (cancelled) return;
           if (attempt < 2) {
             locationsRetryTimer = window.setTimeout(() => loadLocations(attempt + 1), 2000);
+          } else {
+            setLocationsLoading(false);
           }
         });
     };
     loadLocations();
-    void apiFetchGroupMessages(session.accessToken, activeGroup.id)
-      .then(setMessages)
-      .catch(() => setMessages([]));
-    void apiFetchLocationRequests(session.accessToken, activeGroup.id)
+    void apiFetchGroupMessages(session.accessToken, groupId)
+      .then((msgs) => {
+        if (cancelled) return;
+        groupCacheRef.current.patch(groupId, { messages: msgs });
+        setMessages(msgs);
+      })
+      .catch(() => {
+        if (!cancelled && cached?.messages === undefined) {
+          setMessages([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMessagesLoading(false);
+      });
+    void apiFetchLocationRequests(session.accessToken, groupId)
       .then((res) => {
+        if (cancelled) return;
+        groupCacheRef.current.patch(groupId, {
+          locationRequests: res.requests,
+          myPrivacyOverrideUntil: res.myPrivacyOverrideUntil,
+        });
         setLocationRequests(res.requests);
         setMyPrivacyOverrideUntil(res.myPrivacyOverrideUntil);
       })
       .catch(() => {
-        setLocationRequests([]);
-        setMyPrivacyOverrideUntil(null);
-      });
-    setPlaceScopeGroupId(activeGroup.myRole === 'ADMIN' ? activeGroup.id : 'private');
-    void apiFetchAccessiblePlaces(session.accessToken, activeGroup.id)
-      .then((res) => {
-        if (!cancelled) {
-          setPlaces(res.places);
-          setPlaceTransitions(res.recentTransitions);
+        if (!cancelled && cached?.locationRequests === undefined) {
+          setLocationRequests([]);
+          setMyPrivacyOverrideUntil(null);
         }
       })
+      .finally(() => {
+        if (!cancelled) setRequestsLoading(false);
+      });
+    setPlaceScopeGroupId(activeGroup.myRole === 'ADMIN' ? groupId : 'private');
+    void apiFetchAccessiblePlaces(session.accessToken, groupId)
+      .then((res) => {
+        if (cancelled) return;
+        groupCacheRef.current.patch(groupId, {
+          places: res.places,
+          placeTransitions: res.recentTransitions,
+        });
+        setPlaces(res.places);
+        setPlaceTransitions(res.recentTransitions);
+      })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && cached?.places === undefined) {
           setPlaces([]);
           setPlaceTransitions([]);
         }
+      })
+      .finally(() => {
+        if (!cancelled) setPlacesLoading(false);
       });
 
     return () => {
@@ -1511,6 +1614,7 @@ export default function HomePage() {
     if (!session || !activeGroup || mapViewMode !== 'trails') {
       setTimelapseFocusMode(false);
       setTimelapseFrame(null);
+      setTrailsLoading(false);
       return;
     }
 
@@ -1554,6 +1658,9 @@ export default function HomePage() {
     }
 
     let cancelled = false;
+    setTrails([]);
+    setMatchedTrails([]);
+    setTrailsMeta(null);
     setTrailsLoading(true);
     void apiFetchGroupTrails(session.accessToken, activeGroup.id, {
       from: new Date(fromMs).toISOString(),
@@ -1957,6 +2064,14 @@ export default function HomePage() {
     setMyPrivacyOverrideUntil(null);
     setPlaces([]);
     setPlaceTransitions([]);
+    setPlacesLoading(false);
+    setLocationsLoading(false);
+    setMessagesLoading(false);
+    setRequestsLoading(false);
+    setShareLinks([]);
+    setShareLinksLoaded(false);
+    setShareLinksLoading(false);
+    groupCacheRef.current.clear();
   }
 
   async function handleSendCheckInRequest(e: React.FormEvent) {
@@ -3163,35 +3278,41 @@ export default function HomePage() {
 
               {offlineMapsOpen && (
                 <div className="mt-2 space-y-1.5 px-1">
-                  {mapRegions
-                    .filter((r) => !r.isStub)
-                    .map((region) => (
-                      <button
-                        key={region.id}
-                        type="button"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          setFocusCoords({
-                            latitude: (region.minLat + region.maxLat) / 2,
-                            longitude: (region.minLon + region.maxLon) / 2,
-                            zoom: 12.5,
-                            nonce: Date.now(),
-                          });
-                        }}
-                        className="flex w-full items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/70 px-2.5 py-1.5 text-left text-[11px] transition hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-800/70 dark:hover:bg-zinc-800"
-                      >
-                        <span className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-100">
-                          {region.displayName ?? region.name}
-                        </span>
-                        <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
-                          {formatBytes(region.sizeBytes)}
-                        </span>
-                      </button>
-                    ))}
-                  {mapRegions.filter((r) => !r.isStub).length === 0 && (
-                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                      Only the empty placeholder tile stub is loaded. Download any city below.
-                    </p>
+                  {!mapRegionsLoaded ? (
+                    <LoadingListSkeleton rows={2} variant="compact" label="Loading map regions…" />
+                  ) : (
+                    <>
+                      {mapRegions
+                        .filter((r) => !r.isStub)
+                        .map((region) => (
+                          <button
+                            key={region.id}
+                            type="button"
+                            onClick={() => {
+                              setMenuOpen(false);
+                              setFocusCoords({
+                                latitude: (region.minLat + region.maxLat) / 2,
+                                longitude: (region.minLon + region.maxLon) / 2,
+                                zoom: 12.5,
+                                nonce: Date.now(),
+                              });
+                            }}
+                            className="flex w-full items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/70 px-2.5 py-1.5 text-left text-[11px] transition hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-800/70 dark:hover:bg-zinc-800"
+                          >
+                            <span className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-100">
+                              {region.displayName ?? region.name}
+                            </span>
+                            <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+                              {formatBytes(region.sizeBytes)}
+                            </span>
+                          </button>
+                        ))}
+                      {mapRegions.filter((r) => !r.isStub).length === 0 && (
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                          Only the empty placeholder tile stub is loaded. Download any city below.
+                        </p>
+                      )}
+                    </>
                   )}
                   {(allowMemberMapDownloads || session.user.role === 'HOST_ADMIN') &&
                     (selfLocation || mapViewport) && (
@@ -3218,9 +3339,19 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => {
-                  setShareLinksOpen((v) => !v);
-                  if (!shareLinksOpen && session) {
-                    void apiListShareLinks(session.accessToken).then(setShareLinks).catch(() => {});
+                  const opening = !shareLinksOpen;
+                  setShareLinksOpen(opening);
+                  if (opening && session) {
+                    if (!shareLinksLoaded) {
+                      setShareLinksLoading(true);
+                    }
+                    void apiListShareLinks(session.accessToken)
+                      .then((list) => {
+                        setShareLinks(list);
+                        setShareLinksLoaded(true);
+                      })
+                      .catch(() => {})
+                      .finally(() => setShareLinksLoading(false));
                   }
                 }}
                 className="flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
@@ -3290,6 +3421,13 @@ export default function HomePage() {
                   {shareLinkError && (
                     <p className="text-[11px] text-rose-600 dark:text-rose-400">{shareLinkError}</p>
                   )}
+                  {shareLinksLoading && shareLinks.length === 0 ? (
+                    <LoadingListSkeleton rows={2} variant="compact" label="Loading share links…" />
+                  ) : shareLinks.length === 0 && shareLinksLoaded ? (
+                    <p className="py-1 text-center text-[11px] text-zinc-400 dark:text-zinc-500">
+                      No active share links yet.
+                    </p>
+                  ) : null}
                   {shareLinks.length > 0 && (
                     <div className="space-y-1.5">
                       {shareLinks.map((item) => {
@@ -3682,7 +3820,12 @@ export default function HomePage() {
               <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-100 p-1 text-[11px] font-semibold dark:bg-zinc-800">
                 {(
                   [
-                    ['people', `People (${locations.length})`],
+                    [
+                      'people',
+                      locationsLoading && locations.length === 0
+                        ? 'People (…)'
+                        : `People (${locations.length})`,
+                    ],
                     ['chat', unreadChatCount > 0 ? `Chat (${unreadChatCount})` : 'Chat'],
                     ['places', `Places`],
                     ['requests', pendingIncomingCount > 0 ? `Ask (${pendingIncomingCount})` : 'Ask'],
@@ -3803,7 +3946,19 @@ export default function HomePage() {
                     </div>
                   );
                 })}
-                {locations.length === 0 && (
+                {locationsLoading && locations.length > 0 && (
+                  <div className="flex justify-center py-1">
+                    <LoadingInlineBadge label="Refreshing members…" />
+                  </div>
+                )}
+                {locationsLoading && locations.length === 0 && (
+                  <LoadingListSkeleton
+                    rows={3}
+                    variant="people"
+                    label="Loading group members…"
+                  />
+                )}
+                {!locationsLoading && locations.length === 0 && (
                   <div className="py-8 text-center text-xs text-zinc-400 dark:text-zinc-500">
                     No active pins in this group yet.
                   </div>
@@ -3872,7 +4027,14 @@ export default function HomePage() {
                       </div>
                     );
                   })}
-                  {messages.length === 0 && (
+                  {messagesLoading && messages.length === 0 && (
+                    <LoadingListSkeleton
+                      rows={3}
+                      variant="chat"
+                      label="Loading messages…"
+                    />
+                  )}
+                  {!messagesLoading && messages.length === 0 && (
                     <div className="py-8 text-center text-xs text-zinc-400 dark:text-zinc-500">
                       No messages yet.
                     </div>
@@ -4056,7 +4218,14 @@ export default function HomePage() {
                       </div>
                     );
                   })}
-                  {places.length === 0 && (
+                  {placesLoading && places.length === 0 && (
+                    <LoadingListSkeleton
+                      rows={2}
+                      variant="places"
+                      label="Loading places…"
+                    />
+                  )}
+                  {!placesLoading && places.length === 0 && (
                     <p className="py-4 text-center text-xs text-zinc-400 dark:text-zinc-500">
                       No geofenced places yet.
                     </p>
@@ -4202,7 +4371,14 @@ export default function HomePage() {
                       </div>
                     );
                   })}
-                  {locationRequests.length === 0 && (
+                  {requestsLoading && locationRequests.length === 0 && (
+                    <LoadingListSkeleton
+                      rows={2}
+                      variant="compact"
+                      label="Loading check-in requests…"
+                    />
+                  )}
+                  {!requestsLoading && locationRequests.length === 0 && (
                     <p className="py-4 text-center text-xs text-zinc-400 dark:text-zinc-500">
                       No check-in requests yet.
                     </p>
