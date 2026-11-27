@@ -1,10 +1,11 @@
-import type { MotionActivity, TrailActivityMode } from './schemas.js';
+import type { MotionActivity, TrailActivityMode, TrailTripSort } from './schemas.js';
 
 export const DEFAULT_TRAIL_CLUSTER_RADIUS_METERS = 85;
 export const DEFAULT_TRAIL_MAX_TIME_GAP_MS = 30 * 60 * 1000;
 export const DEFAULT_TRAIL_MAX_DISTANCE_METERS = 15_000;
 export const DEFAULT_TRAIL_SPUR_THRESHOLD_METERS = 15;
 export const DEFAULT_TRAIL_DWELL_THRESHOLD_MS = 90_000;
+export const DEFAULT_TRAIL_TRIP_DWELL_SPLIT_MS = 5 * 60 * 1000;
 const EARTH_RADIUS_METERS = 6_371_000;
 const METERS_PER_DEGREE_LAT = 111_320;
 
@@ -169,6 +170,12 @@ export interface TrailPathSegment {
   roadKind?: string;
   /** Activity mode hint resolved from motion sensors, speed, and road class. */
   activityMode?: TrailActivityMode;
+  /** ISO timestamp when traversal of this segment started. */
+  startedAt?: string;
+  /** ISO timestamp when traversal of this segment ended. */
+  endedAt?: string;
+  /** Optional epoch ms timestamps aligned 1:1 with `coordinates` for Timelapse clock sync. */
+  vertexTimesMs?: number[];
 }
 
 export interface MatchedUserTrail {
@@ -784,12 +791,15 @@ export function averageNearbyTrailPings(
 export interface SplitTripsOptions {
   maxTimeGapMs?: number;
   maxDistanceMeters?: number;
+  /** Stationary dwell duration at a stop that concludes one trip and begins the next (default 5 min). */
+  minDwellSplitMs?: number;
 }
 
 /**
  * Splits a user's chronological stop visits into contiguous trips, breaking
- * whenever a gap exceeds `maxTimeGapMs` (default 30 min) or `maxDistanceMeters` (default 15 km),
- * or when transitioning between EXACT and FUZZED privacy modes.
+ * whenever a gap exceeds `maxTimeGapMs` (default 30 min), `maxDistanceMeters` (default 15 km),
+ * when transitioning between EXACT and FUZZED privacy modes, or at stationary dwells >= `minDwellSplitMs`
+ * (default 5 min), reusing the dwell visit as destination of the ending trip and origin of the next.
  */
 export function splitVisitsIntoTrips(
   visits: readonly TrailStopVisit[],
@@ -798,6 +808,7 @@ export function splitVisitsIntoTrips(
   if (visits.length === 0) return [];
   const maxTimeGapMs = options.maxTimeGapMs ?? DEFAULT_TRAIL_MAX_TIME_GAP_MS;
   const maxDistanceMeters = options.maxDistanceMeters ?? DEFAULT_TRAIL_MAX_DISTANCE_METERS;
+  const minDwellSplitMs = options.minDwellSplitMs ?? DEFAULT_TRAIL_TRIP_DWELL_SPLIT_MS;
 
   const trips: TrailStopVisit[][] = [[visits[0]]];
   for (let i = 1; i < visits.length; i += 1) {
@@ -817,8 +828,21 @@ export function splitVisitsIntoTrips(
       distMeters > maxDistanceMeters
     ) {
       trips.push([curr]);
+      continue;
+    }
+
+    const activeTrip = trips[trips.length - 1];
+    const prevDwellMs =
+      prev.dwellDurationMs ?? computeVisitDurationMs(prev.firstRecordedAt, prev.lastRecordedAt);
+    if (
+      Number.isFinite(minDwellSplitMs) &&
+      minDwellSplitMs > 0 &&
+      activeTrip.length >= 2 &&
+      prevDwellMs >= minDwellSplitMs
+    ) {
+      trips.push([prev, curr]);
     } else {
-      trips[trips.length - 1].push(curr);
+      activeTrip.push(curr);
     }
   }
   return trips;
@@ -1342,4 +1366,495 @@ export function buildTrailGeoJsonFeatures(options: BuildTrailGeoJsonOptions): {
   }
 
   return { features, stopsCount, hasRoadMatches: false };
+}
+
+/**
+ * Maps a MapLibre zoom level or query time span to a perpendicular Douglas-Peucker
+ * tolerance in meters for non-destructive trail node reduction.
+ */
+export function zoomToSimplifyToleranceMeters(zoom?: number | null, spanMs?: number | null): number {
+  if (typeof zoom === 'number' && Number.isFinite(zoom)) {
+    if (zoom >= 15) return 0;
+    if (zoom >= 13.5) return 12;
+    if (zoom >= 12) return 30;
+    if (zoom >= 10) return 85;
+    if (zoom >= 8) return 220;
+    return 500;
+  }
+  if (typeof spanMs === 'number' && Number.isFinite(spanMs) && spanMs > 0) {
+    if (spanMs >= 20 * 86_400_000) return 45;
+    if (spanMs >= 5 * 86_400_000) return 20;
+    if (spanMs >= 2 * 86_400_000) return 10;
+  }
+  return 0;
+}
+
+function perpendicularDistanceMeters(
+  pLat: number,
+  pLon: number,
+  aLat: number,
+  aLon: number,
+  bLat: number,
+  bLon: number,
+): number {
+  const cosLat = Math.max(0.12, Math.cos((((aLat + bLat) * 0.5) * Math.PI) / 180));
+  const ax = 0;
+  const ay = 0;
+  const bx = (bLon - aLon) * METERS_PER_DEGREE_LAT * cosLat;
+  const by = (bLat - aLat) * METERS_PER_DEGREE_LAT;
+  const px = (pLon - aLon) * METERS_PER_DEGREE_LAT * cosLat;
+  const py = (pLat - aLat) * METERS_PER_DEGREE_LAT;
+
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq <= 1e-9) {
+    return Math.hypot(px, py);
+  }
+  const t = Math.max(0, Math.min(1, (px * dx + py * dy) / lenSq));
+  const projX = ax + t * dx;
+  const projY = ay + t * dy;
+  return Math.hypot(px - projX, py - projY);
+}
+
+function douglasPeuckerIndices<T extends TrailPingLike>(
+  run: readonly T[],
+  toleranceMeters: number,
+): boolean[] {
+  const keep = new Array<boolean>(run.length).fill(false);
+  if (run.length === 0) return keep;
+  keep[0] = true;
+  keep[run.length - 1] = true;
+
+  const stack: Array<[number, number]> = [[0, run.length - 1]];
+  while (stack.length > 0) {
+    const [start, end] = stack.pop()!;
+    if (end - start <= 1) continue;
+    const a = run[start];
+    const b = run[end];
+    let maxDist = -1;
+    let maxIdx = -1;
+    for (let i = start + 1; i < end; i += 1) {
+      const p = run[i];
+      const dist = perpendicularDistanceMeters(
+        p.latitude,
+        p.longitude,
+        a.latitude,
+        a.longitude,
+        b.latitude,
+        b.longitude,
+      );
+      if (dist > maxDist) {
+        maxDist = dist;
+        maxIdx = i;
+      }
+    }
+    if (maxIdx !== -1 && maxDist > toleranceMeters) {
+      keep[maxIdx] = true;
+      stack.push([start, maxIdx], [maxIdx, end]);
+    }
+  }
+  return keep;
+}
+
+/**
+ * Non-destructive zoom/tolerance-aware Douglas-Peucker simplification per user.
+ * Always preserves endpoints, privacy transitions, time-gap boundaries, FUZZED grid changes,
+ * and stationary anchor pings so stops and dwell durations stay intact.
+ */
+export function simplifyTrailPings<T extends TrailPingLike>(
+  pings: readonly T[],
+  toleranceMeters: number,
+): T[] {
+  if (!Number.isFinite(toleranceMeters) || toleranceMeters <= 0 || pings.length <= 2) {
+    return [...pings];
+  }
+
+  const byUser = new Map<string, T[]>();
+  for (const ping of pings) {
+    const bucket = byUser.get(ping.userId);
+    if (bucket) bucket.push(ping);
+    else byUser.set(ping.userId, [ping]);
+  }
+
+  const simplified: T[] = [];
+  for (const userPings of byUser.values()) {
+    const sorted = [...userPings].sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt));
+    if (sorted.length <= 2) {
+      simplified.push(...sorted);
+      continue;
+    }
+
+    let runStart = 0;
+    const flushRun = (endInclusive: number) => {
+      const run = sorted.slice(runStart, endInclusive + 1);
+      if (run.length <= 2) {
+        simplified.push(...run);
+        return;
+      }
+      if (run[0]?.isFuzzed) {
+        // Keep first/last and cell transitions for FUZZED segments
+        simplified.push(run[0]);
+        for (let idx = 1; idx < run.length - 1; idx += 1) {
+          const prev = run[idx - 1];
+          const curr = run[idx];
+          if (
+            Math.abs(curr.latitude - prev.latitude) > 1e-6 ||
+            Math.abs(curr.longitude - prev.longitude) > 1e-6
+          ) {
+            simplified.push(curr);
+          }
+        }
+        simplified.push(run[run.length - 1]);
+        return;
+      }
+
+      const keep = douglasPeuckerIndices(run, toleranceMeters);
+      for (let idx = 0; idx < run.length; idx += 1) {
+        const pt = run[idx];
+        const isStationaryAnchor =
+          pt.activity === 'stationary' ||
+          (typeof pt.speed === 'number' && Number.isFinite(pt.speed) && pt.speed === 0);
+        if (keep[idx] || isStationaryAnchor) {
+          simplified.push(pt);
+        }
+      }
+    };
+
+    for (let i = 1; i < sorted.length; i += 1) {
+      const prev = sorted[i - 1];
+      const curr = sorted[i];
+      const dt = Date.parse(curr.recordedAt) - Date.parse(prev.recordedAt);
+      const dist = haversineMeters(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+      if (
+        Boolean(prev.isFuzzed) !== Boolean(curr.isFuzzed) ||
+        !Number.isFinite(dt) ||
+        dt > DEFAULT_TRAIL_MAX_TIME_GAP_MS ||
+        dist > DEFAULT_TRAIL_MAX_DISTANCE_METERS
+      ) {
+        flushRun(i - 1);
+        runStart = i;
+      }
+    }
+    flushRun(sorted.length - 1);
+  }
+
+  return simplified.sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt));
+}
+
+export interface TrailTripSummary {
+  id: string;
+  userId: string;
+  username: string;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  distanceMeters: number;
+  isApproximateDistance: boolean;
+  isFuzzed: boolean;
+  isStationaryOnly: boolean;
+  originLabel: string | null;
+  destinationLabel: string | null;
+  primaryActivityMode?: TrailActivityMode;
+  stopCount: number;
+  visits: TrailStopVisit[];
+  segments: TrailPathSegment[];
+  bounds: [number, number, number, number];
+}
+
+export interface BuildTrailTripsOptions {
+  trails: readonly TrailPingLike[];
+  matchedTrails?: readonly MatchedUserTrail[] | null;
+  mode?: TrailDisplayMode;
+  filterUserId?: string | null;
+  places?: readonly TrailPlaceLike[];
+  includeStays?: boolean;
+  minDwellSplitMs?: number;
+}
+
+function polylineDistanceMeters(coords: readonly [number, number][]): number {
+  let total = 0;
+  for (let i = 1; i < coords.length; i += 1) {
+    const [lonA, latA] = coords[i - 1];
+    const [lonB, latB] = coords[i];
+    total += haversineMeters(latA, lonA, latB, lonB);
+  }
+  return total;
+}
+
+function computeBounds(
+  visits: readonly TrailStopVisit[],
+  segments: readonly TrailPathSegment[],
+): [number, number, number, number] {
+  let minLon = Infinity;
+  let minLat = Infinity;
+  let maxLon = -Infinity;
+  let maxLat = -Infinity;
+
+  const absorb = (lon: number, lat: number) => {
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  };
+
+  for (const v of visits) absorb(v.longitude, v.latitude);
+  for (const s of segments) {
+    for (const [lon, lat] of s.coordinates) absorb(lon, lat);
+  }
+  if (!Number.isFinite(minLon)) return [0, 0, 0, 0];
+  return [minLon, minLat, maxLon, maxLat];
+}
+
+function pickDominantTripActivity(
+  visits: readonly TrailStopVisit[],
+  segments: readonly TrailPathSegment[],
+  isFuzzed: boolean,
+): TrailActivityMode | undefined {
+  if (isFuzzed) return undefined;
+  const weights = new Map<TrailActivityMode, number>();
+  for (const seg of segments) {
+    if (!seg.activityMode) continue;
+    const weight = Math.max(1, polylineDistanceMeters(seg.coordinates));
+    weights.set(seg.activityMode, (weights.get(seg.activityMode) ?? 0) + weight);
+  }
+  if (weights.size > 0) {
+    let best: TrailActivityMode | undefined;
+    let bestW = -1;
+    for (const [mode, w] of weights.entries()) {
+      if (mode !== 'stationary' && w > bestW) {
+        bestW = w;
+        best = mode;
+      }
+    }
+    if (best) return best;
+  }
+  for (const v of visits) {
+    if (v.activityMode && v.activityMode !== 'stationary') return v.activityMode;
+  }
+  return visits.some((v) => v.activityMode === 'stationary') ? 'stationary' : undefined;
+}
+
+/**
+ * Segments member trails into logical Trips delimited by stationary dwells (>= 5 min default),
+ * telemetry gaps, or privacy transitions, and computes duration, distance, and Place context.
+ */
+export function buildTrailTrips(options: BuildTrailTripsOptions): TrailTripSummary[] {
+  const mode = options.mode ?? 'roads';
+  const filterUserId = options.filterUserId ?? null;
+  const includeStays = options.includeStays ?? false;
+  const minDwellSplitMs = options.minDwellSplitMs ?? DEFAULT_TRAIL_TRIP_DWELL_SPLIT_MS;
+
+  const usableMatched =
+    mode === 'roads' && options.matchedTrails && options.matchedTrails.length > 0
+      ? options.matchedTrails.filter((t) => !filterUserId || t.userId === filterUserId)
+      : null;
+
+  const users: Array<{
+    userId: string;
+    username: string;
+    visits: TrailStopVisit[];
+    segments: TrailPathSegment[];
+  }> = [];
+
+  if (usableMatched && usableMatched.length > 0) {
+    for (const mt of usableMatched) {
+      const visits =
+        mt.visits && mt.visits.length > 0
+          ? mt.visits
+          : mt.stops.map((s, idx) => ({
+              stopIndex: idx,
+              latitude: s.latitude,
+              longitude: s.longitude,
+              firstRecordedAt: s.firstRecordedAt,
+              lastRecordedAt: s.lastRecordedAt,
+              isFuzzed: s.isFuzzed,
+              maxSpeedMps: null,
+              pingCount: s.pingCount,
+            }));
+      users.push({
+        userId: mt.userId,
+        username: mt.username,
+        visits,
+        segments: mt.segments,
+      });
+    }
+  } else {
+    const rawFiltered = filterUserId
+      ? options.trails.filter((t) => t.userId === filterUserId)
+      : options.trails;
+    const compacted = averageNearbyTrailPings(rawFiltered);
+    for (const ut of compacted) {
+      users.push({
+        userId: ut.userId,
+        username: ut.username,
+        visits: ut.visits ?? [],
+        segments: [],
+      });
+    }
+  }
+
+  const summaries: TrailTripSummary[] = [];
+
+  for (const user of users) {
+    const tripChunks = splitVisitsIntoTrips(user.visits, { minDwellSplitMs });
+    for (let tIdx = 0; tIdx < tripChunks.length; tIdx += 1) {
+      const chunk = tripChunks[tIdx];
+      if (chunk.length === 0) continue;
+
+      const first = chunk[0];
+      const last = chunk[chunk.length - 1];
+      const isFuzzed = chunk.some((v) => v.isFuzzed);
+
+      const startedAt =
+        chunk.length >= 2 && first.isDwell ? first.lastRecordedAt : first.firstRecordedAt;
+      const endedAt =
+        chunk.length >= 2 && last.isDwell ? last.firstRecordedAt : last.lastRecordedAt;
+
+      const startMs = Date.parse(startedAt);
+      const endMs = Date.parse(endedAt);
+      const safeStartIso =
+        Number.isFinite(startMs) && Number.isFinite(endMs) && startMs <= endMs
+          ? startedAt
+          : first.firstRecordedAt;
+      const safeEndIso =
+        Number.isFinite(startMs) && Number.isFinite(endMs) && startMs <= endMs
+          ? endedAt
+          : last.lastRecordedAt;
+      const durationMs = Math.max(0, Date.parse(safeEndIso) - Date.parse(safeStartIso));
+
+      const sMs = Date.parse(safeStartIso);
+      const eMs = Date.parse(safeEndIso);
+
+      let tripSegments = user.segments.filter((seg) => {
+        if (seg.coordinates.length < 2) return false;
+        if (seg.startedAt && seg.endedAt) {
+          const segS = Date.parse(seg.startedAt);
+          const segE = Date.parse(seg.endedAt);
+          return segS >= sMs - 1000 && segE <= eMs + 1000;
+        }
+        return false;
+      });
+
+      if (tripSegments.length === 0 && chunk.length >= 2) {
+        const directCoords: [number, number][] = [];
+        for (const v of chunk) {
+          const prev = directCoords[directCoords.length - 1];
+          if (!prev || prev[0] !== v.longitude || prev[1] !== v.latitude) {
+            directCoords.push([v.longitude, v.latitude]);
+          }
+        }
+        if (directCoords.length >= 2) {
+          tripSegments = [
+            {
+              kind: 'direct',
+              coordinates: directCoords,
+              startedAt: safeStartIso,
+              endedAt: safeEndIso,
+              ...(!isFuzzed && last.activityMode ? { activityMode: last.activityMode } : {}),
+            },
+          ];
+        }
+      }
+
+      let rawDistance = 0;
+      if (tripSegments.length > 0) {
+        for (const seg of tripSegments) {
+          if (seg.kind !== 'spur') {
+            rawDistance += polylineDistanceMeters(seg.coordinates);
+          }
+        }
+      } else {
+        for (let i = 1; i < chunk.length; i += 1) {
+          rawDistance += haversineMeters(
+            chunk[i - 1].latitude,
+            chunk[i - 1].longitude,
+            chunk[i].latitude,
+            chunk[i].longitude,
+          );
+        }
+      }
+
+      const isStationaryOnly = chunk.length <= 1 || rawDistance < 50;
+      if (isStationaryOnly && !includeStays) {
+        continue;
+      }
+
+      const distanceMeters = isFuzzed
+        ? Math.round(rawDistance / 1000) * 1000
+        : Math.round(rawDistance);
+
+      let originLabel: string | null = null;
+      let destinationLabel: string | null = null;
+      if (isFuzzed) {
+        originLabel = 'Approximate area';
+        destinationLabel = 'Approximate area';
+      } else if (options.places && options.places.length > 0) {
+        originLabel = resolveTrailPointDetails({
+          latitude: first.latitude,
+          longitude: first.longitude,
+          isFuzzed: first.isFuzzed,
+          places: options.places,
+        }).matchedPlaceName;
+        destinationLabel = resolveTrailPointDetails({
+          latitude: last.latitude,
+          longitude: last.longitude,
+          isFuzzed: last.isFuzzed,
+          places: options.places,
+        }).matchedPlaceName;
+      }
+
+      summaries.push({
+        id: `${user.userId}:${safeStartIso}:${safeEndIso}:${tIdx}`,
+        userId: user.userId,
+        username: user.username,
+        startedAt: safeStartIso,
+        endedAt: safeEndIso,
+        durationMs,
+        distanceMeters,
+        isApproximateDistance: isFuzzed,
+        isFuzzed,
+        isStationaryOnly,
+        originLabel,
+        destinationLabel,
+        primaryActivityMode: pickDominantTripActivity(chunk, tripSegments, isFuzzed),
+        stopCount: chunk.length,
+        visits: chunk,
+        segments: tripSegments,
+        bounds: computeBounds(chunk, tripSegments),
+      });
+    }
+  }
+
+  return summaries;
+}
+
+/** Sorts Trip summaries by recency, member name, duration, or distance without mutating input. */
+export function sortTrailTrips(
+  trips: readonly TrailTripSummary[],
+  sortBy: TrailTripSort = 'newest',
+): TrailTripSummary[] {
+  const copy = [...trips];
+  copy.sort((a, b) => {
+    switch (sortBy) {
+      case 'oldest':
+        return Date.parse(a.startedAt) - Date.parse(b.startedAt);
+      case 'member': {
+        const byName = a.username.localeCompare(b.username);
+        return byName !== 0 ? byName : Date.parse(b.endedAt) - Date.parse(a.endedAt);
+      }
+      case 'duration_desc':
+        return b.durationMs - a.durationMs;
+      case 'duration_asc':
+        return a.durationMs - b.durationMs;
+      case 'distance_desc':
+        return b.distanceMeters - a.distanceMeters;
+      case 'distance_asc':
+        return a.distanceMeters - b.distanceMeters;
+      case 'newest':
+      default:
+        return Date.parse(b.endedAt) - Date.parse(a.endedAt);
+    }
+  });
+  return copy;
 }

@@ -1490,6 +1490,12 @@ export class RoadTrailMatcher {
   private readonly spurThresholdMeters: number;
   private readonly maxCachedResults: number;
   private readonly resultCache = new Map<string, MatchedUserTrail[]>();
+  private readonly tripCache = new Map<
+    string,
+    { segments: TrailPathSegment[]; visits: TrailStopVisit[]; hasRoadMatches: boolean }
+  >();
+  private readonly maxCachedTrips = 512;
+  private readonly maxMatchedTripsPerRequest = 48;
 
   constructor(options: RoadTrailMatcherOptions = {}) {
     if (options.tileProvider) {
@@ -1505,6 +1511,58 @@ export class RoadTrailMatcher {
     this.maxCachedResults = options.maxCachedResults ?? 128;
   }
 
+  private computeLegVertexTimesMs(
+    coords: readonly [number, number][],
+    startVisit: TrailStopVisit,
+    endVisit: TrailStopVisit,
+  ): { startedAt: string; endedAt: string; vertexTimesMs: number[] } {
+    const startedAt = startVisit.lastRecordedAt || startVisit.firstRecordedAt;
+    const endedAt = endVisit.firstRecordedAt || endVisit.lastRecordedAt;
+    const rawStart = Date.parse(startedAt);
+    const rawEnd = Date.parse(endedAt);
+    const startMs = Number.isFinite(rawStart) ? rawStart : 0;
+    const endMs = Number.isFinite(rawEnd) && rawEnd >= startMs ? rawEnd : startMs;
+
+    if (coords.length === 0) {
+      return { startedAt, endedAt, vertexTimesMs: [] };
+    }
+    if (coords.length === 1 || endMs <= startMs) {
+      return { startedAt, endedAt, vertexTimesMs: new Array<number>(coords.length).fill(startMs) };
+    }
+
+    const cumDist: number[] = [0];
+    let totalDist = 0;
+    for (let i = 1; i < coords.length; i += 1) {
+      const [lonA, latA] = coords[i - 1];
+      const [lonB, latB] = coords[i];
+      totalDist += haversineMeters(latA, lonA, latB, lonB);
+      cumDist.push(totalDist);
+    }
+
+    const span = endMs - startMs;
+    const vertexTimesMs =
+      totalDist <= 1e-6
+        ? coords.map((_, idx) => Math.round(startMs + (idx / (coords.length - 1)) * span))
+        : cumDist.map((d) => Math.round(startMs + (d / totalDist) * span));
+
+    return { startedAt, endedAt, vertexTimesMs };
+  }
+
+  private buildTimedDirectSegments(visits: readonly TrailStopVisit[]): TrailPathSegment[] {
+    if (visits.length < 2) return [];
+    const coordinates = visits.map((v) => [v.longitude, v.latitude] as [number, number]);
+    const first = visits[0];
+    const last = visits[visits.length - 1];
+    const startedAt = first.lastRecordedAt || first.firstRecordedAt;
+    const endedAt = last.firstRecordedAt || last.lastRecordedAt;
+    const vertexTimesMs = visits.map((v, idx) => {
+      const iso = idx === 0 ? startedAt : idx === visits.length - 1 ? endedAt : v.firstRecordedAt;
+      const ms = Date.parse(iso);
+      return Number.isFinite(ms) ? ms : 0;
+    });
+    return [{ kind: 'direct', coordinates, startedAt, endedAt, vertexTimesMs }];
+  }
+
   private async matchSingleTrip(rawVisits: readonly TrailStopVisit[]): Promise<{
     segments: TrailPathSegment[];
     visits: TrailStopVisit[];
@@ -1518,12 +1576,7 @@ export class RoadTrailMatcher {
     // Never road-snap FUZZED (~1 km grid) trails; render straight dashed lines instead.
     if (visits.some((v) => v.isFuzzed)) {
       return {
-        segments: [
-          {
-            kind: 'direct',
-            coordinates: visits.map((v) => [v.longitude, v.latitude] as [number, number]),
-          },
-        ],
+        segments: this.buildTimedDirectSegments(visits),
         visits: [...visits],
         hasRoadMatches: false,
       };
@@ -1535,12 +1588,7 @@ export class RoadTrailMatcher {
       : await this.tileProvider.getRoadFeaturesForBbox(paddedBbox);
     if (roadFeatures.length === 0) {
       return {
-        segments: [
-          {
-            kind: 'direct',
-            coordinates: visits.map((v) => [v.longitude, v.latitude] as [number, number]),
-          },
-        ],
+        segments: this.buildTimedDirectSegments(visits),
         visits: [...visits],
         hasRoadMatches: false,
       };
@@ -1888,23 +1936,47 @@ export class RoadTrailMatcher {
     const segments: TrailPathSegment[] = [];
     const emittedSpurs = new Set<string>();
     let pendingRoadCoords: [number, number][][] = [];
+    let pendingRoadTimes: number[][] = [];
+    let pendingStartedAt: string | undefined;
+    let pendingEndedAt: string | undefined;
     let pendingRoadKind: string | undefined;
     let pendingActivityMode: TrailActivityMode | undefined;
     let hasRoadMatches = false;
 
     const flushRoad = () => {
       if (pendingRoadCoords.length === 0) return;
-      const merged = mergeTrailCoordinates(pendingRoadCoords);
+      const merged: [number, number][] = [];
+      const mergedTimes: number[] = [];
+      for (let cIdx = 0; cIdx < pendingRoadCoords.length; cIdx += 1) {
+        const chunk = pendingRoadCoords[cIdx];
+        const tChunk = pendingRoadTimes[cIdx] ?? [];
+        for (let pIdx = 0; pIdx < chunk.length; pIdx += 1) {
+          const pt = chunk[pIdx];
+          const prev = merged[merged.length - 1];
+          if (!prev || prev[0] !== pt[0] || prev[1] !== pt[1]) {
+            merged.push([pt[0], pt[1]]);
+            if (typeof tChunk[pIdx] === 'number') {
+              mergedTimes.push(tChunk[pIdx]);
+            }
+          }
+        }
+      }
       if (merged.length >= 2) {
         segments.push({
           kind: 'road',
           coordinates: merged,
           ...(pendingRoadKind ? { roadKind: pendingRoadKind } : {}),
           ...(pendingActivityMode ? { activityMode: pendingActivityMode } : {}),
+          ...(pendingStartedAt ? { startedAt: pendingStartedAt } : {}),
+          ...(pendingEndedAt ? { endedAt: pendingEndedAt } : {}),
+          ...(mergedTimes.length === merged.length ? { vertexTimesMs: mergedTimes } : {}),
         });
         hasRoadMatches = true;
       }
       pendingRoadCoords = [];
+      pendingRoadTimes = [];
+      pendingStartedAt = undefined;
+      pendingEndedAt = undefined;
       pendingRoadKind = undefined;
       pendingActivityMode = undefined;
     };
@@ -1961,8 +2033,16 @@ export class RoadTrailMatcher {
         ) {
           flushRoad();
         }
+        const legTiming = this.computeLegVertexTimesMs(
+          legEntry.route.coordinates,
+          startVisit,
+          endVisit,
+        );
         maybeAddSpur(startVisit, chosenCandidate[i]);
         pendingRoadCoords.push(legEntry.route.coordinates);
+        pendingRoadTimes.push(legTiming.vertexTimesMs);
+        pendingStartedAt = pendingStartedAt ?? legTiming.startedAt;
+        pendingEndedAt = legTiming.endedAt;
         pendingRoadKind = pendingRoadKind ?? legEntry.route.dominantRoadKind;
         pendingActivityMode = pendingActivityMode ?? legActivityMode;
         maybeAddSpur(endVisit, chosenCandidate[legEntry.nextIdx]);
@@ -1983,12 +2063,17 @@ export class RoadTrailMatcher {
           isMovingLeg: true,
           isFuzzed: a.isFuzzed || b.isFuzzed,
         });
+        const directCoords: [number, number][] = [
+          [a.longitude, a.latitude],
+          [b.longitude, b.latitude],
+        ];
+        const directTiming = this.computeLegVertexTimesMs(directCoords, a, b);
         segments.push({
           kind: 'direct',
-          coordinates: [
-            [a.longitude, a.latitude],
-            [b.longitude, b.latitude],
-          ],
+          coordinates: directCoords,
+          startedAt: directTiming.startedAt,
+          endedAt: directTiming.endedAt,
+          vertexTimesMs: directTiming.vertexTimesMs,
           ...(directActivityMode ? { activityMode: directActivityMode } : {}),
         });
         i = nextIdx;
@@ -2088,15 +2173,56 @@ export class RoadTrailMatcher {
 
       const userSegments: TrailPathSegment[] = [];
       const userVisits: TrailStopVisit[] = [];
+      const userSpurKeys = new Set<string>();
       let userHasRoadMatches = false;
+      let matchedInCall = 0;
 
       for (const trip of trips) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        const res = await this.matchSingleTrip(trip);
+        const tripKey = `${rev}\n${userTrail.userId}\n${trip
+          .map(
+            (v) =>
+              `${v.stopIndex}:${v.latitude.toFixed(6)},${v.longitude.toFixed(6)}:${v.firstRecordedAt}:${v.lastRecordedAt}:${v.isFuzzed ? 1 : 0}:${v.activity ?? ''}:${v.maxSpeedMps ?? ''}`,
+          )
+          .join('|')}`;
+        let res = this.tripCache.get(tripKey);
+        if (res) {
+          this.tripCache.delete(tripKey);
+          this.tripCache.set(tripKey, res);
+        } else if (matchedInCall < this.maxMatchedTripsPerRequest) {
+          matchedInCall += 1;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          res = await this.matchSingleTrip(trip);
+          if (this.tripCache.size >= this.maxCachedTrips) {
+            const oldestTripKey = this.tripCache.keys().next().value;
+            if (oldestTripKey !== undefined) this.tripCache.delete(oldestTripKey);
+          }
+          this.tripCache.set(tripKey, res);
+        } else {
+          res = {
+            segments: this.buildTimedDirectSegments(trip),
+            visits: [...trip],
+            hasRoadMatches: false,
+          };
+        }
+
         for (const seg of res.segments) {
+          if (seg.kind === 'spur') {
+            const spurKey = seg.coordinates.map(([x, y]) => `${x},${y}`).join('->');
+            if (userSpurKeys.has(spurKey)) continue;
+            userSpurKeys.add(spurKey);
+          }
           userSegments.push(seg);
         }
         for (const kv of res.visits) {
+          const prevKv = userVisits[userVisits.length - 1];
+          if (
+            prevKv &&
+            prevKv.stopIndex === kv.stopIndex &&
+            prevKv.firstRecordedAt === kv.firstRecordedAt &&
+            prevKv.lastRecordedAt === kv.lastRecordedAt
+          ) {
+            continue;
+          }
           userVisits.push(kv);
         }
         if (res.hasRoadMatches) userHasRoadMatches = true;
@@ -2124,6 +2250,7 @@ export class RoadTrailMatcher {
 
   async close(): Promise<void> {
     this.resultCache.clear();
+    this.tripCache.clear();
     if (this.ownsProvider && this.tileProvider instanceof PmtilesRoadTileProvider) {
       await this.tileProvider.close();
     }

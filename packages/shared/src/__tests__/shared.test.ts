@@ -1686,4 +1686,156 @@ describe('@loved-ones/shared', () => {
       }).activityMode,
     ).toBeUndefined();
   });
+
+  it('splits trips on 5-min dwells, simplifies collinear nodes, and summarizes/sorts trips safely', async () => {
+    const {
+      averageNearbyTrailPings,
+      splitVisitsIntoTrips,
+      simplifyTrailPings,
+      zoomToSimplifyToleranceMeters,
+      buildTrailTrips,
+      sortTrailTrips,
+    } = await import('../index.js');
+
+    expect(zoomToSimplifyToleranceMeters(15)).toBe(0);
+    expect(zoomToSimplifyToleranceMeters(12)).toBeGreaterThan(0);
+    expect(zoomToSimplifyToleranceMeters(null, 30 * 86_400_000)).toBeGreaterThan(0);
+
+    // Collinear moving points collapse while keeping endpoints, bend, and stationary anchor
+    const linearRun = [
+      { userId: 'u1', username: 'Alice', latitude: 52.5, longitude: 13.4, recordedAt: '2026-11-20T08:00:00.000Z', speed: 10 },
+      { userId: 'u1', username: 'Alice', latitude: 52.502, longitude: 13.4, recordedAt: '2026-11-20T08:01:00.000Z', speed: 10 },
+      { userId: 'u1', username: 'Alice', latitude: 52.504, longitude: 13.4, recordedAt: '2026-11-20T08:02:00.000Z', speed: 10 },
+      { userId: 'u1', username: 'Alice', latitude: 52.506, longitude: 13.404, recordedAt: '2026-11-20T08:03:00.000Z', speed: 10 }, // sharp corner
+      { userId: 'u1', username: 'Alice', latitude: 52.506, longitude: 13.408, recordedAt: '2026-11-20T08:04:00.000Z', speed: 10 },
+    ];
+    const simplified = simplifyTrailPings(linearRun, 20);
+    expect(simplified.length).toBeLessThan(linearRun.length);
+    expect(simplified[0].recordedAt).toBe('2026-11-20T08:00:00.000Z');
+    expect(simplified.some((p) => p.recordedAt === '2026-11-20T08:03:00.000Z')).toBe(true);
+    expect(simplified[simplified.length - 1].recordedAt).toBe('2026-11-20T08:04:00.000Z');
+
+    // Dwell >= 5m splits Trip 1 (Home -> Park) and Trip 2 (Park -> Store) reusing Park
+    const multiTripPings = [
+      { userId: 'u1', username: 'Alice', latitude: 52.52, longitude: 13.4, recordedAt: '2026-11-20T08:00:00.000Z', isFuzzed: false },
+      { userId: 'u1', username: 'Alice', latitude: 52.524, longitude: 13.406, recordedAt: '2026-11-20T08:10:00.000Z', isFuzzed: false },
+      { userId: 'u1', username: 'Alice', latitude: 52.524, longitude: 13.406, recordedAt: '2026-11-20T08:22:00.000Z', isFuzzed: false }, // 12m dwell at Park
+      { userId: 'u1', username: 'Alice', latitude: 52.528, longitude: 13.412, recordedAt: '2026-11-20T08:30:00.000Z', isFuzzed: false },
+      // Second user Bob who is FUZZED near a real Place (Place name must never leak)
+      { userId: 'u2', username: 'Bob', latitude: 52.52, longitude: 13.4, recordedAt: '2026-11-20T07:00:00.000Z', isFuzzed: true },
+      { userId: 'u2', username: 'Bob', latitude: 52.53, longitude: 13.42, recordedAt: '2026-11-20T07:15:00.000Z', isFuzzed: true },
+    ];
+    const compactedAlice = averageNearbyTrailPings(multiTripPings.filter((p) => p.userId === 'u1'))[0];
+    const split = splitVisitsIntoTrips(compactedAlice.visits ?? []);
+    expect(split).toHaveLength(2);
+    expect(split[0][split[0].length - 1].stopIndex).toBe(split[1][0].stopIndex);
+
+    const trips = buildTrailTrips({
+      trails: multiTripPings,
+      mode: 'raw',
+      places: [
+        { name: 'Home', latitude: 52.52, longitude: 13.4, radiusMeters: 150 },
+        { name: 'Central Park', latitude: 52.524, longitude: 13.406, radiusMeters: 150 },
+      ],
+    });
+    expect(trips).toHaveLength(3);
+    const aliceTrip1 = trips.find((t) => t.userId === 'u1' && t.originLabel === 'Home')!;
+    expect(aliceTrip1.destinationLabel).toBe('Central Park');
+    const bobTrip = trips.find((t) => t.userId === 'u2')!;
+    expect(bobTrip.isApproximateDistance).toBe(true);
+    expect(bobTrip.originLabel).toBe('Approximate area');
+    expect(bobTrip.originLabel).not.toBe('Home');
+
+    expect(sortTrailTrips(trips, 'oldest')[0].userId).toBe('u2');
+    expect(sortTrailTrips(trips, 'member')[0].username).toBe('Alice');
+    expect(sortTrailTrips(trips, 'distance_desc')[0].distanceMeters).toBeGreaterThanOrEqual(
+      sortTrailTrips(trips, 'distance_desc')[1].distanceMeters,
+    );
+  });
+
+  it('builds synchronized Timelapse timelines with shared idle compression, road sync, and FUZZED wander', async () => {
+    const {
+      buildTimelapseTimeline,
+      virtualToRealMs,
+      realToVirtualMs,
+      sampleTimelapseFrame,
+    } = await import('../index.js');
+
+    const t0 = '2026-11-20T08:00:00.000Z';
+    const t1 = '2026-11-20T08:10:00.000Z';
+    const t2 = '2026-11-20T10:10:00.000Z'; // 2h idle stay at stop
+    const t3 = '2026-11-20T10:20:00.000Z';
+
+    const timeline = buildTimelapseTimeline({
+      trails: [],
+      mode: 'roads',
+      compactIdle: true,
+      matchedTrails: [
+        {
+          userId: 'u1',
+          username: 'Alice',
+          hasRoadMatches: true,
+          stops: [
+            { userId: 'u1', username: 'Alice', latitude: 52.52, longitude: 13.4, pingCount: 1, firstRecordedAt: t0, lastRecordedAt: t0, isFuzzed: false },
+            { userId: 'u1', username: 'Alice', latitude: 52.524, longitude: 13.406, pingCount: 2, firstRecordedAt: t1, lastRecordedAt: t2, isFuzzed: false },
+            { userId: 'u1', username: 'Alice', latitude: 52.528, longitude: 13.412, pingCount: 1, firstRecordedAt: t3, lastRecordedAt: t3, isFuzzed: false },
+          ],
+          visits: [
+            { stopIndex: 0, latitude: 52.52, longitude: 13.4, firstRecordedAt: t0, lastRecordedAt: t0, isFuzzed: false, maxSpeedMps: 5, activityMode: 'driving' },
+            { stopIndex: 1, latitude: 52.524, longitude: 13.406, firstRecordedAt: t1, lastRecordedAt: t2, isFuzzed: false, maxSpeedMps: 0, isDwell: true, dwellDurationMs: 7_200_000, activityMode: 'stationary' },
+            { stopIndex: 2, latitude: 52.528, longitude: 13.412, firstRecordedAt: t3, lastRecordedAt: t3, isFuzzed: false, maxSpeedMps: 5, activityMode: 'walking' },
+          ],
+          segments: [
+            {
+              kind: 'road',
+              coordinates: [[13.4, 52.52], [13.403, 52.522], [13.406, 52.524]],
+              roadKind: 'minor_road',
+              activityMode: 'driving',
+              startedAt: t0,
+              endedAt: t1,
+            },
+            {
+              kind: 'road',
+              coordinates: [[13.406, 52.524], [13.409, 52.526], [13.412, 52.528]],
+              roadKind: 'path',
+              activityMode: 'walking',
+              startedAt: t2,
+              endedAt: t3,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(timeline.isEmpty).toBe(false);
+    expect(timeline.segments.some((s) => s.compressed)).toBe(true);
+    expect(timeline.virtualDurationMs).toBeLessThan(timeline.realDurationMs);
+
+    const midReal = Date.parse('2026-11-20T08:05:00.000Z');
+    const vMid = realToVirtualMs(timeline, midReal);
+    expect(Math.abs(virtualToRealMs(timeline, vMid) - midReal)).toBeLessThan(100);
+
+    const frameMid = sampleTimelapseFrame(timeline, midReal);
+    expect(frameMid.markers).toHaveLength(1);
+    expect(frameMid.markers[0].longitude).toBeCloseTo(13.403, 2);
+    expect(frameMid.markers[0].latitude).toBeCloseTo(52.522, 2);
+    expect(frameMid.markers[0].isFuzzed).toBe(false);
+
+    // FUZZED -> EXACT transition renders fuzz-zone + wander then converges on EXACT
+    const fuzzTimeline = buildTimelapseTimeline({
+      mode: 'raw',
+      trails: [
+        { userId: 'u2', username: 'Bob', latitude: 52.52, longitude: 13.4, recordedAt: '2026-11-20T08:00:00.000Z', isFuzzed: true },
+        { userId: 'u2', username: 'Bob', latitude: 52.52, longitude: 13.4, recordedAt: '2026-11-20T08:05:00.000Z', isFuzzed: true },
+        { userId: 'u2', username: 'Bob', latitude: 52.53, longitude: 13.42, recordedAt: '2026-11-20T08:10:00.000Z', isFuzzed: false },
+      ],
+    });
+    const fuzzFrame = sampleTimelapseFrame(fuzzTimeline, Date.parse('2026-11-20T08:02:00.000Z'));
+    expect(fuzzFrame.markers[0].isFuzzed).toBe(true);
+    expect(fuzzFrame.features.some((f) => f.properties.kind === 'fuzz-zone')).toBe(true);
+    const exactResumeFrame = sampleTimelapseFrame(fuzzTimeline, Date.parse('2026-11-20T08:10:00.000Z'));
+    expect(exactResumeFrame.markers[0].isFuzzed).toBe(false);
+    expect(exactResumeFrame.markers[0].longitude).toBeCloseTo(13.42, 5);
+    expect(exactResumeFrame.markers[0].latitude).toBeCloseTo(52.53, 5);
+  });
 });

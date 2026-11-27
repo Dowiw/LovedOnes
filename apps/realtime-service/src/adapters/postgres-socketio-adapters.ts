@@ -10,6 +10,7 @@ import {
   findPlaceById,
   getGroupMembershipPrivacyInfo,
   getGroupTrails,
+  getGroupTrailsSampled,
   getLatestGroupLocations,
   getLatestUserLocation,
   getUserPublicProfile,
@@ -84,6 +85,10 @@ export class PostgresRealtimeStore implements RealtimeStore {
 
   getGroupTrails(options: GroupTrailQueryOptions) {
     return getGroupTrails(this.pool, options);
+  }
+
+  getGroupTrailsSampled(options: GroupTrailQueryOptions) {
+    return getGroupTrailsSampled(this.pool, options);
   }
 
   createLocationRequest(input: {

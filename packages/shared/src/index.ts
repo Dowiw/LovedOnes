@@ -3,6 +3,7 @@ export * from './privacy.js';
 export * from './maps.js';
 export * from './timing.js';
 export * from './trail.js';
+export * from './timelapse.js';
 export * from './version.js';
 export * from './presence.js';
 export * from './viewport.js';

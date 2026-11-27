@@ -53,7 +53,6 @@ import {
   isSafeAvatarUrl,
   isSafeLoginBackgroundUrl,
   resolveMemberPresenceStatus,
-  TRAIL_ACTIVITY_META,
   withMinDelay,
   type AppVersionInfo,
   type ChatMessage,
@@ -69,7 +68,10 @@ import {
   type PrivacyMode,
   type PublicLoginConfig,
   type RegistrationRequestItem,
+  type TimelapseFrame,
   type TrailDisplayMode,
+  type TrailsResponseMeta,
+  type TrailTripSummary,
 } from '@loved-ones/shared';
 import { AccountSettingsModal } from '@/components/AccountSettingsModal';
 import { BrandMark } from '@/components/BrandMark';
@@ -80,6 +82,10 @@ import {
   type MapProjectionMode,
 } from '@/components/MapCanvas';
 import { QrJoinModal } from '@/components/QrJoinModal';
+import {
+  TrailsTimelapseOverlay,
+  type TrailsTimeRangeState,
+} from '@/components/TrailsTimelapseOverlay';
 import {
   ACCOUNT_REMOVED_DEFAULT_MESSAGE,
   ACCOUNT_REMOVED_EVENT,
@@ -235,14 +241,53 @@ export default function HomePage() {
   const [locations, setLocations] = useState<LocationBroadcast[]>([]);
   const [trails, setTrails] = useState<LocationBroadcast[]>([]);
   const [matchedTrails, setMatchedTrails] = useState<MatchedUserTrail[]>([]);
+  const [trailsMeta, setTrailsMeta] = useState<TrailsResponseMeta | null>(null);
+  const [trailsLoading, setTrailsLoading] = useState(false);
   const [trailDisplayMode, setTrailDisplayMode] = useState<TrailDisplayMode>('roads');
   const [colorTrailsByActivity, setColorTrailsByActivity] = useState(true);
+  const [trailTimeRange, setTrailTimeRange] = useState<TrailsTimeRangeState>(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      preset: '24h',
+      customMode: 'day',
+      customDay: today,
+      customFrom: today,
+      customTo: today,
+    };
+  });
+  const [trailSelectedMemberId, setTrailSelectedMemberId] = useState<string | null>(null);
+  const [focusedTrip, setFocusedTrip] = useState<TrailTripSummary | null>(null);
+  const [focusedTripNonce, setFocusedTripNonce] = useState(0);
+  const [fitTrailsNonce, setFitTrailsNonce] = useState(0);
+  const [timelapseFrame, setTimelapseFrame] = useState<TimelapseFrame | null>(null);
+  const [timelapseFocusMode, setTimelapseFocusMode] = useState(false);
+  const [timelapseFollowUserId, setTimelapseFollowUserId] = useState<string | null>(null);
+  const [closeTrailPopoversNonce, setCloseTrailPopoversNonce] = useState(0);
+
   const [webVersionInfo, setWebVersionInfo] = useState<AppVersionInfo | null>(null);
   const [dismissedWebUpdateVersion, setDismissedWebUpdateVersion] = useState<string | null>(null);
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('live');
+
+  const isTimelapseFocus = mapViewMode === 'trails' && timelapseFocusMode;
+  const focusFadeClass = isTimelapseFocus
+    ? 'opacity-0 scale-[0.98] pointer-events-none [&_*]:!pointer-events-none'
+    : '';
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+
+  const trailMemberOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const loc of locations) {
+      byId.set(loc.userId, loc.username);
+    }
+    for (const pt of trails) {
+      if (!byId.has(pt.userId)) byId.set(pt.userId, pt.username);
+    }
+    return Array.from(byId.entries())
+      .map(([userId, username]) => ({ userId, username }))
+      .sort((a, b) => a.username.localeCompare(b.username));
+  }, [locations, trails]);
 
   const [geoSharing, setGeoSharing] = useState(false);
   const [geoStatus, setGeoStatus] = useState<string | null>(null);
@@ -1434,21 +1479,81 @@ export default function HomePage() {
     };
   }, [session, activeGroup]);
 
-  // Load 24h trails when user switches map view to Trails
+  // Load trails for the active time window when user switches map view to Trails
   useEffect(() => {
-    if (!session || !activeGroup || mapViewMode !== 'trails') return;
-    const to = new Date().toISOString();
-    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    void apiFetchGroupTrails(session.accessToken, activeGroup.id, { from, to, limit: 1000 })
+    if (!session || !activeGroup || mapViewMode !== 'trails') {
+      setTimelapseFocusMode(false);
+      setTimelapseFrame(null);
+      return;
+    }
+
+    let fromMs: number;
+    let toMs: number;
+    let limit = 2500;
+    const now = Date.now();
+    if (trailTimeRange.preset === 'custom') {
+      if (trailTimeRange.customMode === 'day') {
+        const start = new Date(`${trailTimeRange.customDay}T00:00:00`);
+        const end = new Date(`${trailTimeRange.customDay}T23:59:59.999`);
+        fromMs = Number.isNaN(start.getTime()) ? now - 86_400_000 : start.getTime();
+        toMs = Number.isNaN(end.getTime()) ? now : end.getTime();
+      } else {
+        const start = new Date(`${trailTimeRange.customFrom}T00:00:00`);
+        const end = new Date(`${trailTimeRange.customTo}T23:59:59.999`);
+        fromMs = Number.isNaN(start.getTime()) ? now - 86_400_000 : start.getTime();
+        toMs = Number.isNaN(end.getTime()) ? now : end.getTime();
+      }
+      if (fromMs > toMs) {
+        [fromMs, toMs] = [toMs - 86_400_000, toMs];
+      }
+      limit = 8000;
+    } else {
+      const hours =
+        trailTimeRange.preset === '30d'
+          ? 24 * 30
+          : trailTimeRange.preset === '7d'
+            ? 24 * 7
+            : trailTimeRange.preset === '3d'
+              ? 24 * 3
+              : 24;
+      toMs = now;
+      fromMs = now - hours * 60 * 60 * 1000;
+      limit =
+        trailTimeRange.preset === '30d'
+          ? 8000
+          : trailTimeRange.preset === '7d' || trailTimeRange.preset === '3d'
+            ? 5000
+            : 2500;
+    }
+
+    let cancelled = false;
+    setTrailsLoading(true);
+    void apiFetchGroupTrails(session.accessToken, activeGroup.id, {
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
+      userId: trailSelectedMemberId ?? undefined,
+      limit,
+    })
       .then((res) => {
+        if (cancelled) return;
         setTrails(res.trails);
         setMatchedTrails(res.matchedTrails);
+        setTrailsMeta(res.meta ?? null);
       })
       .catch(() => {
+        if (cancelled) return;
         setTrails([]);
         setMatchedTrails([]);
+        setTrailsMeta(null);
+      })
+      .finally(() => {
+        if (!cancelled) setTrailsLoading(false);
       });
-  }, [session, activeGroup, mapViewMode]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session, activeGroup, mapViewMode, trailTimeRange, trailSelectedMemberId]);
 
   // Foreground Web Geolocation watcher
   useEffect(() => {
@@ -2518,12 +2623,23 @@ export default function HomePage() {
     >
       {/* Full-bleed Map Canvas */}
       <MapCanvas
-        locations={mapViewMode === 'places' ? [] : locations}
+        locations={
+          mapViewMode === 'places' || (mapViewMode === 'trails' && timelapseFrame !== null)
+            ? []
+            : locations
+        }
         places={places}
         trails={trails}
         matchedTrails={matchedTrails}
         trailMode={trailDisplayMode}
         colorTrailsByActivity={colorTrailsByActivity}
+        filterTrailUserId={trailSelectedMemberId}
+        timelapseFrame={timelapseFrame}
+        focusedTrip={focusedTrip}
+        focusedTripNonce={focusedTripNonce}
+        fitTrailsNonce={fitTrailsNonce}
+        followUserId={timelapseFollowUserId}
+        onFollowInterrupted={() => setTimelapseFollowUserId(null)}
         regions={mapRegionsLoaded ? mapRegions : undefined}
         regionsRevision={regionsRevision}
         showTrails={mapViewMode === 'trails'}
@@ -2739,13 +2855,17 @@ export default function HomePage() {
       {/* Top-Left Calm Capsule & Progressive Disclosure Popovers */}
       <div
         ref={leftDockRef}
-        className="pointer-events-none absolute left-[calc(0.75rem+var(--lo-safe-left,0px))] top-[calc(0.75rem+var(--lo-safe-top,0px))] z-20 flex max-w-[calc(100vw-1.5rem-var(--lo-safe-left,0px)-var(--lo-safe-right,0px))] flex-col gap-2.5 sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:top-[calc(1rem+var(--lo-safe-top,0px))] sm:w-[316px]"
+        aria-hidden={isTimelapseFocus}
+        className={`pointer-events-none absolute left-[calc(0.75rem+var(--lo-safe-left,0px))] top-[calc(0.75rem+var(--lo-safe-top,0px))] z-20 flex max-w-[calc(100vw-1.5rem-var(--lo-safe-left,0px)-var(--lo-safe-right,0px))] flex-col gap-2.5 transition-all duration-300 sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:top-[calc(1rem+var(--lo-safe-top,0px))] sm:w-[316px] ${focusFadeClass}`}
       >
         <div className="lo-float-in pointer-events-auto flex items-center justify-between gap-1.5 rounded-xl border border-zinc-200/80 bg-white/95 p-1.5 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
           <button
             type="button"
             onClick={() => {
               setMenuOpen(false);
+              setMobileControlsOpen(false);
+              setDesktopMapOptionsOpen(false);
+              setCloseTrailPopoversNonce((n) => n + 1);
               setGroupPopoverOpen((v) => {
                 const next = !v;
                 if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
@@ -2787,6 +2907,7 @@ export default function HomePage() {
                 setGroupPopoverOpen(false);
                 setMobileControlsOpen(false);
                 setDesktopMapOptionsOpen(false);
+                setCloseTrailPopoversNonce((n) => n + 1);
                 setMenuOpen((v) => {
                   const next = !v;
                   if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
@@ -2813,6 +2934,7 @@ export default function HomePage() {
                 setMenuOpen(false);
                 setMobileControlsOpen(false);
                 setDesktopMapOptionsOpen(false);
+                setCloseTrailPopoversNonce((n) => n + 1);
                 setRightOpen((v) => !v);
               }}
               title="Toggle inspector panel"
@@ -3472,7 +3594,10 @@ export default function HomePage() {
       </div>
 
       {/* Top-Right Single Inspector Toggle & Floating Tabbed Inspector */}
-      <div className="pointer-events-none absolute bottom-[calc(4.25rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] right-[calc(0.75rem+var(--lo-safe-right,0px))] z-20 flex flex-col items-end gap-2.5 md:bottom-auto md:left-auto md:right-[calc(1rem+var(--lo-safe-right,0px))] md:top-[calc(1rem+var(--lo-safe-top,0px))] md:w-[350px]">
+      <div
+        aria-hidden={isTimelapseFocus}
+        className={`pointer-events-none absolute bottom-[calc(4.25rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] right-[calc(0.75rem+var(--lo-safe-right,0px))] z-20 flex flex-col items-end gap-2.5 transition-all duration-300 md:bottom-auto md:left-auto md:right-[calc(1rem+var(--lo-safe-right,0px))] md:top-[calc(1rem+var(--lo-safe-top,0px))] md:w-[350px] ${focusFadeClass}`}
+      >
         <div className="lo-float-in pointer-events-auto hidden items-center md:flex">
           <button
             type="button"
@@ -4040,8 +4165,11 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Bottom-Left Floating Profile Pill & Map Credits */}
-      <div className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] z-20 hidden items-end gap-2 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))] sm:left-[calc(1rem+var(--lo-safe-left,0px))] sm:flex">
+      {/* Bottom-Left Floating Profile Pill & Map Credits (lg+ only so narrow tablet viewports never collide with centered controls) */}
+      <div
+        aria-hidden={isTimelapseFocus}
+        className={`pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] z-20 hidden items-end gap-2 transition-all duration-300 lg:bottom-[calc(1rem+var(--lo-safe-bottom,0px))] lg:left-[calc(1rem+var(--lo-safe-left,0px))] lg:flex ${focusFadeClass}`}
+      >
         <div className="lo-float-in pointer-events-auto flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white/95 py-1.5 pl-2 pr-2 shadow-[0_8px_28px_rgba(9,9,11,0.08)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
           <button
             type="button"
@@ -4139,61 +4267,68 @@ export default function HomePage() {
         </div>
       </div>
 
+      {/* Trails Time-Range, Trip Explorer & Synchronized Timelapse Overlay */}
+      {mapViewMode === 'trails' && (
+        <TrailsTimelapseOverlay
+          trails={trails}
+          matchedTrails={matchedTrails}
+          places={places}
+          members={trailMemberOptions}
+          meta={trailsMeta}
+          loading={trailsLoading}
+          timeRange={trailTimeRange}
+          onChangeTimeRange={(next) => {
+            setFocusedTrip(null);
+            setTrailTimeRange(next);
+          }}
+          selectedMemberId={trailSelectedMemberId}
+          onChangeSelectedMemberId={(uid) => {
+            setTrailSelectedMemberId(uid);
+            setTimelapseFollowUserId(null);
+          }}
+          trailDisplayMode={trailDisplayMode}
+          onChangeTrailDisplayMode={setTrailDisplayMode}
+          colorTrailsByActivity={colorTrailsByActivity}
+          onToggleColorByActivity={() => setColorTrailsByActivity((prev) => !prev)}
+          focusedTrip={focusedTrip}
+          onSelectTrip={(trip) => {
+            setFocusedTrip(trip);
+            if (trip) {
+              setFocusedTripNonce((n) => n + 1);
+            }
+          }}
+          focusMode={timelapseFocusMode}
+          onChangeFocusMode={setTimelapseFocusMode}
+          followUserId={timelapseFollowUserId}
+          onChangeFollowUserId={setTimelapseFollowUserId}
+          onFitTrails={() => setFitTrailsNonce((n) => n + 1)}
+          onTimelapseFrame={setTimelapseFrame}
+          hideTopBar={menuOpen || groupPopoverOpen}
+          hideBottomBarOnCompact={
+            rightOpen || desktopMapOptionsOpen || mobileControlsOpen || menuOpen || groupPopoverOpen
+          }
+          hideBottomBarOnMedium={desktopMapOptionsOpen}
+          closePopoversNonce={closeTrailPopoversNonce}
+          onRequestCloseOtherPanels={() => {
+            setMenuOpen(false);
+            setGroupPopoverOpen(false);
+            setMobileControlsOpen(false);
+            setDesktopMapOptionsOpen(false);
+            if (typeof window !== 'undefined' && window.innerWidth < 768) {
+              setRightOpen(false);
+            }
+          }}
+        />
+      )}
+
       {/* Bottom-Center Floating Map View Mode Switcher */}
-      <div className="pointer-events-auto absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-1/2 z-20 flex -translate-x-1/2 flex-col items-center gap-1.5 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))]">
-        {mapViewMode === 'trails' && (
-          <div className="lo-float-in flex flex-col items-center gap-1">
-            {colorTrailsByActivity && (
-              <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 rounded-lg border border-zinc-200/80 bg-white/95 px-2.5 py-1 text-[10px] font-medium text-zinc-700 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 dark:text-zinc-300">
-                {(['walking', 'running', 'cycling', 'transit', 'driving', 'stationary'] as const).map(
-                  (modeKey) => (
-                    <span key={modeKey} className="inline-flex items-center gap-1">
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ backgroundColor: TRAIL_ACTIVITY_META[modeKey].color }}
-                      />
-                      {TRAIL_ACTIVITY_META[modeKey].shortLabel}
-                    </span>
-                  ),
-                )}
-              </div>
-            )}
-            <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200/80 bg-white/95 p-0.5 text-[10px] font-semibold shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-[11px]">
-              {(
-                [
-                  ['roads', 'Clean'],
-                  ['raw', 'Raw'],
-                ] as const
-              ).map(([mode, label]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setTrailDisplayMode(mode)}
-                  className={`lo-press rounded-md px-2.5 py-1 transition ${
-                    trailDisplayMode === mode
-                      ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                      : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-              <span className="mx-0.5 h-3.5 w-px bg-zinc-200 dark:bg-zinc-700" />
-              <button
-                type="button"
-                onClick={() => setColorTrailsByActivity((prev) => !prev)}
-                className={`lo-press rounded-md px-2.5 py-1 transition ${
-                  colorTrailsByActivity
-                    ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                    : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
-                }`}
-              >
-                Activity
-              </button>
-            </div>
-          </div>
-        )}
-        <div className="lo-float-in flex items-center gap-1 rounded-xl border border-zinc-200/80 bg-white/95 p-1 text-[11px] font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:text-xs">
+      <div
+        aria-hidden={isTimelapseFocus}
+        className={`pointer-events-auto absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-1/2 z-20 flex max-w-[calc(100vw-7rem)] -translate-x-1/2 flex-col items-center gap-1.5 transition-all duration-300 sm:bottom-[calc(1rem+var(--lo-safe-bottom,0px))] sm:max-w-none ${
+          isTimelapseFocus ? 'translate-y-4 opacity-0 pointer-events-none [&_*]:!pointer-events-none' : ''
+        }`}
+      >
+        <div className="lo-float-in flex items-center gap-0.5 rounded-xl border border-zinc-200/80 bg-white/95 p-1 text-[11px] font-semibold shadow-[0_8px_28px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95 sm:gap-1 sm:text-xs">
           {(
             [
               ['live', 'Live', MapPin],
@@ -4205,13 +4340,13 @@ export default function HomePage() {
               key={mode}
               type="button"
               onClick={() => setMapViewMode(mode)}
-              className={`lo-press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition sm:px-3.5 ${
+              className={`lo-press flex items-center gap-1 rounded-lg px-2 py-1.5 transition sm:gap-1.5 sm:px-3.5 ${
                 mapViewMode === mode
                   ? 'bg-zinc-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950'
                   : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
               }`}
             >
-              <Icon className="h-3.5 w-3.5" />
+              <Icon className="h-3.5 w-3.5 shrink-0" />
               {label}
             </button>
           ))}
@@ -4241,7 +4376,8 @@ export default function HomePage() {
       {/* Mobile Portrait (< sm): Bottom-Left Progressive Disclosure Controls (GPS + Zoom + North + Map Options) */}
       <div
         ref={mobileControlsRef}
-        className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] z-20 flex flex-col items-start gap-2 sm:hidden"
+        aria-hidden={isTimelapseFocus}
+        className={`pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] left-[calc(0.75rem+var(--lo-safe-left,0px))] z-20 flex flex-col items-start gap-2 transition-all duration-300 sm:hidden ${focusFadeClass}`}
       >
         {mobileControlsOpen && (
           <div className="lo-float-in pointer-events-auto w-[min(18rem,calc(100vw-1.5rem))] space-y-3 rounded-xl border border-zinc-200/85 bg-white/95 p-3 shadow-[0_14px_40px_rgba(9,9,11,0.16)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
@@ -4453,6 +4589,7 @@ export default function HomePage() {
             setGroupPopoverOpen(false);
             setMenuOpen(false);
             setRightOpen(false);
+            setCloseTrailPopoversNonce((n) => n + 1);
             setMobileControlsOpen((v) => !v);
           }}
           aria-expanded={mobileControlsOpen}
@@ -4479,13 +4616,18 @@ export default function HomePage() {
       </div>
 
       {/* Mobile Portrait (< sm): Bottom-Right Inspector Panel Toggle */}
-      <div className="pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] right-[calc(0.75rem+var(--lo-safe-right,0px))] z-20 sm:hidden">
+      <div
+        aria-hidden={isTimelapseFocus}
+        className={`pointer-events-none absolute bottom-[calc(0.75rem+var(--lo-safe-bottom,0px))] right-[calc(0.75rem+var(--lo-safe-right,0px))] z-20 transition-all duration-300 sm:hidden ${focusFadeClass}`}
+      >
         <button
           type="button"
           onClick={() => {
             setGroupPopoverOpen(false);
             setMenuOpen(false);
             setMobileControlsOpen(false);
+            setDesktopMapOptionsOpen(false);
+            setCloseTrailPopoversNonce((n) => n + 1);
             setRightOpen((v) => !v);
           }}
           aria-expanded={rightOpen}
@@ -4511,7 +4653,8 @@ export default function HomePage() {
       {/* Desktop & Landscape (sm+): Bottom-Right Cluster [Map Options Box] + [Circular GPS Button] + [North / + / - Pill] */}
       <div
         ref={desktopControlsRef}
-        className="pointer-events-none absolute bottom-[calc(1rem+var(--lo-safe-bottom,0px))] right-[calc(1rem+var(--lo-safe-right,0px))] z-20 hidden flex-col items-end gap-2 sm:flex"
+        aria-hidden={isTimelapseFocus}
+        className={`pointer-events-none absolute bottom-[calc(1rem+var(--lo-safe-bottom,0px))] right-[calc(1rem+var(--lo-safe-right,0px))] z-20 hidden flex-col items-end gap-2 transition-all duration-300 sm:flex ${focusFadeClass}`}
       >
         {desktopMapOptionsOpen && (
           <div className="lo-float-in pointer-events-auto w-[280px] space-y-3 rounded-xl border border-zinc-200/85 bg-white/95 p-3.5 shadow-[0_14px_40px_rgba(9,9,11,0.14)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
@@ -4690,7 +4833,14 @@ export default function HomePage() {
             onClick={() => {
               setGroupPopoverOpen(false);
               setMenuOpen(false);
-              setDesktopMapOptionsOpen((v) => !v);
+              setCloseTrailPopoversNonce((n) => n + 1);
+              setDesktopMapOptionsOpen((v) => {
+                const next = !v;
+                if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
+                  setRightOpen(false);
+                }
+                return next;
+              });
             }}
             aria-expanded={desktopMapOptionsOpen}
             aria-label="Map options (Globe, Day/Night, Theme, Labels)"

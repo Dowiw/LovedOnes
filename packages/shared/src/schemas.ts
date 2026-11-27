@@ -571,7 +571,9 @@ export const TrailQuerySchema = z
     to: z.string().datetime().optional(),
     bbox: z.string().optional(),
     userId: z.string().uuid().optional(),
-    limit: z.coerce.number().int().min(1).max(5000).default(1000),
+    limit: z.coerce.number().int().min(1).max(10000).default(2500),
+    zoom: z.coerce.number().min(0).max(22).optional(),
+    simplifyMeters: z.coerce.number().min(0).max(5000).optional(),
   })
   .superRefine((val, ctx) => {
     if (val.from && val.to && Date.parse(val.from) > Date.parse(val.to)) {
@@ -1322,11 +1324,36 @@ export interface PublicLocationShareCreatorPin {
 export const TrailSegmentKindSchema = z.enum(['road', 'direct', 'spur']);
 export type TrailSegmentKindValue = z.infer<typeof TrailSegmentKindSchema>;
 
+export const TrailTimeRangePresetSchema = z.enum(['24h', '3d', '7d', '30d', 'custom']);
+export type TrailTimeRangePreset = z.infer<typeof TrailTimeRangePresetSchema>;
+
+export const TrailTripSortSchema = z.enum([
+  'newest',
+  'oldest',
+  'member',
+  'duration_desc',
+  'duration_asc',
+  'distance_desc',
+  'distance_asc',
+]);
+export type TrailTripSort = z.infer<typeof TrailTripSortSchema>;
+
+export const TrailsResponseMetaSchema = z.object({
+  truncated: z.boolean(),
+  totalCount: z.number().int().nonnegative(),
+  returnedCount: z.number().int().nonnegative(),
+  simplifiedCount: z.number().int().nonnegative().optional(),
+});
+export type TrailsResponseMeta = z.infer<typeof TrailsResponseMetaSchema>;
+
 export const TrailPathSegmentSchema = z.object({
   kind: TrailSegmentKindSchema,
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
   roadKind: z.string().optional(),
   activityMode: TrailActivityModeSchema.optional(),
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+  vertexTimesMs: z.array(z.number()).optional(),
 });
 
 export const AveragedTrailStopSchema = z.object({

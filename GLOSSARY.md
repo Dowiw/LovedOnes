@@ -72,6 +72,24 @@ _Avoid_: Ping request, location demand
 A revocable, expiring temporary URL (`/share/[token]`) created by a `MEMBER` or `ADMIN` to share their live `PrivacyMode`-filtered location (and optionally mutual guest pins) without exposing their private Group.
 _Avoid_: Invite link, group link
 
+### Trails & Timelapse
+
+**Trail**:
+An Account's time-bounded history of `LocationPing`s within a Group, filtered by the Account's `PrivacyMode`.
+_Avoid_: Track, breadcrumb, route history
+
+**Stop**:
+A spatially clustered location along a `Trail`, with each chronological arrival-to-departure occurrence at that cluster tracked as a **Visit** (and marked as a dwell when stationary past the dwell threshold).
+_Avoid_: Waypoint, checkpoint, cluster
+
+**Trip**:
+A contiguous movement segment of a `Trail` delimited by significant stationary dwells, telemetry gaps, or `PrivacyMode` transitions.
+_Avoid_: Leg, journey, session
+
+**Timelapse**:
+Synchronized chronological playback of one or more Group members' `Trail`s across a selected time window or `Trip`.
+_Avoid_: Replay, playback mode, animation
+
 ## Role & Actor Priority
 
 - **System level (`users.role`):** `HOST_ADMIN` > `USER` (server-wide administration vs. standard self-service account).

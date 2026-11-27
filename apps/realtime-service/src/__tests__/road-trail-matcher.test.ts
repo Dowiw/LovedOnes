@@ -214,7 +214,7 @@ describe('RoadTrailMatcher', () => {
       },
     ]);
     expect(fuzzed.hasRoadMatches).toBe(false);
-    expect(fuzzed.segments).toEqual([
+    expect(fuzzed.segments).toMatchObject([
       {
         kind: 'direct',
         coordinates: [
@@ -291,7 +291,7 @@ describe('RoadTrailMatcher', () => {
       ]);
 
       expect(matched.hasRoadMatches).toBe(false);
-      expect(matched.segments).toEqual([
+      expect(matched.segments).toMatchObject([
         {
           kind: 'direct',
           coordinates: [
@@ -815,5 +815,11 @@ describe('RoadTrailMatcher', () => {
       ['major_road', 'driving'],
     ]);
     expect(multiModal.segments).toHaveLength(3);
+    for (const seg of multiModal.segments) {
+      expect(seg.startedAt).toBeTruthy();
+      expect(seg.endedAt).toBeTruthy();
+      expect(seg.vertexTimesMs).toHaveLength(seg.coordinates.length);
+      expect(seg.vertexTimesMs![0]).toBeLessThanOrEqual(seg.vertexTimesMs![seg.vertexTimesMs!.length - 1]);
+    }
   });
 });

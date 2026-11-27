@@ -24,8 +24,10 @@ import {
   type MapRegion,
   type MatchedUserTrail,
   type SavedMapViewport,
+  type TimelapseFrame,
   type TrailActivityMode,
   type TrailDisplayMode,
+  type TrailTripSummary,
 } from '@loved-ones/shared';
 import { getServiceBaseUrls } from '@/lib/api';
 import { normalizeMapStyleUrls, resolveAbsoluteStyleUrl } from '@/lib/mapStyleUrl';
@@ -207,6 +209,8 @@ function registerCompositePmtilesProtocol(defaultTilesBase: string): void {
 }
 
 const TRAIL_SOURCE_ID = 'lovedones-trails-src';
+const TRAIL_FUZZ_ZONE_FILL_ID = 'lovedones-trails-fuzz-fill';
+const TRAIL_FUZZ_ZONE_LINE_ID = 'lovedones-trails-fuzz-line';
 const TRAIL_LINE_LAYER_ID = 'lovedones-trails-line';
 const TRAIL_DIRECT_LINE_LAYER_ID = 'lovedones-trails-direct-line';
 const TRAIL_SPUR_LINE_LAYER_ID = 'lovedones-trails-spur-line';
@@ -789,6 +793,13 @@ interface MapCanvasProps {
   matchedTrails?: MatchedUserTrail[];
   trailMode?: TrailDisplayMode;
   colorTrailsByActivity?: boolean;
+  filterTrailUserId?: string | null;
+  timelapseFrame?: TimelapseFrame | null;
+  focusedTrip?: TrailTripSummary | null;
+  focusedTripNonce?: number;
+  fitTrailsNonce?: number;
+  followUserId?: string | null;
+  onFollowInterrupted?: () => void;
   regions?: MapRegion[];
   regionsRevision?: number;
   showTrails?: boolean;
@@ -829,6 +840,13 @@ export function MapCanvas({
   matchedTrails = [],
   trailMode = 'roads',
   colorTrailsByActivity = true,
+  filterTrailUserId = null,
+  timelapseFrame = null,
+  focusedTrip = null,
+  focusedTripNonce = 0,
+  fitTrailsNonce = 0,
+  followUserId = null,
+  onFollowInterrupted,
   regions,
   regionsRevision = 0,
   showTrails = false,
@@ -867,7 +885,14 @@ export function MapCanvas({
   const placeMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const draftPlaceMarkerRef = useRef<maplibregl.Marker | null>(null);
   const selfMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const timelapseMarkersRef = useRef<
+    Map<string, { marker: maplibregl.Marker; badgeEl: HTMLSpanElement; dotEl: HTMLSpanElement; signature: string }>
+  >(new Map());
   const trailPopupRef = useRef<maplibregl.Popup | null>(null);
+  const onFollowInterruptedRef = useRef(onFollowInterrupted);
+  onFollowInterruptedRef.current = onFollowInterrupted;
+  const followUserIdRef = useRef(followUserId);
+  followUserIdRef.current = followUserId;
   const pickingPlaceRef = useRef(pickingPlace);
   pickingPlaceRef.current = pickingPlace;
   const initialViewportRef = useRef<SavedMapViewport | null>(initialViewport);
@@ -1157,6 +1182,14 @@ export function MapCanvas({
     });
     map.on('moveend', emitViewport);
     map.on('zoomend', emitViewport);
+    const interruptFollowIfManual = (e: { originalEvent?: unknown }) => {
+      if (e.originalEvent && followUserIdRef.current) {
+        onFollowInterruptedRef.current?.();
+      }
+    };
+    map.on('dragstart', interruptFollowIfManual);
+    map.on('wheel', interruptFollowIfManual);
+    map.on('touchstart', interruptFollowIfManual);
     const handleBeforeUnload = () => emitViewport();
     window.addEventListener('beforeunload', handleBeforeUnload);
     let fallbackStyleApplied = false;
@@ -1223,6 +1256,10 @@ export function MapCanvas({
       placeMarkersRef.current.clear();
       draftPlaceMarkerRef.current?.remove();
       draftPlaceMarkerRef.current = null;
+      for (const entry of timelapseMarkersRef.current.values()) {
+        entry.marker.remove();
+      }
+      timelapseMarkersRef.current.clear();
       trailPopupRef.current?.remove();
       trailPopupRef.current = null;
       selfMarkerRef.current?.remove();
@@ -1773,19 +1810,41 @@ export function MapCanvas({
         : fallbackColor;
 
     const applyTrailsLayer = () => {
-      const { features } = showTrails
-        ? buildTrailGeoJsonFeatures({
-            trails,
-            matchedTrails,
-            mode: trailMode,
-            places,
-          })
-        : { features: [] };
+      const features = !showTrails
+        ? []
+        : timelapseFrame
+          ? timelapseFrame.features
+          : focusedTrip && focusedTrip.segments.length > 0
+            ? buildTrailGeoJsonFeatures({
+                trails: [],
+                matchedTrails: [
+                  {
+                    userId: focusedTrip.userId,
+                    username: focusedTrip.username,
+                    stops: [],
+                    visits: focusedTrip.visits,
+                    segments: focusedTrip.segments,
+                    hasRoadMatches: focusedTrip.segments.some((s) => s.kind === 'road'),
+                  },
+                ],
+                mode: trailMode,
+                places,
+              }).features
+            : buildTrailGeoJsonFeatures({
+                trails,
+                matchedTrails,
+                mode: trailMode,
+                filterUserId: filterTrailUserId,
+                places,
+              }).features;
 
       const monoPrimary = mapThemeRef.current === 'dark' ? '#f4f4f5' : '#18181b';
       const roadLineColor = getTrailStrokeColor(monoPrimary);
       const directLineColor = getTrailStrokeColor(monoPrimary);
-      const geojson = { type: 'FeatureCollection' as const, features };
+      const geojson = {
+        type: 'FeatureCollection',
+        features,
+      } as unknown as Parameters<maplibregl.GeoJSONSource['setData']>[0];
       const existingSource = map.getSource(TRAIL_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
       if (existingSource) {
         existingSource.setData(geojson);
@@ -1798,6 +1857,28 @@ export function MapCanvas({
         return;
       }
       map.addSource(TRAIL_SOURCE_ID, { type: 'geojson', data: geojson });
+      map.addLayer({
+        id: TRAIL_FUZZ_ZONE_FILL_ID,
+        type: 'fill',
+        source: TRAIL_SOURCE_ID,
+        filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['==', ['get', 'kind'], 'fuzz-zone']],
+        paint: {
+          'fill-color': '#f59e0b',
+          'fill-opacity': 0.14,
+        },
+      });
+      map.addLayer({
+        id: TRAIL_FUZZ_ZONE_LINE_ID,
+        type: 'line',
+        source: TRAIL_SOURCE_ID,
+        filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['==', ['get', 'kind'], 'fuzz-zone']],
+        paint: {
+          'line-color': '#f59e0b',
+          'line-width': 1.5,
+          'line-dasharray': [2, 2],
+          'line-opacity': 0.75,
+        },
+      });
       map.addLayer({
         id: TRAIL_LINE_LAYER_ID,
         type: 'line',
@@ -1885,7 +1966,7 @@ export function MapCanvas({
         id: TRAIL_POINT_LAYER_ID,
         type: 'circle',
         source: TRAIL_SOURCE_ID,
-        filter: ['all', ['==', ['geometry-type'], 'Point'], ['!=', ['get', 'kind'], 'chevron']],
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'stop']],
         paint: {
           'circle-radius': [
             'case',
@@ -2004,7 +2085,11 @@ export function MapCanvas({
           </div>
         `;
 
-        trailPopupRef.current?.remove();
+        for (const entry of timelapseMarkersRef.current.values()) {
+        entry.marker.remove();
+      }
+      timelapseMarkersRef.current.clear();
+      trailPopupRef.current?.remove();
         trailPopupRef.current = new maplibregl.Popup({ offset: 12 })
           .setLngLat([lon, lat])
           .setHTML(html)
@@ -2017,7 +2102,126 @@ export function MapCanvas({
     } else {
       map.once('load', applyTrailsLayer);
     }
-  }, [trails, matchedTrails, trailMode, showTrails, colorTrailsByActivity, mapTheme]);
+  }, [
+    trails,
+    matchedTrails,
+    trailMode,
+    showTrails,
+    colorTrailsByActivity,
+    filterTrailUserId,
+    focusedTrip,
+    timelapseFrame,
+    places,
+    mapTheme,
+  ]);
+
+  // Synchronize 60 FPS moving Timelapse cursor markers & Follow Camera
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const activeIds = new Set<string>();
+    const frameMarkers = showTrails && timelapseFrame ? timelapseFrame.markers : [];
+
+    for (const m of frameMarkers) {
+      activeIds.add(m.userId);
+      const actColor =
+        m.isFuzzed
+          ? '#f59e0b'
+          : m.activityMode
+            ? TRAIL_ACTIVITY_META[m.activityMode].color
+            : '#18181b';
+      const sig = `${m.username}|${m.isFuzzed ? '1' : '0'}|${actColor}`;
+      const existing = timelapseMarkersRef.current.get(m.userId);
+
+      if (existing) {
+        existing.marker.setLngLat([m.longitude, m.latitude]);
+        if (existing.signature !== sig) {
+          existing.signature = sig;
+          existing.dotEl.style.backgroundColor = actColor;
+          existing.badgeEl.textContent = m.isFuzzed ? `${m.username} · Fuzzed` : m.username;
+          existing.badgeEl.style.borderColor = m.isFuzzed ? '#f59e0b' : '';
+        }
+      } else {
+        const el = document.createElement('div');
+        el.className = 'pointer-events-none select-none flex flex-col items-center';
+
+        const badgeEl = document.createElement('span');
+        badgeEl.className =
+          'mb-1 rounded-full border border-zinc-200/90 bg-white/95 px-2 py-0.5 text-[10px] font-semibold text-zinc-950 shadow-md backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-50 whitespace-nowrap';
+        badgeEl.textContent = m.isFuzzed ? `${m.username} · Fuzzed` : m.username;
+        if (m.isFuzzed) {
+          badgeEl.style.borderColor = '#f59e0b';
+        }
+
+        const dotEl = document.createElement('span');
+        dotEl.className = 'h-4 w-4 rounded-full border-2 border-white shadow-[0_2px_10px_rgba(9,9,11,0.35)]';
+        dotEl.style.backgroundColor = actColor;
+
+        el.append(badgeEl, dotEl);
+        const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+          .setLngLat([m.longitude, m.latitude])
+          .addTo(map);
+        timelapseMarkersRef.current.set(m.userId, { marker, badgeEl, dotEl, signature: sig });
+      }
+    }
+
+    for (const [uid, entry] of timelapseMarkersRef.current.entries()) {
+      if (!activeIds.has(uid)) {
+        entry.marker.remove();
+        timelapseMarkersRef.current.delete(uid);
+      }
+    }
+
+    if (showTrails && followUserId && frameMarkers.length > 0) {
+      const target = frameMarkers.find((m) => m.userId === followUserId);
+      if (target) {
+        map.jumpTo({ center: [target.longitude, target.latitude] });
+      }
+    }
+  }, [timelapseFrame, showTrails, followUserId]);
+
+  // Fit map bounds onto focused Trip when selected
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !showTrails || !focusedTrip || focusedTripNonce === 0) return;
+    const [minLon, minLat, maxLon, maxLat] = focusedTrip.bounds;
+    if (
+      Math.abs(maxLon - minLon) < 0.0005 &&
+      Math.abs(maxLat - minLat) < 0.0005
+    ) {
+      map.flyTo({ center: [(minLon + maxLon) / 2, (minLat + maxLat) / 2], zoom: 14.5, duration: 550 });
+    } else {
+      map.fitBounds(
+        [
+          [minLon, minLat],
+          [maxLon, maxLat],
+        ],
+        { padding: 80, maxZoom: 15, duration: 550 },
+      );
+    }
+  }, [focusedTrip, focusedTripNonce, showTrails]);
+
+  // Fit all visible trails when user taps Fit All in Trails mode
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !showTrails || fitTrailsNonce === 0) return;
+    const bounds = new maplibregl.LngLatBounds();
+    let count = 0;
+    const sourcePoints = filterTrailUserId
+      ? trails.filter((t) => t.userId === filterTrailUserId)
+      : trails;
+    for (const pt of sourcePoints) {
+      bounds.extend([pt.longitude, pt.latitude]);
+      count += 1;
+    }
+    if (count === 0) return;
+    if (count === 1) {
+      map.flyTo({ center: bounds.getCenter(), zoom: 14, duration: 550 });
+    } else {
+      map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 550 });
+    }
+  }, [fitTrailsNonce, showTrails, trails, filterTrailUserId]);
 
   useEffect(() => {
     const map = mapRef.current;

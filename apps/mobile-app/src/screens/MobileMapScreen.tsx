@@ -30,7 +30,9 @@ import {
   buildExternalMapsUrls,
   buildGeodesicCircleRing,
   buildSolarTerminatorGeoJson,
+  buildTimelapseTimeline,
   buildTrailGeoJsonFeatures,
+  buildTrailTrips,
   DEFAULT_EXACT_HALO_COLOR,
   DEFAULT_FUZZ_CIRCLE_COLOR,
   DEFAULT_FUZZED_HALO_COLOR,
@@ -42,7 +44,10 @@ import {
   isSafeHexColor,
   parseInviteInput,
   resolveTrailPointDetails,
+  sampleTimelapseFrame,
+  sortTrailTrips,
   TRAIL_ACTIVITY_META,
+  virtualToRealMs,
   withMinDelay,
   WORLD_LAND_GEOJSON,
   type AppVersionInfo,
@@ -58,8 +63,12 @@ import {
   type MemberPresenceUpdate,
   type PlaceTransitionEvent,
   type PrivacyMode,
+  type TimelapseSpeedOption,
   type TrailDisplayMode,
   type TrailPointDetails,
+  type TrailsResponseMeta,
+  type TrailTripSort,
+  type TrailTripSummary,
 } from '@loved-ones/shared';
 import { ColorPickerSheet } from '../components/ColorPickerSheet';
 import {
@@ -69,7 +78,14 @@ import {
   LocationPinIcon,
   MapOptionsIcon,
   PlacesTabIcon,
+  TrailsTabIcon,
 } from '../components/MapControlsIcons';
+import {
+  formatDateAndClock,
+  MobileTimelapseBar,
+  MobileTrailsTabContent,
+  type MobileTrailsTimeRange,
+} from '../components/MobileTrailsControls';
 import {
   checkMobileAppVersion,
   formatAppUpdateNotice,
@@ -156,7 +172,7 @@ interface GroupSummary {
 }
 
 type DrawerSnap = 'peek' | 'mid' | 'expanded';
-type DrawerMode = 'people' | 'places';
+type DrawerMode = 'people' | 'trails' | 'places';
 
 interface MobileMapScreenProps {
   config: MobileStoredConfig;
@@ -217,11 +233,34 @@ export function MobileMapScreen({
   const [drawerSnap, setDrawerSnap] = useState<DrawerSnap>('peek');
   const [drawerMode, setDrawerMode] = useState<DrawerMode>('people');
 
-  // Member inspection & Trails
+  // Member inspection & Trails / Timelapse
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [activeTrailUserId, setActiveTrailUserId] = useState<string | null>(null);
   const [memberTrailPoints, setMemberTrailPoints] = useState<LocationBroadcast[]>([]);
   const [memberMatchedTrails, setMemberMatchedTrails] = useState<MatchedUserTrail[]>([]);
+  const [trailsMeta, setTrailsMeta] = useState<TrailsResponseMeta | null>(null);
+  const [trailTimeRange, setTrailTimeRange] = useState<MobileTrailsTimeRange>(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      preset: '24h',
+      customMode: 'day',
+      customDay: today,
+      customFrom: today,
+      customTo: today,
+    };
+  });
+  const [trailSortBy, setTrailSortBy] = useState<TrailTripSort>('newest');
+  const [trailIncludeStays, setTrailIncludeStays] = useState(false);
+  const [focusedTrip, setFocusedTrip] = useState<TrailTripSummary | null>(null);
+  const [timelapsePlaying, setTimelapsePlaying] = useState(false);
+  const [timelapseSpeed, setTimelapseSpeed] = useState<TimelapseSpeedOption>(10);
+  const [timelapseLoop, setTimelapseLoop] = useState(false);
+  const [timelapseCompactIdle, setTimelapseCompactIdle] = useState(true);
+  const [timelapseVirtualMs, setTimelapseVirtualMs] = useState(0);
+  const [timelapseEngaged, setTimelapseEngaged] = useState(false);
+  const [timelapseFocusMode, setTimelapseFocusMode] = useState(false);
+  const [timelapseFollowUserId, setTimelapseFollowUserId] = useState<string | null>(null);
+  const programmaticCameraMoveUntilRef = useRef(0);
   const [trailDisplayMode, setTrailDisplayMode] = useState<TrailDisplayMode>('roads');
   const [colorTrailsByActivity, setColorTrailsByActivity] = useState(true);
   const [trailBusy, setTrailBusy] = useState(false);
@@ -1307,63 +1346,126 @@ export function MobileMapScreen({
     }
   }
 
-  async function handleToggleMemberTrail(member: LocationBroadcast) {
-    if (!activeGroup || !serverUrl || !accessToken) return;
-    if (activeTrailUserId === member.userId) {
-      setActiveTrailUserId(null);
-      setMemberTrailPoints([]);
-      setMemberMatchedTrails([]);
+  const fetchGroupTrails = useCallback(
+    async (
+      range: MobileTrailsTimeRange,
+      memberUserId: string | null,
+      options: { fitOnLoad?: boolean } = {},
+    ) => {
+      if (!activeGroup || !serverUrl || !accessToken) return;
+      setTrailBusy(true);
       setTrailMessage(null);
       setSelectedTrailPoint(null);
-      return;
-    }
+      try {
+        const now = Date.now();
+        let fromMs: number;
+        let toMs: number;
+        let limit = 2500;
+        if (range.preset === 'custom') {
+          if (range.customMode === 'day') {
+            const s = new Date(`${range.customDay}T00:00:00`);
+            const e = new Date(`${range.customDay}T23:59:59.999`);
+            fromMs = Number.isNaN(s.getTime()) ? now - 86_400_000 : s.getTime();
+            toMs = Number.isNaN(e.getTime()) ? now : e.getTime();
+          } else {
+            const s = new Date(`${range.customFrom}T00:00:00`);
+            const e = new Date(`${range.customTo}T23:59:59.999`);
+            fromMs = Number.isNaN(s.getTime()) ? now - 86_400_000 : s.getTime();
+            toMs = Number.isNaN(e.getTime()) ? now : e.getTime();
+          }
+          if (fromMs > toMs) {
+            [fromMs, toMs] = [toMs - 86_400_000, toMs];
+          }
+          limit = 8000;
+        } else {
+          const hours =
+            range.preset === '30d'
+              ? 24 * 30
+              : range.preset === '7d'
+                ? 24 * 7
+                : range.preset === '3d'
+                  ? 24 * 3
+                  : 24;
+          toMs = now;
+          fromMs = now - hours * 3_600_000;
+          limit = range.preset === '30d' ? 8000 : range.preset === '7d' || range.preset === '3d' ? 5000 : 2500;
+        }
 
-    setTrailBusy(true);
-    setTrailMessage(null);
-    setSelectedTrailPoint(null);
-    setActiveTrailUserId(member.userId);
-    try {
-      const to = new Date().toISOString();
-      const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const qs = new URLSearchParams({
-        userId: member.userId,
-        from,
-        to,
-        limit: '1000',
-      }).toString();
-      const res = await withMinDelay(
-        fetch(`${serverUrl}/api/realtime/groups/${activeGroup.id}/trails?${qs}`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }),
-        320,
-      );
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const data = (await res.json()) as {
-        trails?: LocationBroadcast[];
-        matchedTrails?: MatchedUserTrail[];
-      };
-      const points = data.trails ?? [];
-      setMemberTrailPoints(points);
-      setMemberMatchedTrails(data.matchedTrails ?? []);
-      if (points.length === 0) {
-        setTrailMessage('No recorded trail pings for this member in the last 24 hours.');
-      } else {
-        cameraRef.current?.flyTo({
-          center: [member.longitude, member.latitude],
-          zoom: Math.max(cameraViewRef.current.zoom, 13.2),
-          duration: 650,
+        const params = new URLSearchParams({
+          from: new Date(fromMs).toISOString(),
+          to: new Date(toMs).toISOString(),
+          limit: String(limit),
         });
+        if (memberUserId) params.set('userId', memberUserId);
+
+        const res = await withMinDelay(
+          fetch(`${serverUrl}/api/realtime/groups/${activeGroup.id}/trails?${params.toString()}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }),
+          240,
+        );
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = (await res.json()) as {
+          trails?: LocationBroadcast[];
+          matchedTrails?: MatchedUserTrail[];
+          meta?: TrailsResponseMeta;
+        };
+        const points = data.trails ?? [];
+        setMemberTrailPoints(points);
+        setMemberMatchedTrails(data.matchedTrails ?? []);
+        setTrailsMeta(data.meta ?? null);
+        if (points.length === 0) {
+          setTrailMessage('No recorded trail pings in this time window.');
+        } else if (options.fitOnLoad) {
+          let minLon = Infinity;
+          let minLat = Infinity;
+          let maxLon = -Infinity;
+          let maxLat = -Infinity;
+          for (const p of points) {
+            if (p.longitude < minLon) minLon = p.longitude;
+            if (p.longitude > maxLon) maxLon = p.longitude;
+            if (p.latitude < minLat) minLat = p.latitude;
+            if (p.latitude > maxLat) maxLat = p.latitude;
+          }
+          if (Number.isFinite(minLon)) {
+            programmaticCameraMoveUntilRef.current = Date.now() + 800;
+            if (Math.abs(maxLon - minLon) < 0.001 && Math.abs(maxLat - minLat) < 0.001) {
+              cameraRef.current?.flyTo({
+                center: [(minLon + maxLon) / 2, (minLat + maxLat) / 2],
+                zoom: 14,
+                duration: 550,
+              });
+            } else {
+              cameraRef.current?.fitBounds([minLon, minLat, maxLon, maxLat], {
+                padding: { top: 80, right: 40, bottom: 260, left: 40 },
+                duration: 550,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        setMemberTrailPoints([]);
+        setMemberMatchedTrails([]);
+        setTrailsMeta(null);
+        setTrailMessage(formatUserError(err, 'Unable to load trail right now.'));
+      } finally {
+        setTrailBusy(false);
       }
-    } catch (err) {
-      setActiveTrailUserId(null);
-      setMemberTrailPoints([]);
-      setMemberMatchedTrails([]);
-      setTrailMessage(formatUserError(err, 'Unable to load trail right now.'));
-    } finally {
-      setTrailBusy(false);
+    },
+    [activeGroup, serverUrl, accessToken],
+  );
+
+  async function handleToggleMemberTrail(member: LocationBroadcast) {
+    if (!activeGroup || !serverUrl || !accessToken) return;
+    setActiveTrailUserId(member.userId);
+    setFocusedTrip(null);
+    setDrawerMode('trails');
+    if (drawerSnapRef.current === 'peek') {
+      snapDrawer('mid');
     }
+    await fetchGroupTrails(trailTimeRange, member.userId, { fitOnLoad: true });
   }
 
   function handleSelectMember(loc: LocationBroadcast) {
@@ -2135,11 +2237,192 @@ export function MobileMapScreen({
     return compacted[0] ?? null;
   }, [activeTrailUserId, memberTrailPoints]);
 
+  const trailMemberOptions = useMemo(() => {
+    const byId = new globalThis.Map<string, string>();
+    for (const loc of locations) byId.set(loc.userId, loc.username);
+    for (const pt of memberTrailPoints) {
+      if (!byId.has(pt.userId)) byId.set(pt.userId, pt.username);
+    }
+    return Array.from(byId.entries())
+      .map(([userId, username]) => ({ userId, username }))
+      .sort((a, b) => a.username.localeCompare(b.username));
+  }, [locations, memberTrailPoints]);
+
+  const mobileTrailTrips = useMemo(() => {
+    if (drawerMode !== 'trails') return [];
+    const built = buildTrailTrips({
+      trails: memberTrailPoints,
+      matchedTrails: memberMatchedTrails,
+      mode: trailDisplayMode,
+      filterUserId: activeTrailUserId,
+      places,
+      includeStays: trailIncludeStays,
+    });
+    return sortTrailTrips(built, trailSortBy);
+  }, [
+    drawerMode,
+    memberTrailPoints,
+    memberMatchedTrails,
+    trailDisplayMode,
+    activeTrailUserId,
+    places,
+    trailIncludeStays,
+    trailSortBy,
+  ]);
+
+  const mobileTimelapseTimeline = useMemo(
+    () =>
+      drawerMode !== 'trails'
+        ? buildTimelapseTimeline({ trails: [] })
+        : buildTimelapseTimeline({
+            trails: memberTrailPoints,
+            matchedTrails: memberMatchedTrails,
+            mode: trailDisplayMode,
+            filterUserId: activeTrailUserId,
+            focusTrip: focusedTrip
+              ? {
+                  userId: focusedTrip.userId,
+                  startedAt: focusedTrip.startedAt,
+                  endedAt: focusedTrip.endedAt,
+                }
+              : null,
+            compactIdle: timelapseCompactIdle,
+          }),
+    [
+      drawerMode,
+      memberTrailPoints,
+      memberMatchedTrails,
+      trailDisplayMode,
+      activeTrailUserId,
+      focusedTrip,
+      timelapseCompactIdle,
+    ],
+  );
+
+  const prevMobileTimelineSigRef = useRef('');
+  useEffect(() => {
+    const sig = `${mobileTimelapseTimeline.realStartMs}:${mobileTimelapseTimeline.realEndMs}:${mobileTimelapseTimeline.tracks.length}:${focusedTrip?.id ?? 'all'}`;
+    if (sig !== prevMobileTimelineSigRef.current) {
+      prevMobileTimelineSigRef.current = sig;
+      setTimelapsePlaying(false);
+      setTimelapseVirtualMs(mobileTimelapseTimeline.virtualDurationMs);
+      if (!focusedTrip) {
+        setTimelapseEngaged(false);
+        setTimelapseFocusMode(false);
+      }
+    }
+  }, [mobileTimelapseTimeline, focusedTrip]);
+
+  const mobileCurrentRealMs = useMemo(
+    () => virtualToRealMs(mobileTimelapseTimeline, timelapseVirtualMs),
+    [mobileTimelapseTimeline, timelapseVirtualMs],
+  );
+
+  const mobileTimelapseFrame = useMemo(() => {
+    if (
+      drawerMode !== 'trails' ||
+      mobileTimelapseTimeline.isEmpty ||
+      (!timelapseEngaged && !timelapsePlaying && !timelapseFocusMode)
+    ) {
+      return null;
+    }
+    return sampleTimelapseFrame(mobileTimelapseTimeline, mobileCurrentRealMs, { places });
+  }, [
+    drawerMode,
+    mobileTimelapseTimeline,
+    mobileCurrentRealMs,
+    timelapseEngaged,
+    timelapsePlaying,
+    timelapseFocusMode,
+    places,
+  ]);
+
+  const mobileVirtualRef = useRef(timelapseVirtualMs);
+  mobileVirtualRef.current = timelapseVirtualMs;
+  const mobilePlayingRef = useRef(timelapsePlaying);
+  mobilePlayingRef.current = timelapsePlaying;
+
+  useEffect(() => {
+    if (
+      !timelapsePlaying ||
+      drawerMode !== 'trails' ||
+      mobileTimelapseTimeline.isEmpty ||
+      mobileTimelapseTimeline.virtualDurationMs <= 0
+    ) {
+      return;
+    }
+    let rafId: number | null = null;
+    let lastAt = performance.now();
+    const tick = (now: number) => {
+      if (!mobilePlayingRef.current) return;
+      const dtMs = Math.min(100, Math.max(0, now - lastAt));
+      lastAt = now;
+      const nextV = mobileVirtualRef.current + dtMs * timelapseSpeed;
+      if (nextV >= mobileTimelapseTimeline.virtualDurationMs) {
+        if (timelapseLoop) {
+          mobileVirtualRef.current = 0;
+          setTimelapseVirtualMs(0);
+        } else {
+          mobileVirtualRef.current = mobileTimelapseTimeline.virtualDurationMs;
+          setTimelapseVirtualMs(mobileTimelapseTimeline.virtualDurationMs);
+          setTimelapsePlaying(false);
+          return;
+        }
+      } else {
+        mobileVirtualRef.current = nextV;
+        setTimelapseVirtualMs(nextV);
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+  }, [timelapsePlaying, timelapseSpeed, timelapseLoop, drawerMode, mobileTimelapseTimeline]);
+
+  useEffect(() => {
+    if (drawerMode !== 'trails' || !timelapseFollowUserId || !mobileTimelapseFrame) return;
+    const target = mobileTimelapseFrame.markers.find((m) => m.userId === timelapseFollowUserId);
+    if (!target) return;
+    programmaticCameraMoveUntilRef.current = Date.now() + 260;
+    cameraRef.current?.jumpTo({
+      center: [target.longitude, target.latitude],
+    });
+  }, [drawerMode, timelapseFollowUserId, mobileTimelapseFrame]);
+
   const memberTrailGeoJson = useMemo(() => {
-    if (!activeTrailUserId || memberTrailPoints.length === 0) {
+    const showTrailsOnMap = drawerMode === 'trails' || Boolean(activeTrailUserId);
+    if (!showTrailsOnMap || memberTrailPoints.length === 0) {
       return {
         type: 'FeatureCollection' as const,
         features: [],
+      };
+    }
+    if (mobileTimelapseFrame) {
+      return {
+        type: 'FeatureCollection' as const,
+        features: mobileTimelapseFrame.features,
+      };
+    }
+    if (focusedTrip && focusedTrip.segments.length > 0) {
+      const { features } = buildTrailGeoJsonFeatures({
+        trails: [],
+        matchedTrails: [
+          {
+            userId: focusedTrip.userId,
+            username: focusedTrip.username,
+            stops: [],
+            visits: focusedTrip.visits,
+            segments: focusedTrip.segments,
+            hasRoadMatches: focusedTrip.segments.some((s) => s.kind === 'road'),
+          },
+        ],
+        mode: trailDisplayMode,
+        places,
+      });
+      return {
+        type: 'FeatureCollection' as const,
+        features,
       };
     }
     const { features } = buildTrailGeoJsonFeatures({
@@ -2153,7 +2436,16 @@ export function MobileMapScreen({
       type: 'FeatureCollection' as const,
       features,
     };
-  }, [activeTrailUserId, memberTrailPoints, memberMatchedTrails, trailDisplayMode, places]);
+  }, [
+    drawerMode,
+    activeTrailUserId,
+    memberTrailPoints,
+    memberMatchedTrails,
+    trailDisplayMode,
+    places,
+    mobileTimelapseFrame,
+    focusedTrip,
+  ]);
 
   const terminatorGeoJson = useMemo(() => {
     void terminatorTick;
@@ -2177,6 +2469,9 @@ export function MobileMapScreen({
         attribution={false}
         onRegionIsChanging={(ev) => {
           const vs = ev.nativeEvent;
+          if (timelapseFollowUserId && Date.now() > programmaticCameraMoveUntilRef.current) {
+            setTimelapseFollowUserId(null);
+          }
           cameraViewRef.current = {
             center: [vs.center[0], vs.center[1]],
             zoom: vs.zoom,
@@ -2400,10 +2695,10 @@ export function MobileMapScreen({
         </GeoJSONSource>
         <GeoJSONSource
           id="member-trail-src"
-          data={memberTrailGeoJson}
+          data={memberTrailGeoJson as unknown as GeoJSON.FeatureCollection}
           onPress={(ev) => {
             const pointFeat = ev.nativeEvent.features?.find(
-              (f) => f?.geometry?.type === 'Point' && f?.properties?.kind !== 'chevron',
+              (f) => f?.geometry?.type === 'Point' && f?.properties?.kind === 'stop',
             );
             if (!pointFeat || pointFeat.geometry.type !== 'Point') return;
             ev.stopPropagation();
@@ -2460,6 +2755,26 @@ export function MobileMapScreen({
             setSelectedTrailPoint({ ...details, latitude: lat, longitude: lon });
           }}
         >
+          <Layer
+            id="member-trail-fuzz-fill"
+            type="fill"
+            filter={['all', ['==', ['geometry-type'], 'Polygon'], ['==', ['get', 'kind'], 'fuzz-zone']]}
+            paint={{
+              'fill-color': '#f59e0b',
+              'fill-opacity': 0.14,
+            }}
+          />
+          <Layer
+            id="member-trail-fuzz-line"
+            type="line"
+            filter={['all', ['==', ['geometry-type'], 'Polygon'], ['==', ['get', 'kind'], 'fuzz-zone']]}
+            paint={{
+              'line-color': '#f59e0b',
+              'line-width': 1.5,
+              'line-opacity': 0.75,
+              'line-dasharray': [2, 2],
+            }}
+          />
           <Layer
             id="member-trail-line"
             type="line"
@@ -2583,7 +2898,7 @@ export function MobileMapScreen({
           <Layer
             id="member-trail-points"
             type="circle"
-            filter={['all', ['==', ['geometry-type'], 'Point'], ['!=', ['get', 'kind'], 'chevron']]}
+            filter={['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'stop']]}
             paint={{
               'circle-radius': [
                 'case',
@@ -2668,7 +2983,8 @@ export function MobileMapScreen({
           </Marker>
         )}
 
-        {locations.map((loc) => {
+        {!(drawerMode === 'trails' && mobileTimelapseFrame) &&
+          locations.map((loc) => {
           const pinAvatar =
             loc.avatarUrl ?? (loc.userId === myUserId ? userProfile?.avatarUrl : null) ?? null;
           const safePinAvatar = isSafeAvatarUrl(pinAvatar) ? pinAvatar : null;
@@ -2712,9 +3028,76 @@ export function MobileMapScreen({
             </Marker>
           );
         })}
+
+        {drawerMode === 'trails' &&
+          mobileTimelapseFrame?.markers.map((m) => {
+            const dotColor = m.isFuzzed
+              ? '#f59e0b'
+              : m.activityMode
+                ? TRAIL_ACTIVITY_META[m.activityMode].color
+                : '#18181b';
+            return (
+              <Marker key={`tl-${m.userId}`} id={`tl-${m.userId}`} lngLat={[m.longitude, m.latitude]}>
+                <View style={styles.marker}>
+                  <Text
+                    style={[
+                      styles.markerLabel,
+                      m.isFuzzed && { borderColor: '#f59e0b', borderWidth: 1.5 },
+                    ]}
+                  >
+                    {m.isFuzzed ? `${m.username} · Fuzzed` : m.username}
+                  </Text>
+                  <View style={[styles.markerHalo, { backgroundColor: hexToRgba(dotColor, 0.25) }]}>
+                    <View style={[styles.markerDot, { backgroundColor: dotColor }]} />
+                  </View>
+                </View>
+              </Marker>
+            );
+          })}
       </Map>
 
+      {/* Focus Mode Top Simulated Clock Badge */}
+      {drawerMode === 'trails' && timelapseFocusMode && !mobileTimelapseTimeline.isEmpty && (
+        <View
+          style={{
+            position: 'absolute',
+            top: Math.max(insets.top + 8, 40),
+            alignSelf: 'center',
+            zIndex: 25,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: ui.border,
+            backgroundColor: resolvedMapTheme === 'dark' ? 'rgba(24,24,27,0.94)' : 'rgba(255,255,255,0.96)',
+            paddingHorizontal: 14,
+            paddingVertical: 7,
+          }}
+        >
+          <View
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: 999,
+              backgroundColor: timelapsePlaying ? '#10b981' : '#a1a1aa',
+            }}
+          />
+          <Text
+            style={{
+              color: ui.ink,
+              fontSize: 12,
+              fontWeight: '700',
+              fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+            }}
+          >
+            {formatDateAndClock(mobileCurrentRealMs)}
+          </Text>
+        </View>
+      )}
+
       {/* Clean Google Maps-Style Top Chrome (No overlapping full-width bar, no transient status text) */}
+      {!timelapseFocusMode && (
       <View
         style={[styles.topOverlay, { top: Math.max(insets.top + 8, 40) }]}
         pointerEvents="box-none"
@@ -2925,13 +3308,110 @@ export function MobileMapScreen({
           return null;
         })()}
       </View>
+      )}
+
+      {/* Floating Timelapse Player Bar (above bottom drawer, or bottom-docked in Focus Mode) */}
+      {drawerMode === 'trails' && !mobileTimelapseTimeline.isEmpty && (
+        <Animated.View
+          pointerEvents="box-none"
+          style={[
+            {
+              position: 'absolute',
+              left: 12,
+              right: 12,
+              zIndex: 24,
+            },
+            timelapseFocusMode
+              ? { bottom: Math.max(insets.bottom + 14, 24) }
+              : { bottom: Animated.add(drawerHeightAnim, 12) },
+          ]}
+        >
+          <MobileTimelapseBar
+            ui={ui}
+            isDark={resolvedMapTheme === 'dark'}
+            timeline={mobileTimelapseTimeline}
+            currentRealMs={mobileCurrentRealMs}
+            virtualMs={timelapseVirtualMs}
+            playing={timelapsePlaying}
+            speed={timelapseSpeed}
+            loop={timelapseLoop}
+            compactIdle={timelapseCompactIdle}
+            focusMode={timelapseFocusMode}
+            canFollow={Boolean(focusedTrip?.userId ?? activeTrailUserId)}
+            following={
+              Boolean(focusedTrip?.userId ?? activeTrailUserId) &&
+              timelapseFollowUserId === (focusedTrip?.userId ?? activeTrailUserId)
+            }
+            onTogglePlay={() => {
+              if (mobileTimelapseTimeline.isEmpty) return;
+              if (timelapsePlaying) {
+                setTimelapsePlaying(false);
+                return;
+              }
+              setTimelapseEngaged(true);
+              setTimelapseFocusMode(true);
+              if (timelapseVirtualMs >= mobileTimelapseTimeline.virtualDurationMs - 50) {
+                setTimelapseVirtualMs(0);
+                mobileVirtualRef.current = 0;
+              }
+              setTimelapsePlaying(true);
+            }}
+            onSeekVirtualMs={(vMs) => {
+              setTimelapsePlaying(false);
+              setTimelapseEngaged(true);
+              setTimelapseVirtualMs(vMs);
+            }}
+            onCycleSpeed={setTimelapseSpeed}
+            onToggleLoop={() => setTimelapseLoop((v) => !v)}
+            onToggleCompactIdle={() => setTimelapseCompactIdle((v) => !v)}
+            onToggleFollow={() => {
+              const targetId = focusedTrip?.userId ?? activeTrailUserId;
+              if (!targetId) return;
+              setTimelapseFollowUserId((prev) => (prev === targetId ? null : targetId));
+            }}
+            onFitAll={() => {
+              let minLon = Infinity;
+              let minLat = Infinity;
+              let maxLon = -Infinity;
+              let maxLat = -Infinity;
+              for (const p of memberTrailPoints) {
+                if (activeTrailUserId && p.userId !== activeTrailUserId) continue;
+                if (p.longitude < minLon) minLon = p.longitude;
+                if (p.longitude > maxLon) maxLon = p.longitude;
+                if (p.latitude < minLat) minLat = p.latitude;
+                if (p.latitude > maxLat) maxLat = p.latitude;
+              }
+              if (Number.isFinite(minLon)) {
+                programmaticCameraMoveUntilRef.current = Date.now() + 800;
+                cameraRef.current?.fitBounds([minLon, minLat, maxLon, maxLat], {
+                  padding: { top: 80, right: 40, bottom: 260, left: 40 },
+                  duration: 550,
+                });
+              }
+            }}
+            onExitFocus={() => {
+              setTimelapsePlaying(false);
+              setTimelapseEngaged(false);
+              setTimelapseFocusMode(false);
+              setTimelapseFollowUserId(null);
+              setTimelapseVirtualMs(mobileTimelapseTimeline.virtualDurationMs);
+            }}
+          />
+        </Animated.View>
+      )}
 
       {/* Bottom-Left Floating Map Controls Above Drawer: Compass + Fit All + Map Options + Pin Location */}
+      {!timelapseFocusMode && (
       <Animated.View
         pointerEvents="box-none"
         style={[
           styles.floatingControlsWrap,
-          { bottom: Animated.add(drawerHeightAnim, 12) },
+          {
+            bottom:
+              drawerMode === 'trails' && !mobileTimelapseTimeline.isEmpty
+                ? Animated.add(drawerHeightAnim, 126)
+                : Animated.add(drawerHeightAnim, 12),
+          },
         ]}
       >
         {mapOptionsOpen && (
@@ -3124,8 +3604,10 @@ export function MobileMapScreen({
           </TouchableOpacity>
         </View>
       </Animated.View>
+      )}
 
       {/* True Draggable Bottom Drawer (Member Details + Trails + Places + Chat) */}
+      {!timelapseFocusMode && (
       <Animated.View style={[styles.bottomSheet, { height: drawerHeightAnim }]}>
         <View {...drawerPanResponder.panHandlers} style={styles.sheetDragArea}>
           <View style={styles.sheetHandle} />
@@ -3133,9 +3615,11 @@ export function MobileMapScreen({
             <Text style={[styles.drawerHeaderTitle, { fontFamily: fonts.display }]} numberOfLines={1}>
               {drawerMode === 'places'
                 ? 'Places · Private & Shared'
-                : selectedMember
-                  ? selectedMember.username
-                  : `${activeGroup?.name ?? 'LovedOnes'} · ${locations.length} visible`}
+                : drawerMode === 'trails'
+                  ? 'Trails & Timelapse'
+                  : selectedMember
+                    ? selectedMember.username
+                    : `${activeGroup?.name ?? 'LovedOnes'} · ${locations.length} visible`}
             </Text>
             {drawerSnap !== 'peek' && (
               <TouchableOpacity
@@ -3155,7 +3639,8 @@ export function MobileMapScreen({
             style={styles.memberStripScroll}
             contentContainerStyle={styles.memberStrip}
           >
-            {locations.map((loc) => {
+            {!(drawerMode === 'trails' && mobileTimelapseFrame) &&
+          locations.map((loc) => {
               const chipAvatar = isSafeAvatarUrl(loc.avatarUrl) ? loc.avatarUrl : null;
               const isSelected = selectedMemberId === loc.userId;
               return (
@@ -3193,7 +3678,61 @@ export function MobileMapScreen({
             contentContainerStyle={styles.drawerBodyContent}
             keyboardShouldPersistTaps="handled"
           >
-            {drawerMode === 'people' ? (
+            {drawerMode === 'trails' ? (
+              <MobileTrailsTabContent
+                ui={ui}
+                isDark={resolvedMapTheme === 'dark'}
+                members={trailMemberOptions}
+                selectedMemberFilterId={activeTrailUserId}
+                onChangeMemberFilterId={(uid) => {
+                  setActiveTrailUserId(uid);
+                  setFocusedTrip(null);
+                  setTimelapseFollowUserId(null);
+                  void fetchGroupTrails(trailTimeRange, uid, { fitOnLoad: true });
+                }}
+                timeRange={trailTimeRange}
+                onChangeTimeRange={(nextRange) => {
+                  setTrailTimeRange(nextRange);
+                  setFocusedTrip(null);
+                  void fetchGroupTrails(nextRange, activeTrailUserId, { fitOnLoad: false });
+                }}
+                trailDisplayMode={trailDisplayMode}
+                onChangeTrailDisplayMode={(mode) => {
+                  setTrailDisplayMode(mode);
+                  setSelectedTrailPoint(null);
+                }}
+                colorTrailsByActivity={colorTrailsByActivity}
+                onToggleColorByActivity={() => setColorTrailsByActivity((prev) => !prev)}
+                trips={mobileTrailTrips}
+                sortBy={trailSortBy}
+                onChangeSortBy={setTrailSortBy}
+                includeStays={trailIncludeStays}
+                onToggleIncludeStays={() => setTrailIncludeStays((v) => !v)}
+                focusedTrip={focusedTrip}
+                onSelectTrip={(trip) => {
+                  setFocusedTrip(trip);
+                  if (trip) {
+                    const [minLon, minLat, maxLon, maxLat] = trip.bounds;
+                    programmaticCameraMoveUntilRef.current = Date.now() + 800;
+                    if (Math.abs(maxLon - minLon) < 0.0005 && Math.abs(maxLat - minLat) < 0.0005) {
+                      cameraRef.current?.flyTo({
+                        center: [(minLon + maxLon) / 2, (minLat + maxLat) / 2],
+                        zoom: 14.5,
+                        duration: 550,
+                      });
+                    } else {
+                      cameraRef.current?.fitBounds([minLon, minLat, maxLon, maxLat], {
+                        padding: { top: 80, right: 40, bottom: 260, left: 40 },
+                        duration: 550,
+                      });
+                    }
+                  }
+                }}
+                meta={trailsMeta}
+                busy={trailBusy}
+                message={trailMessage}
+              />
+            ) : drawerMode === 'people' ? (
               selectedMember ? (
                 <View style={styles.memberDetailCard}>
                   <View style={styles.memberDetailHeader}>
@@ -3627,8 +4166,35 @@ export function MobileMapScreen({
           </ScrollView>
         )}
 
-        {/* Clean 2-Tab Bottom Bar (Places + Chat; removed redundant Map button) */}
+        {/* Clean 3-Tab Bottom Bar (Trails + Places + Chat) */}
         <View style={styles.tabBar}>
+          <TouchableOpacity
+            style={[styles.tabItem, drawerMode === 'trails' && styles.tabItemActive]}
+            onPress={() => {
+              if (drawerMode === 'trails') {
+                setDrawerMode('people');
+                snapDrawer(selectedMemberId ? 'mid' : 'peek');
+              } else {
+                setDrawerMode('trails');
+                if (drawerSnapRef.current === 'peek') snapDrawer('mid');
+                if (memberTrailPoints.length === 0) {
+                  void fetchGroupTrails(trailTimeRange, activeTrailUserId, { fitOnLoad: true });
+                }
+              }
+            }}
+          >
+            <View style={styles.chatTabRow}>
+              <TrailsTabIcon
+                active={drawerMode === 'trails'}
+                activeColor={ui.ink}
+                inactiveColor={ui.inkMuted}
+              />
+              <Text style={[styles.tabLabel, drawerMode === 'trails' && styles.tabLabelActive]}>
+                Trails
+              </Text>
+            </View>
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.tabItem, drawerMode === 'places' && styles.tabItemActive]}
             onPress={() => {
@@ -3681,6 +4247,7 @@ export function MobileMapScreen({
           </TouchableOpacity>
         </View>
       </Animated.View>
+      )}
 
       {/* Google Maps-Style User Profile & App Hub Modal */}
       <Modal

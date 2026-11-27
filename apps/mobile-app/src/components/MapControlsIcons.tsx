@@ -61,6 +61,28 @@ export function PlacesTabIcon({
 }
 
 /**
+ * Minimal geometric route/trail icon for the Trails bottom tab.
+ */
+export function TrailsTabIcon({
+  active = false,
+  activeColor = '#18181b',
+  inactiveColor = '#64748b',
+}: {
+  active?: boolean;
+  activeColor?: string;
+  inactiveColor?: string;
+}) {
+  const color = active ? activeColor : inactiveColor;
+  return (
+    <View style={styles.tabIconWrap}>
+      <View style={[styles.trailDotA, { backgroundColor: color }]} />
+      <View style={[styles.trailLine, { backgroundColor: color }]} />
+      <View style={[styles.trailDotB, { borderColor: color }]} />
+    </View>
+  );
+}
+
+/**
  * Minimal geometric speech bubble icon for the Chat bottom tab.
  */
 export function ChatTabIcon({
@@ -225,6 +247,29 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 999,
+  },
+  trailDotA: {
+    position: 'absolute',
+    left: 2,
+    bottom: 2,
+    width: 4.5,
+    height: 4.5,
+    borderRadius: 999,
+  },
+  trailLine: {
+    width: 9,
+    height: 1.75,
+    borderRadius: 999,
+    transform: [{ rotate: '-35deg' }],
+  },
+  trailDotB: {
+    position: 'absolute',
+    right: 2,
+    top: 2,
+    width: 5,
+    height: 5,
+    borderRadius: 999,
+    borderWidth: 1.75,
   },
   chatBox: {
     width: 13,

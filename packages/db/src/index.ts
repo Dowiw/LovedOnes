@@ -334,15 +334,17 @@ export interface GroupTrailQueryOptions {
   now?: Date;
 }
 
-/**
- * Fetches ordered historical location points for non-GHOST, non-SPECTATOR members
- * of a Group, optionally filtered by time window, member Account, and a PostGIS
- * ST_MakeEnvelope spatial bounding box using idx_location_gist.
- */
-export async function getGroupTrails(
-  pool: pg.Pool,
-  options: GroupTrailQueryOptions,
-): Promise<GroupMemberLocationRow[]> {
+export interface GroupTrailSampledResult {
+  rows: GroupMemberLocationRow[];
+  totalCount: number;
+  truncated: boolean;
+}
+
+function buildGroupTrailFilterSql(options: GroupTrailQueryOptions): {
+  params: unknown[];
+  privacyExpr: string;
+  whereClause: string;
+} {
   const now = options.now ?? new Date();
   const params: unknown[] = [options.groupId, options.from, options.to, now];
   const privacyExpr = effectivePrivacySql(4);
@@ -377,6 +379,23 @@ export async function getGroupTrails(
     }
   }
 
+  return {
+    params,
+    privacyExpr,
+    whereClause: conditions.join(' AND '),
+  };
+}
+
+/**
+ * Fetches ordered historical location points for non-GHOST, non-SPECTATOR members
+ * of a Group, optionally filtered by time window, member Account, and a PostGIS
+ * ST_MakeEnvelope spatial bounding box using idx_location_gist.
+ */
+export async function getGroupTrails(
+  pool: pg.Pool,
+  options: GroupTrailQueryOptions,
+): Promise<GroupMemberLocationRow[]> {
+  const { params, privacyExpr, whereClause } = buildGroupTrailFilterSql(options);
   const limit = Math.min(Math.max(1, Math.trunc(options.limit ?? 1000)), 10000);
   params.push(limit);
 
@@ -401,13 +420,104 @@ export async function getGroupTrails(
      FROM group_memberships gm
      JOIN users u ON u.id = gm.user_id
      JOIN location_history lh ON lh.user_id = gm.user_id
-     WHERE ${conditions.join(' AND ')}
+     WHERE ${whereClause}
      ORDER BY lh.recorded_at ASC
      LIMIT $${params.length}`,
     params,
   );
 
   return result.rows.map(mapGroupLocationRow);
+}
+
+/**
+ * Fetches historical trail points across `[from, to]` while avoiding silent cutoff of
+ * recent days when total matching rows exceed `limit` by sampling uniformly per user.
+ */
+export async function getGroupTrailsSampled(
+  pool: pg.Pool,
+  options: GroupTrailQueryOptions,
+): Promise<GroupTrailSampledResult> {
+  const { params, privacyExpr, whereClause } = buildGroupTrailFilterSql(options);
+  const limit = Math.min(Math.max(1, Math.trunc(options.limit ?? 2500)), 10000);
+
+  const countRes = await pool.query<{ total_count: number }>(
+    `SELECT COUNT(*)::int AS total_count
+     FROM group_memberships gm
+     JOIN location_history lh ON lh.user_id = gm.user_id
+     WHERE ${whereClause}`,
+    params,
+  );
+  const totalCount = countRes.rows[0]?.total_count ?? 0;
+  if (totalCount === 0) {
+    return { rows: [], totalCount: 0, truncated: false };
+  }
+
+  if (totalCount <= limit) {
+    const rows = await getGroupTrails(pool, { ...options, limit });
+    return { rows, totalCount, truncated: false };
+  }
+
+  const stride = Math.max(2, Math.ceil(totalCount / limit));
+  const sampledParams = [...params, stride, limit];
+  const strideParamIdx = params.length + 1;
+  const limitParamIdx = params.length + 2;
+
+  const result = await pool.query<RawGroupLocationRow>(
+    `WITH ranked AS (
+       SELECT
+         gm.user_id,
+         u.username,
+         u.avatar_url,
+         u.halo_color,
+         u.fuzz_circle_color,
+         gm.role,
+         ${privacyExpr} AS privacy,
+         ST_Y(lh.coords::geometry) AS latitude,
+         ST_X(lh.coords::geometry) AS longitude,
+         lh.altitude,
+         lh.accuracy,
+         lh.speed,
+         lh.heading,
+         lh.activity,
+         lh.battery_level,
+         lh.recorded_at,
+         ROW_NUMBER() OVER (PARTITION BY gm.user_id ORDER BY lh.recorded_at ASC) AS rn,
+         COUNT(*) OVER (PARTITION BY gm.user_id) AS user_total
+       FROM group_memberships gm
+       JOIN users u ON u.id = gm.user_id
+       JOIN location_history lh ON lh.user_id = gm.user_id
+       WHERE ${whereClause}
+     )
+     SELECT
+       user_id,
+       username,
+       avatar_url,
+       halo_color,
+       fuzz_circle_color,
+       role,
+       privacy,
+       latitude,
+       longitude,
+       altitude,
+       accuracy,
+       speed,
+       heading,
+       activity,
+       battery_level,
+       recorded_at
+     FROM ranked
+     WHERE rn = 1 OR rn = user_total OR ((rn - 1) % $${strideParamIdx}) = 0
+     ORDER BY recorded_at ASC
+     LIMIT $${limitParamIdx}`,
+    sampledParams,
+  );
+
+  const rows = result.rows.map(mapGroupLocationRow);
+  return {
+    rows,
+    totalCount,
+    truncated: rows.length < totalCount,
+  };
 }
 
 export interface UserDbFootprintRow {
