@@ -8,12 +8,21 @@ import { Redis } from 'ioredis';
 import pg from 'pg';
 import {
   countUsers,
+  createMapDownloadRequest,
   createPool,
+  getFeaturePolicies,
+  getMapDownloadRequestById,
+  getScheduledSystemUpdate,
   getServerSetting,
+  getUserMapDownloadRequests,
+  listMapDownloadRequests,
   pruneExpiredShareLinks,
   pruneResourceTables,
   resolveAuditContext,
+  resolveMapDownloadRequest,
   runMigrations,
+  setFeaturePolicies,
+  setScheduledSystemUpdate,
   setServerSetting,
 } from '@loved-ones/db';
 import {
@@ -21,6 +30,7 @@ import {
   evaluateClientVersion,
   isSafeLoginBackgroundUrl,
   MOBILE_DEFAULT_DOWNLOAD_URL,
+  UpdateFeaturePoliciesSchema,
   UpdateLoginAppearanceSchema,
   UpdateLogRetentionSchema,
   UpdateResourceLimitsSchema,
@@ -180,6 +190,22 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
 
   const mapRegions = new MapRegionsModule({
     ...(options.mapRegions ?? {}),
+    getTileDownloadPolicy:
+      options.mapRegions?.getTileDownloadPolicy ??
+      (async () => {
+        if (options.mapRegions?.allowMemberDownloads === false) {
+          return 'disabled';
+        }
+        const policies = await getFeaturePolicies(pool);
+        return policies.tileDownloadPolicy;
+      }),
+    requestStore: options.mapRegions?.requestStore ?? {
+      create: (input) => createMapDownloadRequest(pool, input),
+      list: () => listMapDownloadRequests(pool),
+      listForUser: (userId) => getUserMapDownloadRequests(pool, userId),
+      getById: (id) => getMapDownloadRequestById(pool, id),
+      resolve: (input) => resolveMapDownloadRequest(pool, input),
+    },
     getMaxMapStorageMb: async () => {
       const limits = await loadResourceLimitsSettings(redis, resourceLimitsDefaults);
       return limits.maxMapStorageMb;
@@ -285,7 +311,17 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     allowRemoteUpdate:
       options.systemUpdater?.allowRemoteUpdate ??
       process.env.ALLOW_REMOTE_SYSTEM_UPDATE !== 'false',
+    scheduleStore: {
+      get: () => getScheduledSystemUpdate(pool),
+      set: async (schedule, updatedBy) => {
+        await setScheduledSystemUpdate(pool, schedule, updatedBy);
+      },
+    },
+    onLog: (level, msg, meta) => {
+      loggerHandle.logger[level](meta ?? {}, msg);
+    },
   });
+  await systemUpdater.initScheduleTimer();
 
   const app = Fastify({ logger: false, bodyLimit: 3 * 1024 * 1024, trustProxy: true });
   await app.register(cors, () =>
@@ -751,7 +787,14 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     '/api/auth/tracker-token',
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest) => {
-      return authGroup.getTrackerTokenStatus(request.authUser!.id);
+      const [status, policies] = await Promise.all([
+        authGroup.getTrackerTokenStatus(request.authUser!.id),
+        getFeaturePolicies(pool),
+      ]);
+      return {
+        ...status,
+        enabled: policies.trackerTokensEnabled,
+      };
     },
   );
 
@@ -760,6 +803,10 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     { preHandler: [requireAuth] },
     async (request: AuthenticatedRequest, reply) => {
       const actor = request.authUser!;
+      const policies = await getFeaturePolicies(pool);
+      if (!policies.trackerTokensEnabled) {
+        throw new DomainError(403, 'HTTP tracker tokens are disabled by the Host Admin');
+      }
       const created = await authGroup.createTrackerToken(
         actor,
         request.body,
@@ -1303,6 +1350,108 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     },
   );
 
+  app.get(
+    '/api/auth/feature-policies',
+    { preHandler: [requireAuth] },
+    async () => {
+      const [policies, scheduled] = await Promise.all([
+        getFeaturePolicies(pool),
+        systemUpdater.getScheduledUpdate(),
+      ]);
+      return {
+        policies,
+        scheduledUpdateFor: scheduled?.scheduledFor ?? null,
+      };
+    },
+  );
+
+  app.get(
+    '/api/admin/feature-policies',
+    { preHandler: [requireHostAdmin] },
+    async () => {
+      const policies = await getFeaturePolicies(pool);
+      return { policies };
+    },
+  );
+
+  app.patch(
+    '/api/admin/feature-policies',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const parsed = UpdateFeaturePoliciesSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        throw new DomainError(400, 'Invalid feature policies update', parsed.error.flatten());
+      }
+      const current = await getFeaturePolicies(pool);
+      const next = await setFeaturePolicies(
+        pool,
+        {
+          shareLinksEnabled: parsed.data.shareLinksEnabled ?? current.shareLinksEnabled,
+          trackerTokensEnabled: parsed.data.trackerTokensEnabled ?? current.trackerTokensEnabled,
+          tileDownloadPolicy: parsed.data.tileDownloadPolicy ?? current.tileDownloadPolicy,
+        },
+        actor.id,
+      );
+      loggerHandle.logger.info(
+        {
+          action: 'admin.feature_policies_updated',
+          userId: actor.id,
+          username: actor.username,
+          shareLinksEnabled: next.shareLinksEnabled,
+          trackerTokensEnabled: next.trackerTokensEnabled,
+          tileDownloadPolicy: next.tileDownloadPolicy,
+        },
+        `${actor.username} updated Host Admin feature policies (shareLinks=${next.shareLinksEnabled ? 'on' : 'off'}, trackerTokens=${next.trackerTokensEnabled ? 'on' : 'off'}, tileDownload=${next.tileDownloadPolicy})`,
+      );
+      return { policies: next };
+    },
+  );
+
+  app.post(
+    '/api/admin/system/update/schedule',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const status = await systemUpdater.scheduleUpdate(
+        { id: actor.id, username: actor.username },
+        request.body,
+      );
+      loggerHandle.logger.info(
+        {
+          action: 'system.update_scheduled',
+          userId: actor.id,
+          username: actor.username,
+          scheduledFor: status.scheduledUpdate?.scheduledFor ?? null,
+          rebuildEvenIfCurrent: status.scheduledUpdate?.rebuildEvenIfCurrent ?? false,
+        },
+        `${actor.username} scheduled a system update & restart for ${status.scheduledUpdate?.scheduledFor ?? 'unknown'}`,
+      );
+      return status;
+    },
+  );
+
+  app.delete(
+    '/api/admin/system/update/schedule',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const status = await systemUpdater.cancelScheduledUpdate({
+        id: actor.id,
+        username: actor.username,
+      });
+      loggerHandle.logger.info(
+        {
+          action: 'system.update_schedule_cancelled',
+          userId: actor.id,
+          username: actor.username,
+        },
+        `${actor.username} cancelled the scheduled system update & restart`,
+      );
+      return status;
+    },
+  );
+
   app.post(
     '/api/admin/system/update/dismiss',
     { preHandler: [requireHostAdmin] },
@@ -1368,13 +1517,81 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
   // ---- Dynamic Map Region Coverage & PMTiles Download Endpoints ----
 
   app.get('/api/maps/regions', async () => {
-    const regions = await mapRegions.listRegions();
+    const [regions, featurePolicies, tileDownloadPolicy] = await Promise.all([
+      mapRegions.listRegions(),
+      getFeaturePolicies(pool),
+      mapRegions.resolveTileDownloadPolicy(),
+    ]);
     return {
       regions,
       jobs: mapRegions.listJobs(),
-      allowMemberDownloads: mapRegions.allowMemberDownloads,
+      allowMemberDownloads: tileDownloadPolicy !== 'disabled',
+      tileDownloadPolicy,
+      featurePolicies,
     };
   });
+
+  app.get('/api/maps/requests/me', { preHandler: [requireAuth] }, async (request: AuthenticatedRequest) => {
+    return mapRegions.getManualRequestStatusForUser(request.authUser!.id);
+  });
+
+  app.get('/api/admin/maps/requests', { preHandler: [requireHostAdmin] }, async () => {
+    const requests = await mapRegions.listManualRequests();
+    return { requests };
+  });
+
+  app.post(
+    '/api/admin/maps/requests/:requestId/approve',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const { requestId } = request.params as { requestId: string };
+      const res = await mapRegions.approveManualRequest(
+        { id: actor.id, username: actor.username, role: actor.role },
+        requestId,
+      );
+      loggerHandle.logger.info(
+        {
+          action: 'map.download_request_approved',
+          userId: actor.id,
+          username: actor.username,
+          requestId,
+          requesterId: res.request.requesterId,
+          requesterUsername: res.request.requesterUsername,
+          jobId: res.job?.id ?? null,
+          cityName: res.request.displayName ?? res.request.cityName,
+        },
+        `${actor.username} approved manual tile download request from ${res.request.requesterUsername} (${res.request.displayName ?? res.request.cityName ?? `${res.request.latitude.toFixed(2)}, ${res.request.longitude.toFixed(2)}`})`,
+      );
+      return res;
+    },
+  );
+
+  app.post(
+    '/api/admin/maps/requests/:requestId/deny',
+    { preHandler: [requireHostAdmin] },
+    async (request: AuthenticatedRequest) => {
+      const actor = request.authUser!;
+      const { requestId } = request.params as { requestId: string };
+      const res = await mapRegions.denyManualRequest(
+        { id: actor.id, username: actor.username, role: actor.role },
+        requestId,
+      );
+      loggerHandle.logger.info(
+        {
+          action: 'map.download_request_denied',
+          userId: actor.id,
+          username: actor.username,
+          requestId,
+          requesterId: res.request.requesterId,
+          requesterUsername: res.request.requesterUsername,
+          cityName: res.request.displayName ?? res.request.cityName,
+        },
+        `${actor.username} denied manual tile download request from ${res.request.requesterUsername}`,
+      );
+      return res;
+    },
+  );
 
   app.get('/api/maps/jobs', { preHandler: [requireAuth] }, async () => {
     return { jobs: mapRegions.listJobs() };
@@ -1385,44 +1602,65 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
     return { job: mapRegions.getJob(jobId) };
   });
 
-  app.post(
-    '/api/maps/download',
-    { preHandler: [requireAuth] },
-    async (request: AuthenticatedRequest, reply) => {
-      const actor = request.authUser!;
-      const body = (request.body ?? {}) as { latitude?: number; longitude?: number };
-      const result = await mapRegions.requestCityDownload(
-        { id: actor.id, role: actor.role },
-        request.body,
-      );
-      if (result.alreadyCovered) {
-        loggerHandle.logger.info(
-          {
-            action: 'map.download_skipped_covered',
-            userId: actor.id,
-            username: actor.username,
-            latitude: body.latitude,
-            longitude: body.longitude,
-            regionId: result.region?.id,
-            regionName: result.region?.displayName ?? result.region?.name,
-          },
-          `${actor.username} checked map coverage at (${body.latitude}, ${body.longitude}) — already covered by ${result.region?.displayName ?? result.region?.name ?? 'region'}`,
-        );
-        return reply.code(200).send(result);
-      }
+  const handleCityDownloadRequest = async (
+    request: AuthenticatedRequest,
+    reply: FastifyReply,
+  ) => {
+    const actor = request.authUser!;
+    const body = (request.body ?? {}) as { latitude?: number; longitude?: number };
+    const result = await mapRegions.requestCityDownload(
+      { id: actor.id, role: actor.role, username: actor.username },
+      request.body,
+    );
+    if (result.alreadyCovered) {
       loggerHandle.logger.info(
         {
-          action: 'map.download_requested',
+          action: 'map.download_skipped_covered',
           userId: actor.id,
           username: actor.username,
-          jobId: result.job?.id,
-          cityName: result.job?.displayName ?? result.job?.cityName,
-          bbox: result.job?.bbox,
+          latitude: body.latitude,
+          longitude: body.longitude,
+          regionId: result.region?.id,
+          regionName: result.region?.displayName ?? result.region?.name,
         },
-        `${actor.username} requested server PMTiles download for "${result.job?.displayName ?? result.job?.cityName ?? 'city'}"`,
+        `${actor.username} checked map coverage at (${body.latitude}, ${body.longitude}) — already covered by ${result.region?.displayName ?? result.region?.name ?? 'region'}`,
+      );
+      return reply.code(200).send(result);
+    }
+    if (result.pendingApproval && result.request) {
+      loggerHandle.logger.info(
+        {
+          action: 'map.download_request_submitted',
+          userId: actor.id,
+          username: actor.username,
+          requestId: result.request.id,
+          latitude: result.request.latitude,
+          longitude: result.request.longitude,
+          cityName: result.request.displayName ?? result.request.cityName,
+        },
+        `${actor.username} submitted a manual tile download request for "${result.request.displayName ?? result.request.cityName ?? `${result.request.latitude.toFixed(2)}, ${result.request.longitude.toFixed(2)}`}" awaiting Host Admin approval`,
       );
       return reply.code(202).send(result);
-    },
+    }
+    loggerHandle.logger.info(
+      {
+        action: 'map.download_requested',
+        userId: actor.id,
+        username: actor.username,
+        jobId: result.job?.id,
+        cityName: result.job?.displayName ?? result.job?.cityName,
+        bbox: result.job?.bbox,
+      },
+      `${actor.username} requested server PMTiles download for "${result.job?.displayName ?? result.job?.cityName ?? 'city'}"`,
+    );
+    return reply.code(202).send(result);
+  };
+
+  app.post('/api/maps/download', { preHandler: [requireAuth] }, handleCityDownloadRequest);
+  app.post(
+    '/api/admin/maps/regions/request',
+    { preHandler: [requireAuth] },
+    handleCityDownloadRequest,
   );
 
   app.post(
@@ -1544,6 +1782,7 @@ export async function createAuthAdminServer(options: AuthAdminOptions = {}): Pro
 
   app.addHook('onClose', async () => {
     clearInterval(pruneInterval);
+    systemUpdater.dispose();
     await heartbeat.stop();
     await mapRegions.close();
     await loggerHandle.close();

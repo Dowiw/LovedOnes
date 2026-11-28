@@ -3,20 +3,27 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
-import type {
-  BoundingBox,
-  DatabaseBreakdown,
-  DatabaseTableBreakdown,
-  GroupPlace,
-  GroupRole,
-  LocationPoint,
-  LocationRequestItem,
-  LocationRequestStatus,
-  MotionActivity,
-  PlaceTransitionEvent,
-  PlaceTransitionType,
-  PrivacyMode,
-  SystemRole,
+import {
+  DEFAULT_FEATURE_POLICIES,
+  FeaturePoliciesSchema,
+  ScheduledSystemUpdateSchema,
+  type BoundingBox,
+  type DatabaseBreakdown,
+  type DatabaseTableBreakdown,
+  type FeaturePolicies,
+  type GroupPlace,
+  type GroupRole,
+  type LocationPoint,
+  type LocationRequestItem,
+  type LocationRequestStatus,
+  type MotionActivity,
+  type PlaceTransitionEvent,
+  type PlaceTransitionType,
+  type PrivacyMode,
+  type ScheduledSystemUpdate,
+  type SystemRole,
+  type TileDownloadRequestItem,
+  type TileDownloadRequestStatus,
 } from '@loved-ones/shared';
 import * as schema from './schema.js';
 
@@ -561,6 +568,7 @@ const TABLE_CLASSIFICATION: Record<
   push_vapid_config: { label: 'VAPID Keys (System)', category: 'system', deletable: false },
   push_subscriptions: { label: 'Web Push Subscriptions', category: 'system', deletable: false },
   server_settings: { label: 'Server Settings', category: 'system', deletable: false },
+  map_download_requests: { label: 'Tile Download Requests', category: 'system', deletable: false },
   spatial_ref_sys: { label: 'PostGIS Spatial Reference', category: 'system', deletable: false },
 };
 
@@ -2234,4 +2242,269 @@ export async function setServerSetting(
      DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
     [key, value, updatedBy ?? null],
   );
+}
+
+export const FEATURE_POLICIES_SETTING_KEY = 'feature_policies';
+export const SCHEDULED_UPDATE_SETTING_KEY = 'scheduled_system_update';
+
+export async function getFeaturePolicies(pool: pg.Pool): Promise<FeaturePolicies> {
+  try {
+    const raw = await getServerSetting(pool, FEATURE_POLICIES_SETTING_KEY);
+    if (!raw) return { ...DEFAULT_FEATURE_POLICIES };
+    const parsed = FeaturePoliciesSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return { ...DEFAULT_FEATURE_POLICIES };
+    return parsed.data;
+  } catch {
+    return { ...DEFAULT_FEATURE_POLICIES };
+  }
+}
+
+export async function setFeaturePolicies(
+  pool: pg.Pool,
+  policies: FeaturePolicies,
+  updatedBy?: string | null,
+): Promise<FeaturePolicies> {
+  const next: FeaturePolicies = FeaturePoliciesSchema.parse({
+    ...policies,
+    updatedAt: new Date().toISOString(),
+  });
+  await setServerSetting(pool, FEATURE_POLICIES_SETTING_KEY, JSON.stringify(next), updatedBy);
+  return next;
+}
+
+export async function getScheduledSystemUpdate(
+  pool: pg.Pool,
+): Promise<ScheduledSystemUpdate | null> {
+  try {
+    const raw = await getServerSetting(pool, SCHEDULED_UPDATE_SETTING_KEY);
+    if (!raw) return null;
+    const parsed = ScheduledSystemUpdateSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setScheduledSystemUpdate(
+  pool: pg.Pool,
+  schedule: ScheduledSystemUpdate | null,
+  updatedBy?: string | null,
+): Promise<ScheduledSystemUpdate | null> {
+  if (!schedule) {
+    await setServerSetting(pool, SCHEDULED_UPDATE_SETTING_KEY, null, updatedBy);
+    return null;
+  }
+  const parsed = ScheduledSystemUpdateSchema.parse(schedule);
+  await setServerSetting(
+    pool,
+    SCHEDULED_UPDATE_SETTING_KEY,
+    JSON.stringify(parsed),
+    updatedBy ?? parsed.scheduledByUserId,
+  );
+  return parsed;
+}
+
+interface MapDownloadRequestRow {
+  id: string;
+  requester_id: string;
+  requester_username: string;
+  latitude: number;
+  longitude: number;
+  city_name: string | null;
+  display_name: string | null;
+  radius_km: number | null;
+  status: string;
+  job_id: string | null;
+  reviewed_by_username: string | null;
+  created_at: Date | string;
+  reviewed_at: Date | string | null;
+}
+
+function mapDownloadRequestRowToItem(row: MapDownloadRequestRow): TileDownloadRequestItem {
+  const status: TileDownloadRequestStatus =
+    row.status === 'APPROVED' || row.status === 'DENIED' ? row.status : 'PENDING';
+  return {
+    id: row.id,
+    requesterId: row.requester_id,
+    requesterUsername: row.requester_username,
+    latitude: Number(row.latitude),
+    longitude: Number(row.longitude),
+    cityName: row.city_name,
+    displayName: row.display_name,
+    radiusKm: row.radius_km !== null ? Number(row.radius_km) : null,
+    status,
+    jobId: row.job_id,
+    createdAt: new Date(row.created_at).toISOString(),
+    reviewedAt: row.reviewed_at ? new Date(row.reviewed_at).toISOString() : null,
+    reviewedByUsername: row.reviewed_by_username,
+  };
+}
+
+export async function createMapDownloadRequest(
+  pool: pg.Pool,
+  input: {
+    requesterId: string;
+    requesterUsername: string;
+    latitude: number;
+    longitude: number;
+    cityName?: string | null;
+    displayName?: string | null;
+    radiusKm?: number | null;
+  },
+): Promise<TileDownloadRequestItem> {
+  const res = await pool.query<MapDownloadRequestRow>(
+    `INSERT INTO map_download_requests (
+       requester_id,
+       requester_username,
+       latitude,
+       longitude,
+       city_name,
+       display_name,
+       radius_km,
+       status
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING')
+     RETURNING
+       id,
+       requester_id,
+       requester_username,
+       latitude,
+       longitude,
+       city_name,
+       display_name,
+       radius_km,
+       status,
+       job_id,
+       reviewed_by_username,
+       created_at,
+       reviewed_at`,
+    [
+      input.requesterId,
+      input.requesterUsername,
+      input.latitude,
+      input.longitude,
+      input.cityName ?? null,
+      input.displayName ?? null,
+      input.radiusKm ?? null,
+    ],
+  );
+  return mapDownloadRequestRowToItem(res.rows[0]!);
+}
+
+export async function listMapDownloadRequests(
+  pool: pg.Pool,
+  limit = 100,
+): Promise<TileDownloadRequestItem[]> {
+  const res = await pool.query<MapDownloadRequestRow>(
+    `SELECT
+       id,
+       requester_id,
+       requester_username,
+       latitude,
+       longitude,
+       city_name,
+       display_name,
+       radius_km,
+       status,
+       job_id,
+       reviewed_by_username,
+       created_at,
+       reviewed_at
+     FROM map_download_requests
+     ORDER BY (CASE WHEN status = 'PENDING' THEN 0 ELSE 1 END) ASC, created_at DESC
+     LIMIT $1`,
+    [limit],
+  );
+  return res.rows.map(mapDownloadRequestRowToItem);
+}
+
+export async function getUserMapDownloadRequests(
+  pool: pg.Pool,
+  userId: string,
+): Promise<TileDownloadRequestItem[]> {
+  const res = await pool.query<MapDownloadRequestRow>(
+    `SELECT
+       id,
+       requester_id,
+       requester_username,
+       latitude,
+       longitude,
+       city_name,
+       display_name,
+       radius_km,
+       status,
+       job_id,
+       reviewed_by_username,
+       created_at,
+       reviewed_at
+     FROM map_download_requests
+     WHERE requester_id = $1
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return res.rows.map(mapDownloadRequestRowToItem);
+}
+
+export async function getMapDownloadRequestById(
+  pool: pg.Pool,
+  requestId: string,
+): Promise<TileDownloadRequestItem | null> {
+  const res = await pool.query<MapDownloadRequestRow>(
+    `SELECT
+       id,
+       requester_id,
+       requester_username,
+       latitude,
+       longitude,
+       city_name,
+       display_name,
+       radius_km,
+       status,
+       job_id,
+       reviewed_by_username,
+       created_at,
+       reviewed_at
+     FROM map_download_requests
+     WHERE id = $1
+     LIMIT 1`,
+    [requestId],
+  );
+  return res.rows[0] ? mapDownloadRequestRowToItem(res.rows[0]) : null;
+}
+
+export async function resolveMapDownloadRequest(
+  pool: pg.Pool,
+  input: {
+    id: string;
+    status: 'APPROVED' | 'DENIED';
+    reviewedBy: string;
+    reviewedByUsername: string;
+    jobId?: string | null;
+  },
+): Promise<TileDownloadRequestItem | null> {
+  const res = await pool.query<MapDownloadRequestRow>(
+    `UPDATE map_download_requests
+     SET status = $2,
+         reviewed_by = $3,
+         reviewed_by_username = $4,
+         job_id = COALESCE($5, job_id),
+         reviewed_at = NOW()
+     WHERE id = $1 AND status = 'PENDING'
+     RETURNING
+       id,
+       requester_id,
+       requester_username,
+       latitude,
+       longitude,
+       city_name,
+       display_name,
+       radius_km,
+       status,
+       job_id,
+       reviewed_by_username,
+       created_at,
+       reviewed_at`,
+    [input.id, input.status, input.reviewedBy, input.reviewedByUsername, input.jobId ?? null],
+  );
+  return res.rows[0] ? mapDownloadRequestRowToItem(res.rows[0]) : null;
 }

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   AlertTriangle,
   ArrowUpCircle,
+  CalendarClock,
   Check,
   CheckCircle2,
   Clock,
@@ -14,11 +15,14 @@ import {
   Globe,
   HardDrive,
   Image as ImageIcon,
+  KeyRound,
   Link2,
   Loader2,
   QrCode,
   Radio,
   RefreshCw,
+  Share2,
+  Shield,
   Terminal,
   Trash2,
   Upload,
@@ -27,15 +31,19 @@ import {
 } from 'lucide-react';
 import {
   DEFAULT_EXACT_HALO_COLOR,
+  DEFAULT_FEATURE_POLICIES,
   formatCountdownRemaining,
   isSafeAvatarUrl,
   isSafeLoginBackgroundUrl,
   isWorldOverviewRegion,
+  type FeaturePolicies,
   type MapDownloadJob,
   type MapRegion,
   type RegistrationRequestItem,
   type SystemTelemetry,
   type SystemUpdateStatus,
+  type TileDownloadPolicy,
+  type TileDownloadRequestItem,
   WORLD_OVERVIEW_REGION_ID,
 } from '@loved-ones/shared';
 import {
@@ -48,11 +56,16 @@ import { NavBar } from '@/components/NavBar';
 import { QrInvitePanel } from '@/components/QrInviteModal';
 import {
   ACCOUNT_REMOVED_EVENT,
+  apiApproveAdminMapRequest,
   apiApproveRegistrationRequest,
+  apiCancelScheduledSystemUpdate,
   apiDeleteMapRegion,
   apiDeleteUserAccount,
+  apiDenyAdminMapRequest,
   apiDenyRegistrationRequest,
   apiDismissSystemUpdateError,
+  apiFetchAdminFeaturePolicies,
+  apiFetchAdminMapRequests,
   apiFetchGroups,
   apiFetchLoginAppearance,
   apiFetchMapJobs,
@@ -61,7 +74,9 @@ import {
   apiFetchSystemUpdateStatus,
   apiFetchTelemetry,
   apiRequestWorldOverviewDownload,
+  apiScheduleSystemUpdate,
   apiTriggerSystemUpdate,
+  apiUpdateAdminFeaturePolicies,
   apiUpdateLoginAppearance,
   formatBytes,
   GroupItem,
@@ -138,6 +153,15 @@ export default function AdminDashboardPage() {
   const [confirmUpdateMode, setConfirmUpdateMode] = useState<'pull' | 'rebuild' | null>(null);
   const [reconnectingDuringUpdate, setReconnectingDuringUpdate] = useState(false);
   const [showUpdateLogs, setShowUpdateLogs] = useState(false);
+  const [showSchedulePicker, setShowSchedulePicker] = useState(false);
+  const [scheduleDateTimeInput, setScheduleDateTimeInput] = useState('');
+  const [scheduleRebuildEvenIfCurrent, setScheduleRebuildEvenIfCurrent] = useState(false);
+  const [schedulingUpdate, setSchedulingUpdate] = useState(false);
+  const [featurePolicies, setFeaturePolicies] = useState<FeaturePolicies>(DEFAULT_FEATURE_POLICIES);
+  const [savingPolicyKey, setSavingPolicyKey] = useState<string | null>(null);
+  const [policyFeedback, setPolicyFeedback] = useState<string | null>(null);
+  const [mapRequests, setMapRequests] = useState<TileDownloadRequestItem[]>([]);
+  const [reviewingMapRequestId, setReviewingMapRequestId] = useState<string | null>(null);
   const [loginBackgroundUrl, setLoginBackgroundUrl] = useState<string | null>(null);
   const [loginBgUrlInput, setLoginBgUrlInput] = useState('');
   const [showLoginBgUrlInput, setShowLoginBgUrlInput] = useState(false);
@@ -161,15 +185,18 @@ export default function AdminDashboardPage() {
   const refreshData = useCallback(async (token: string, isManual = false) => {
     if (isManual) setManualRefreshing(true);
     try {
-      const [stats, grpList, regionsData, jobs, sysUpdate, regReqs, appearance] = await Promise.all([
-        apiFetchTelemetry(token),
-        apiFetchGroups(token),
-        apiFetchMapRegions(),
-        apiFetchMapJobs(token),
-        apiFetchSystemUpdateStatus(token, false).catch(() => null),
-        apiFetchRegistrationRequests(token).catch(() => null),
-        apiFetchLoginAppearance(token).catch(() => null),
-      ]);
+      const [stats, grpList, regionsData, jobs, sysUpdate, regReqs, appearance, policies, tileReqs] =
+        await Promise.all([
+          apiFetchTelemetry(token),
+          apiFetchGroups(token),
+          apiFetchMapRegions(),
+          apiFetchMapJobs(token),
+          apiFetchSystemUpdateStatus(token, false).catch(() => null),
+          apiFetchRegistrationRequests(token).catch(() => null),
+          apiFetchLoginAppearance(token).catch(() => null),
+          apiFetchAdminFeaturePolicies(token).catch(() => null),
+          apiFetchAdminMapRequests(token).catch(() => null),
+        ]);
       setTelemetry(stats);
       setGroups(grpList);
       setMapRegions(regionsData.regions);
@@ -184,6 +211,12 @@ export default function AdminDashboardPage() {
       if (appearance) {
         setLoginBackgroundUrl(appearance.loginBackgroundUrl);
       }
+      if (policies) {
+        setFeaturePolicies(policies);
+      }
+      if (tileReqs) {
+        setMapRequests(tileReqs);
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load telemetry');
@@ -194,10 +227,13 @@ export default function AdminDashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (!registrationRequests.some((r) => r.status === 'PENDING')) return;
+    const hasCountdown =
+      registrationRequests.some((r) => r.status === 'PENDING') ||
+      Boolean(updateStatus?.scheduledUpdate?.scheduledFor);
+    if (!hasCountdown) return;
     const ticker = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(ticker);
-  }, [registrationRequests]);
+  }, [registrationRequests, updateStatus?.scheduledUpdate?.scheduledFor]);
 
   const handleReviewRegistrationRequest = useCallback(
     async (requestId: string, action: 'approve' | 'deny') => {
@@ -343,6 +379,84 @@ export default function AdminDashboardPage() {
       }
     },
     [session],
+  );
+
+  const handleScheduleUpdate = useCallback(
+    async (input: { runAt?: string; delayMinutes?: number; rebuildEvenIfCurrent?: boolean }) => {
+      if (!session) return;
+      setSchedulingUpdate(true);
+      try {
+        const next = await apiScheduleSystemUpdate(session.accessToken, {
+          ...input,
+          rebuildEvenIfCurrent: input.rebuildEvenIfCurrent ?? scheduleRebuildEvenIfCurrent,
+        });
+        setUpdateStatus(next);
+        setShowSchedulePicker(false);
+        setScheduleDateTimeInput('');
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to schedule system update');
+      } finally {
+        setSchedulingUpdate(false);
+      }
+    },
+    [session, scheduleRebuildEvenIfCurrent],
+  );
+
+  const handleCancelScheduledUpdate = useCallback(async () => {
+    if (!session) return;
+    setSchedulingUpdate(true);
+    try {
+      const next = await apiCancelScheduledSystemUpdate(session.accessToken);
+      setUpdateStatus(next);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel scheduled update');
+    } finally {
+      setSchedulingUpdate(false);
+    }
+  }, [session]);
+
+  const handleUpdateFeaturePolicy = useCallback(
+    async (
+      key: string,
+      patch: Partial<Pick<FeaturePolicies, 'shareLinksEnabled' | 'trackerTokensEnabled' | 'tileDownloadPolicy'>>,
+    ) => {
+      if (!session) return;
+      setSavingPolicyKey(key);
+      setPolicyFeedback(null);
+      try {
+        const updated = await apiUpdateAdminFeaturePolicies(session.accessToken, patch);
+        setFeaturePolicies(updated);
+        setPolicyFeedback('Feature access policy saved.');
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update feature policy');
+      } finally {
+        setSavingPolicyKey(null);
+      }
+    },
+    [session],
+  );
+
+  const handleReviewMapRequest = useCallback(
+    async (requestId: string, action: 'approve' | 'deny') => {
+      if (!session) return;
+      setReviewingMapRequestId(requestId);
+      try {
+        if (action === 'approve') {
+          await apiApproveAdminMapRequest(session.accessToken, requestId);
+        } else {
+          await apiDenyAdminMapRequest(session.accessToken, requestId);
+        }
+        await refreshData(session.accessToken);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : `Failed to ${action} tile download request`);
+      } finally {
+        setReviewingMapRequestId(null);
+      }
+    },
+    [session, refreshData],
   );
 
   useEffect(() => {
@@ -615,6 +729,191 @@ export default function AdminDashboardPage() {
         </section>
 
         <section className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Shield className="h-4 w-4 text-zinc-700 dark:text-zinc-300" />
+                <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                  Feature Access Policies
+                </h2>
+              </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Control which optional member capabilities are enabled server-wide. Changes take
+                effect immediately across Web and Mobile.
+              </p>
+            </div>
+            {policyFeedback && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                <Check className="h-3 w-3" />
+                {policyFeedback}
+              </span>
+            )}
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            {/* Public Share Links Toggle */}
+            <div className="flex flex-col justify-between gap-3 rounded-lg border border-zinc-200/80 bg-zinc-50/60 p-3.5 dark:border-zinc-800 dark:bg-zinc-950/40">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-zinc-950 dark:text-zinc-50">
+                    <Share2 className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                    Public Share Links
+                  </span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      featurePolicies.shareLinksEnabled
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
+                        : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+                    }`}
+                  >
+                    {featurePolicies.shareLinksEnabled ? 'On' : 'Disabled'}
+                  </span>
+                </div>
+                <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+                  Allow members to generate temporary public meetup share links.
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {([true, false] as const).map((val) => {
+                  const active = featurePolicies.shareLinksEnabled === val;
+                  return (
+                    <button
+                      key={String(val)}
+                      type="button"
+                      disabled={savingPolicyKey !== null}
+                      onClick={() =>
+                        void handleUpdateFeaturePolicy('shareLinksEnabled', {
+                          shareLinksEnabled: val,
+                        })
+                      }
+                      className={`lo-press flex-1 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition disabled:opacity-60 ${
+                        active
+                          ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                          : 'border border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                      }`}
+                    >
+                      {val ? 'On' : 'Disabled'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* HTTP Tracker Token Toggle */}
+            <div className="flex flex-col justify-between gap-3 rounded-lg border border-zinc-200/80 bg-zinc-50/60 p-3.5 dark:border-zinc-800 dark:bg-zinc-950/40">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-zinc-950 dark:text-zinc-50">
+                    <KeyRound className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                    HTTP Tracker Tokens
+                  </span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      featurePolicies.trackerTokensEnabled
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
+                        : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+                    }`}
+                  >
+                    {featurePolicies.trackerTokensEnabled ? 'On' : 'Disabled'}
+                  </span>
+                </div>
+                <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+                  Allow members to issue OwnTracks / Overland HTTP ingestion tokens.
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {([true, false] as const).map((val) => {
+                  const active = featurePolicies.trackerTokensEnabled === val;
+                  return (
+                    <button
+                      key={String(val)}
+                      type="button"
+                      disabled={savingPolicyKey !== null}
+                      onClick={() =>
+                        void handleUpdateFeaturePolicy('trackerTokensEnabled', {
+                          trackerTokensEnabled: val,
+                        })
+                      }
+                      className={`lo-press flex-1 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition disabled:opacity-60 ${
+                        active
+                          ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                          : 'border border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                      }`}
+                    >
+                      {val ? 'On' : 'Disabled'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Server Tile Downloads Policy */}
+            <div className="flex flex-col justify-between gap-3 rounded-lg border border-zinc-200/80 bg-zinc-50/60 p-3.5 dark:border-zinc-800 dark:bg-zinc-950/40">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-zinc-950 dark:text-zinc-50">
+                    <CloudDownload className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-400" />
+                    Server Tile Downloads
+                  </span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      featurePolicies.tileDownloadPolicy === 'auto'
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
+                        : featurePolicies.tileDownloadPolicy === 'manual'
+                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
+                          : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+                    }`}
+                  >
+                    {featurePolicies.tileDownloadPolicy === 'auto'
+                      ? 'Auto'
+                      : featurePolicies.tileDownloadPolicy === 'manual'
+                        ? 'Manual'
+                        : 'Disabled'}
+                  </span>
+                </div>
+                <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+                  {featurePolicies.tileDownloadPolicy === 'manual'
+                    ? 'Non-admins may request a tile download once and wait for Host Admin approval.'
+                    : featurePolicies.tileDownloadPolicy === 'disabled'
+                      ? 'Only Host Admins can trigger new regional map downloads.'
+                      : 'Members can automatically trigger regional PMTiles downloads.'}
+                </p>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {(
+                  [
+                    ['auto', 'Auto'],
+                    ['manual', 'Manual'],
+                    ['disabled', 'Disabled'],
+                  ] as readonly [TileDownloadPolicy, string][]
+                ).map(([mode, label]) => {
+                  const active = featurePolicies.tileDownloadPolicy === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      disabled={savingPolicyKey !== null}
+                      onClick={() =>
+                        void handleUpdateFeaturePolicy('tileDownloadPolicy', {
+                          tileDownloadPolicy: mode,
+                        })
+                      }
+                      className={`lo-press rounded-md px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-60 ${
+                        active
+                          ? 'bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                          : 'border border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-zinc-200/80 bg-white/95 p-5 shadow-sm backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -745,6 +1044,18 @@ export default function AdminDashboardPage() {
                 </button>
               )}
 
+              {updateStatus && updateStatus.enabled && !updateStatus.running && (
+                <button
+                  type="button"
+                  disabled={schedulingUpdate || Boolean(updateStatus.workingTreeDirty)}
+                  onClick={() => setShowSchedulePicker((v) => !v)}
+                  className="lo-press inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:hover:text-white"
+                >
+                  <CalendarClock className="h-3.5 w-3.5" />
+                  {updateStatus.scheduledUpdate ? 'Reschedule' : 'Schedule'}
+                </button>
+              )}
+
               {updateStatus && updateStatus.logs.length > 0 && (
                 <button
                   type="button"
@@ -757,6 +1068,129 @@ export default function AdminDashboardPage() {
               )}
             </div>
           </div>
+
+          {updateStatus?.scheduledUpdate && !updateStatus.running && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50/90 px-3.5 py-2.5 text-xs text-sky-900 dark:border-sky-500/30 dark:bg-sky-950/40 dark:text-sky-100">
+              <div className="space-y-0.5">
+                <div className="flex flex-wrap items-center gap-2 font-semibold">
+                  <CalendarClock className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" />
+                  <span>
+                    Scheduled Restart in{' '}
+                    <span className="font-mono">
+                      {formatCountdownRemaining(updateStatus.scheduledUpdate.scheduledFor, nowMs)}
+                    </span>
+                  </span>
+                  {updateStatus.scheduledUpdate.rebuildEvenIfCurrent && (
+                    <span className="rounded-full bg-sky-200/70 px-2 py-0.5 text-[10px] font-semibold text-sky-900 dark:bg-sky-900/70 dark:text-sky-200">
+                      Force rebuild
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-sky-800/80 dark:text-sky-200/80">
+                  Local: {new Date(updateStatus.scheduledUpdate.scheduledFor).toLocaleString()} ·
+                  UTC: {new Date(updateStatus.scheduledUpdate.scheduledFor).toUTCString()} · Set by{' '}
+                  {updateStatus.scheduledUpdate.scheduledByUsername}
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={startingUpdate || schedulingUpdate}
+                  onClick={() =>
+                    void handleTriggerUpdate(
+                      Boolean(updateStatus.scheduledUpdate?.rebuildEvenIfCurrent),
+                    )
+                  }
+                  className="lo-press rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                >
+                  Run Now
+                </button>
+                <button
+                  type="button"
+                  disabled={schedulingUpdate}
+                  onClick={() => void handleCancelScheduledUpdate()}
+                  className="lo-press rounded-md border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-sky-900 hover:bg-sky-100 disabled:opacity-50 dark:border-sky-500/40 dark:bg-sky-950/60 dark:text-sky-100 dark:hover:bg-sky-900"
+                >
+                  Cancel Schedule
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showSchedulePicker && updateStatus?.enabled && !updateStatus.running && (
+            <div className="mt-3 space-y-2.5 rounded-lg border border-zinc-200/80 bg-zinc-50/80 p-3 text-xs dark:border-zinc-700 dark:bg-zinc-800/70">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                  Schedule Update &amp; Restart
+                </span>
+                <label className="flex items-center gap-1.5 text-[11px] text-zinc-600 dark:text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={scheduleRebuildEvenIfCurrent}
+                    onChange={(e) => setScheduleRebuildEvenIfCurrent(e.target.checked)}
+                    className="rounded border-zinc-300 dark:border-zinc-600 dark:bg-zinc-800"
+                  />
+                  Rebuild even if already up to date
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={schedulingUpdate}
+                  onClick={() => void handleScheduleUpdate({ delayMinutes: 15 })}
+                  className="lo-press rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                >
+                  In 15m
+                </button>
+                <button
+                  type="button"
+                  disabled={schedulingUpdate}
+                  onClick={() => void handleScheduleUpdate({ delayMinutes: 60 })}
+                  className="lo-press rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                >
+                  In 1h
+                </button>
+                <button
+                  type="button"
+                  disabled={schedulingUpdate}
+                  onClick={() => {
+                    const target = new Date();
+                    target.setHours(3, 0, 0, 0);
+                    if (target.getTime() <= Date.now() + 60_000) {
+                      target.setDate(target.getDate() + 1);
+                    }
+                    void handleScheduleUpdate({ runAt: target.toISOString() });
+                  }}
+                  className="lo-press rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                >
+                  Tonight 03:00
+                </button>
+                <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
+                  <input
+                    type="datetime-local"
+                    value={scheduleDateTimeInput}
+                    onChange={(e) => setScheduleDateTimeInput(e.target.value)}
+                    className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                  />
+                  <button
+                    type="button"
+                    disabled={schedulingUpdate || !scheduleDateTimeInput}
+                    onClick={() => {
+                      const parsed = new Date(scheduleDateTimeInput);
+                      if (Number.isNaN(parsed.getTime())) {
+                        setError('Enter a valid local date and time.');
+                        return;
+                      }
+                      void handleScheduleUpdate({ runAt: parsed.toISOString() });
+                    }}
+                    className="lo-press rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                  >
+                    Set Time
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {updateStatus?.workingTreeDirty && (
             <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/50 dark:text-amber-300">
@@ -1218,6 +1652,85 @@ export default function AdminDashboardPage() {
               })()}
             </div>
           </div>
+          {mapRequests.length > 0 && (
+            <div className="border-b border-zinc-100 bg-zinc-50/70 px-5 py-3.5 dark:border-zinc-800 dark:bg-zinc-950/40">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                  Member Tile Download Requests
+                </span>
+                {mapRequests.some((r) => r.status === 'PENDING') && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
+                    {mapRequests.filter((r) => r.status === 'PENDING').length} pending approval
+                  </span>
+                )}
+              </div>
+              <div className="space-y-2">
+                {mapRequests.map((req) => {
+                  const isPending = req.status === 'PENDING';
+                  const busy = reviewingMapRequestId === req.id;
+                  return (
+                    <div
+                      key={req.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-200/80 bg-white px-3.5 py-2.5 text-xs dark:border-zinc-800 dark:bg-zinc-900"
+                    >
+                      <div className="space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-zinc-950 dark:text-zinc-50">
+                            {req.displayName ?? req.cityName ?? 'Requested Region'}
+                          </span>
+                          <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                            by @{req.requesterUsername}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+                          <span>
+                            {req.latitude.toFixed(4)}, {req.longitude.toFixed(4)}
+                          </span>
+                          <span>· {new Date(req.createdAt).toLocaleString()}</span>
+                        </div>
+                      </div>
+                      {isPending ? (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleReviewMapRequest(req.id, 'approve')}
+                            className="lo-press inline-flex items-center gap-1 rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                          >
+                            {busy ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Check className="h-3 w-3" />
+                            )}
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleReviewMapRequest(req.id, 'deny')}
+                            className="lo-press inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-500/30 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
+                          >
+                            <X className="h-3 w-3" />
+                            Deny
+                          </button>
+                        </div>
+                      ) : (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            req.status === 'APPROVED'
+                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                              : 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                          }`}
+                        >
+                          {req.status}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-zinc-50/90 text-zinc-500 dark:bg-zinc-950/60 dark:text-zinc-400">

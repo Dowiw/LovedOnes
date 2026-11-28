@@ -902,6 +902,15 @@ export const SystemUpdateCommitSchema = z.object({
 });
 export type SystemUpdateCommit = z.infer<typeof SystemUpdateCommitSchema>;
 
+export const ScheduledSystemUpdateSchema = z.object({
+  scheduledFor: z.string(),
+  scheduledByUserId: z.string().uuid(),
+  scheduledByUsername: z.string(),
+  rebuildEvenIfCurrent: z.boolean().default(false),
+  createdAt: z.string(),
+});
+export type ScheduledSystemUpdate = z.infer<typeof ScheduledSystemUpdateSchema>;
+
 export const SystemUpdateStatusSchema = z.object({
   enabled: z.boolean(),
   disabledReason: z.string().nullable().optional(),
@@ -922,6 +931,7 @@ export const SystemUpdateStatusSchema = z.object({
   targetCommit: z.string().nullable(),
   error: z.string().nullable(),
   logs: z.array(z.string()),
+  scheduledUpdate: ScheduledSystemUpdateSchema.nullable().optional(),
 });
 export type SystemUpdateStatus = z.infer<typeof SystemUpdateStatusSchema>;
 
@@ -929,6 +939,72 @@ export const TriggerSystemUpdateSchema = z.object({
   rebuildEvenIfCurrent: z.boolean().default(false),
 });
 export type TriggerSystemUpdateInput = z.infer<typeof TriggerSystemUpdateSchema>;
+
+export const ScheduleSystemUpdateSchema = z
+  .object({
+    runAt: z.string().trim().min(1).optional(),
+    delayMinutes: z.number().int().min(1).max(7 * 24 * 60).optional(),
+    rebuildEvenIfCurrent: z.boolean().default(false),
+  })
+  .refine((val) => Boolean(val.runAt) || typeof val.delayMinutes === 'number', {
+    message: 'Provide either runAt (ISO timestamp) or delayMinutes',
+  });
+export type ScheduleSystemUpdateInput = z.infer<typeof ScheduleSystemUpdateSchema>;
+
+// ---- Host Admin Feature Policies & Manual Tile Download Requests ----
+
+export const TileDownloadPolicySchema = z.enum(['auto', 'manual', 'disabled']);
+export type TileDownloadPolicy = z.infer<typeof TileDownloadPolicySchema>;
+
+export const FeaturePoliciesSchema = z.object({
+  shareLinksEnabled: z.boolean().default(true),
+  trackerTokensEnabled: z.boolean().default(true),
+  tileDownloadPolicy: TileDownloadPolicySchema.default('auto'),
+  updatedAt: z.string().nullable().optional(),
+});
+export type FeaturePolicies = z.infer<typeof FeaturePoliciesSchema>;
+
+export const DEFAULT_FEATURE_POLICIES: FeaturePolicies = {
+  shareLinksEnabled: true,
+  trackerTokensEnabled: true,
+  tileDownloadPolicy: 'auto',
+  updatedAt: null,
+};
+
+export const UpdateFeaturePoliciesSchema = z
+  .object({
+    shareLinksEnabled: z.boolean().optional(),
+    trackerTokensEnabled: z.boolean().optional(),
+    tileDownloadPolicy: TileDownloadPolicySchema.optional(),
+  })
+  .refine(
+    (v) =>
+      v.shareLinksEnabled !== undefined ||
+      v.trackerTokensEnabled !== undefined ||
+      v.tileDownloadPolicy !== undefined,
+    { message: 'Provide at least one feature policy field to update' },
+  );
+export type UpdateFeaturePoliciesInput = z.infer<typeof UpdateFeaturePoliciesSchema>;
+
+export const TileDownloadRequestStatusSchema = z.enum(['PENDING', 'APPROVED', 'DENIED']);
+export type TileDownloadRequestStatus = z.infer<typeof TileDownloadRequestStatusSchema>;
+
+export const TileDownloadRequestItemSchema = z.object({
+  id: z.string().uuid(),
+  requesterId: z.string().uuid(),
+  requesterUsername: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  cityName: z.string().nullable(),
+  displayName: z.string().nullable(),
+  radiusKm: z.number().nullable(),
+  status: TileDownloadRequestStatusSchema,
+  jobId: z.string().nullable(),
+  createdAt: z.string(),
+  reviewedAt: z.string().nullable(),
+  reviewedByUsername: z.string().nullable(),
+});
+export type TileDownloadRequestItem = z.infer<typeof TileDownloadRequestItemSchema>;
 
 // ---- Log Retention Policy Schemas ----
 

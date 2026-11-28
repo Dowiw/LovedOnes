@@ -17,9 +17,11 @@ import {
   CreateGroupPlaceSchema,
   CreateLocationRequestSchema,
   CreateRegistrationRequestSchema,
+  DEFAULT_FEATURE_POLICIES,
   DEFAULT_USER_CUSTOMIZATION,
   detectExternalMapPlatform,
   evaluateClientVersion,
+  FeaturePoliciesSchema,
   findCoveringRegions,
   formatCountdownRemaining,
   getUserCustomizationStorageKey,
@@ -43,6 +45,8 @@ import {
   normalizeOverlandToPoints,
   normalizeOwnTracksToPoints,
   normalizePrivacyMode,
+  ScheduleSystemUpdateSchema,
+  UpdateFeaturePoliciesSchema,
   normalizeViewportBearing,
   parseBoundingBox,
   parseInviteInput,
@@ -1918,5 +1922,47 @@ describe('@loved-ones/shared', () => {
     cache.patch('group-b', { places: [{ id: 'p1' }] });
     cache.clear();
     expect(cache.get('group-b')).toBeUndefined();
+  });
+
+  it('validates Host Admin feature policies (#55) and scheduled system updates (#49)', () => {
+    expect(DEFAULT_FEATURE_POLICIES).toEqual({
+      shareLinksEnabled: true,
+      trackerTokensEnabled: true,
+      tileDownloadPolicy: 'auto',
+      updatedAt: null,
+    });
+    expect(FeaturePoliciesSchema.parse({})).toEqual({
+      shareLinksEnabled: true,
+      trackerTokensEnabled: true,
+      tileDownloadPolicy: 'auto',
+    });
+    expect(UpdateFeaturePoliciesSchema.safeParse({}).success).toBe(false);
+    expect(
+      UpdateFeaturePoliciesSchema.parse({
+        shareLinksEnabled: false,
+        tileDownloadPolicy: 'manual',
+      }),
+    ).toEqual({
+      shareLinksEnabled: false,
+      tileDownloadPolicy: 'manual',
+    });
+    expect(
+      UpdateFeaturePoliciesSchema.safeParse({ tileDownloadPolicy: 'invalid' }).success,
+    ).toBe(false);
+
+    expect(ScheduleSystemUpdateSchema.safeParse({}).success).toBe(false);
+    expect(ScheduleSystemUpdateSchema.parse({ delayMinutes: 15 })).toEqual({
+      delayMinutes: 15,
+      rebuildEvenIfCurrent: false,
+    });
+    expect(
+      ScheduleSystemUpdateSchema.parse({
+        runAt: '2026-11-28T03:00:00.000Z',
+        rebuildEvenIfCurrent: true,
+      }),
+    ).toEqual({
+      runAt: '2026-11-28T03:00:00.000Z',
+      rebuildEvenIfCurrent: true,
+    });
   });
 });

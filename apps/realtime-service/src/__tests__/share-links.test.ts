@@ -266,4 +266,28 @@ describe('ShareLinksModule', () => {
     await mod.revokeShareLink(alice, second.token);
     await expect(mod.getPublicShareSnapshot(second.token)).rejects.toThrow('revoked');
   });
+
+  it('blocks creating new share links when Host Admin disables shareLinksEnabled (#55)', async () => {
+    const store = new InMemoryShareLinkStore();
+    store.memberships.set(`${alice.id}:${groupId}`, { role: 'MEMBER', effectivePrivacy: 'EXACT' });
+    let enabled = true;
+    const mod = new ShareLinksModule({
+      store,
+      publicServerUrl: 'https://track.example.com',
+      isShareLinksEnabled: async () => enabled,
+    });
+
+    const created = await mod.createShareLink(alice, { groupId, durationMinutes: 60 });
+    expect(created.token).toMatch(/^shr_/);
+
+    enabled = false;
+    await expect(mod.createShareLink(alice, { groupId, durationMinutes: 60 })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+
+    // Listing & revoking existing links still works when creation is disabled
+    const existing = await mod.listShareLinks(alice);
+    expect(existing).toHaveLength(1);
+    await expect(mod.revokeShareLink(alice, created.token)).resolves.toEqual({ revoked: true });
+  });
 });

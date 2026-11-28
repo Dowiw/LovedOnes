@@ -266,3 +266,22 @@ export const serverSettings = pgTable('server_settings', {
   updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const mapDownloadRequests = pgTable('map_download_requests', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  requesterId: uuid('requester_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  requesterUsername: varchar('requester_username', { length: 64 }).notNull(),
+  latitude: doublePrecision('latitude').notNull(),
+  longitude: doublePrecision('longitude').notNull(),
+  cityName: varchar('city_name', { length: 120 }),
+  displayName: varchar('display_name', { length: 200 }),
+  radiusKm: doublePrecision('radius_km'),
+  status: varchar('status', { length: 16 }).default('PENDING').notNull(),
+  jobId: varchar('job_id', { length: 64 }),
+  reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedByUsername: varchar('reviewed_by_username', { length: 64 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+});

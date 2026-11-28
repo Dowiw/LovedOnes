@@ -47,6 +47,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  DEFAULT_FEATURE_POLICIES,
   GroupSnapshotCache,
   buildExternalMapsUrls,
   formatCountdownRemaining,
@@ -60,6 +61,7 @@ import {
   withMinDelay,
   type AppVersionInfo,
   type ChatMessage,
+  type FeaturePolicies,
   type GroupPlace,
   type LocationBroadcast,
   type LocationRequestItem,
@@ -72,6 +74,7 @@ import {
   type PrivacyMode,
   type PublicLoginConfig,
   type RegistrationRequestItem,
+  type TileDownloadRequestItem,
   type TimelapseFrame,
   type TrailDisplayMode,
   type TrailsResponseMeta,
@@ -108,6 +111,7 @@ import {
   apiDeletePlace,
   apiFetchAccessiblePlaces,
   apiFetchAppVersion,
+  apiFetchFeaturePolicies,
   apiFetchForgotPasswordStatus,
   apiFetchGroupLocations,
   apiFetchGroupMessages,
@@ -116,6 +120,7 @@ import {
   apiFetchLocationRequests,
   apiFetchMapJobs,
   apiFetchMapRegions,
+  apiFetchMyMapDownloadRequest,
   apiFetchPublicConfig,
   apiFetchRegistrationRequestStatus,
   apiGetMe,
@@ -410,6 +415,12 @@ export default function HomePage() {
   const [mapRegionsLoaded, setMapRegionsLoaded] = useState(false);
   const [regionsRevision, setRegionsRevision] = useState(0);
   const [allowMemberMapDownloads, setAllowMemberMapDownloads] = useState(true);
+  const [featurePolicies, setFeaturePolicies] = useState<FeaturePolicies>(DEFAULT_FEATURE_POLICIES);
+  const [myTileDownloadRequest, setMyTileDownloadRequest] = useState<{
+    hasRequested: boolean;
+    request: TileDownloadRequestItem | null;
+  }>({ hasRequested: false, request: null });
+  const [mapDownloadNotice, setMapDownloadNotice] = useState<string | null>(null);
   const [mapJobs, setMapJobs] = useState<MapDownloadJob[]>([]);
   const [mapDownloadBusy, setMapDownloadBusy] = useState(false);
   const [mapDownloadError, setMapDownloadError] = useState<string | null>(null);
@@ -841,6 +852,11 @@ export default function HomePage() {
       const data = await apiFetchMapRegions();
       setMapRegions(data.regions);
       setAllowMemberMapDownloads(data.allowMemberDownloads);
+      if (data.featurePolicies) {
+        setFeaturePolicies(data.featurePolicies);
+      } else if (data.tileDownloadPolicy) {
+        setFeaturePolicies((prev) => ({ ...prev, tileDownloadPolicy: data.tileDownloadPolicy! }));
+      }
       if (data.jobs) {
         setMapJobs(data.jobs);
       }
@@ -856,6 +872,17 @@ export default function HomePage() {
   useEffect(() => {
     if (!session) return;
     void refreshMapRegions(false);
+    void apiFetchFeaturePolicies(session.accessToken)
+      .then((res) => {
+        setFeaturePolicies(res.policies);
+        setAllowMemberMapDownloads(res.policies.tileDownloadPolicy !== 'disabled');
+      })
+      .catch(() => {});
+    void apiFetchMyMapDownloadRequest(session.accessToken)
+      .then((res) => {
+        setMyTileDownloadRequest(res);
+      })
+      .catch(() => {});
     setShareLinksLoading(true);
     void apiListShareLinks(session.accessToken)
       .then((list) => {
@@ -974,6 +1001,7 @@ export default function HomePage() {
     if (!session) return;
     setMapDownloadBusy(true);
     setMapDownloadError(null);
+    setMapDownloadNotice(null);
     try {
       const res = await withMinDelay(
         apiRequestMapDownload(session.accessToken, {
@@ -991,6 +1019,11 @@ export default function HomePage() {
           await refreshMapRegions(true);
         }
         setDismissedUncoveredKey(null);
+      } else if (res.pendingApproval && res.request) {
+        setMyTileDownloadRequest({ hasRequested: true, request: res.request });
+        setMapDownloadNotice(
+          `Tile download request for ${res.request.displayName ?? res.request.cityName ?? 'this area'} sent for Host Admin approval.`,
+        );
       } else if (res.job) {
         setMapJobs((prev) => [res.job!, ...prev.filter((j) => j.id !== res.job!.id)]);
       }
@@ -2857,9 +2890,15 @@ export default function HomePage() {
       {/* Calm Missing-Map-Coverage / Download Progress Pill */}
       {(activeMapJob ||
         mapDownloadError ||
+        mapDownloadNotice ||
         (uncoveredTarget &&
           dismissedUncoveredKey !== uncoveredTarget.coordKey &&
-          (allowMemberMapDownloads || session.user.role === 'HOST_ADMIN'))) && (
+          (session.user.role === 'HOST_ADMIN' ||
+            (allowMemberMapDownloads &&
+              featurePolicies.tileDownloadPolicy !== 'disabled' &&
+              (featurePolicies.tileDownloadPolicy === 'auto' ||
+                !myTileDownloadRequest.hasRequested ||
+                myTileDownloadRequest.request?.status === 'PENDING'))))) && (
         <div className="pointer-events-none fixed left-1/2 top-[calc(4rem+var(--lo-safe-top,0px))] z-20 w-[calc(100vw-1.5rem)] max-w-md -translate-x-1/2 md:top-[calc(1rem+var(--lo-safe-top,0px))]">
           <div className="lo-float-in pointer-events-auto rounded-xl border border-zinc-200/85 bg-white/95 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(9,9,11,0.1)] backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-900/95">
             {activeMapJob ? (
@@ -2881,6 +2920,19 @@ export default function HomePage() {
                     style={{ width: `${Math.max(8, activeMapJob.progressPct)}%` }}
                   />
                 </div>
+              </div>
+            ) : mapDownloadNotice ? (
+              <div className="flex items-center justify-between gap-2.5 text-xs">
+                <span className="min-w-0 flex-1 text-amber-800 dark:text-amber-300">
+                  {mapDownloadNotice}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMapDownloadNotice(null)}
+                  className="shrink-0 rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
             ) : mapDownloadError ? (
               <div className="flex items-center justify-between gap-2.5 text-xs">
@@ -2916,26 +2968,45 @@ export default function HomePage() {
                   <div className="flex min-w-0 items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
                     <CloudDownload className="h-4 w-4 shrink-0 text-zinc-900 dark:text-zinc-100" />
                     <span className="truncate">
-                      No map tiles cached for{' '}
-                      <span className="font-semibold text-zinc-950 dark:text-zinc-50">
-                        {uncoveredTarget.contextLabel}
-                      </span>
+                      {session.user.role !== 'HOST_ADMIN' &&
+                      featurePolicies.tileDownloadPolicy === 'manual' &&
+                      myTileDownloadRequest.request?.status === 'PENDING' ? (
+                        <>Tile download request pending Host Admin approval</>
+                      ) : (
+                        <>
+                          No map tiles cached for{' '}
+                          <span className="font-semibold text-zinc-950 dark:text-zinc-50">
+                            {uncoveredTarget.contextLabel}
+                          </span>
+                        </>
+                      )}
                     </span>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      disabled={mapDownloadBusy}
-                      onClick={() =>
-                        void handleRequestMapDownload(
-                          uncoveredTarget.latitude,
-                          uncoveredTarget.longitude,
-                        )
-                      }
-                      className="lo-press rounded-lg bg-zinc-950 px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
-                    >
-                      {mapDownloadBusy ? 'Starting…' : 'Download city map'}
-                    </button>
+                    {!(
+                      session.user.role !== 'HOST_ADMIN' &&
+                      featurePolicies.tileDownloadPolicy === 'manual' &&
+                      myTileDownloadRequest.request?.status === 'PENDING'
+                    ) && (
+                      <button
+                        type="button"
+                        disabled={mapDownloadBusy}
+                        onClick={() =>
+                          void handleRequestMapDownload(
+                            uncoveredTarget.latitude,
+                            uncoveredTarget.longitude,
+                          )
+                        }
+                        className="lo-press rounded-lg bg-zinc-950 px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                      >
+                        {mapDownloadBusy
+                          ? 'Sending…'
+                          : session.user.role !== 'HOST_ADMIN' &&
+                              featurePolicies.tileDownloadPolicy === 'manual'
+                            ? 'Request city map'
+                            : 'Download city map'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setDismissedUncoveredKey(uncoveredTarget.coordKey)}
@@ -3314,7 +3385,21 @@ export default function HomePage() {
                       )}
                     </>
                   )}
-                  {(allowMemberMapDownloads || session.user.role === 'HOST_ADMIN') &&
+                  {session.user.role !== 'HOST_ADMIN' &&
+                  featurePolicies.tileDownloadPolicy === 'disabled' ? (
+                    <p className="rounded-lg border border-zinc-200/80 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/80 dark:text-zinc-400">
+                      Server map tile downloads are restricted to Host Admins.
+                    </p>
+                  ) : session.user.role !== 'HOST_ADMIN' &&
+                    featurePolicies.tileDownloadPolicy === 'manual' &&
+                    myTileDownloadRequest.hasRequested ? (
+                    <p className="rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-1.5 text-[11px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/50 dark:text-amber-300">
+                      {myTileDownloadRequest.request?.status === 'PENDING'
+                        ? 'Your manual tile download request is pending Host Admin approval.'
+                        : 'Manual tile request limit reached (1 per member).'}
+                    </p>
+                  ) : (
+                    (allowMemberMapDownloads || session.user.role === 'HOST_ADMIN') &&
                     (selfLocation || mapViewport) && (
                       <button
                         type="button"
@@ -3327,9 +3412,15 @@ export default function HomePage() {
                         className="lo-press mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
                       >
                         <CloudDownload className="h-3.5 w-3.5" />
-                        {activeMapJob ? 'Download in progress…' : 'Download map for current view'}
+                        {activeMapJob
+                          ? 'Download in progress…'
+                          : session.user.role !== 'HOST_ADMIN' &&
+                              featurePolicies.tileDownloadPolicy === 'manual'
+                            ? 'Request map for current view (Admin approval)'
+                            : 'Download map for current view'}
                       </button>
-                    )}
+                    )
+                  )}
                 </div>
               )}
             </div>
@@ -3361,6 +3452,11 @@ export default function HomePage() {
                   Guest Share Links
                 </span>
                 <span className="flex items-center gap-1.5">
+                  {!featurePolicies.shareLinksEnabled && (
+                    <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[10px] font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      Disabled
+                    </span>
+                  )}
                   {shareLinks.length > 0 && (
                     <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
                       {shareLinks.length}
@@ -3376,48 +3472,56 @@ export default function HomePage() {
 
               {shareLinksOpen && (
                 <div className="mt-2 space-y-2.5 px-1">
-                  <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
-                    Share an isolated link with people outside your group. Only participants on the
-                    same link see each other.
-                  </p>
-                  <input
-                    type="text"
-                    maxLength={80}
-                    value={shareLabelInput}
-                    onChange={(e) => setShareLabelInput(e.target.value)}
-                    placeholder="Label (optional, e.g. Meetup)"
-                    className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
-                  />
-                  <label className="flex items-center gap-2 text-[11px] text-zinc-700 dark:text-zinc-300">
-                    <input
-                      type="checkbox"
-                      checked={shareAllowMutual}
-                      onChange={(e) => setShareAllowMutual(e.target.checked)}
-                      className="rounded border-zinc-300 dark:border-zinc-600 dark:bg-zinc-800"
-                    />
-                    Allow guests on this link to share back
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <select
-                      value={shareDurationMinutes}
-                      onChange={(e) => setShareDurationMinutes(Number(e.target.value))}
-                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
-                    >
-                      <option value={15}>15 min</option>
-                      <option value={60}>1 hour</option>
-                      <option value={240}>4 hours</option>
-                      <option value={1440}>24 hours</option>
-                    </select>
-                    <button
-                      type="button"
-                      disabled={shareLinkBusy || !activeGroup || activeGroup.myRole === 'SPECTATOR'}
-                      onClick={() => void handleCreateShareLink()}
-                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
-                    >
-                      {shareLinkBusy && <Loader2 className="h-3 w-3 animate-spin" />}
-                      Create Link
-                    </button>
-                  </div>
+                  {!featurePolicies.shareLinksEnabled ? (
+                    <p className="rounded-lg border border-zinc-200/80 bg-zinc-50 px-2.5 py-2 text-[11px] leading-snug text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/80 dark:text-zinc-400">
+                      Creating new public share links is disabled by the Host Admin.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+                        Share an isolated link with people outside your group. Only participants on
+                        the same link see each other.
+                      </p>
+                      <input
+                        type="text"
+                        maxLength={80}
+                        value={shareLabelInput}
+                        onChange={(e) => setShareLabelInput(e.target.value)}
+                        placeholder="Label (optional, e.g. Meetup)"
+                        className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
+                      />
+                      <label className="flex items-center gap-2 text-[11px] text-zinc-700 dark:text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={shareAllowMutual}
+                          onChange={(e) => setShareAllowMutual(e.target.checked)}
+                          className="rounded border-zinc-300 dark:border-zinc-600 dark:bg-zinc-800"
+                        />
+                        Allow guests on this link to share back
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={shareDurationMinutes}
+                          onChange={(e) => setShareDurationMinutes(Number(e.target.value))}
+                          className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
+                        >
+                          <option value={15}>15 min</option>
+                          <option value={60}>1 hour</option>
+                          <option value={240}>4 hours</option>
+                          <option value={1440}>24 hours</option>
+                        </select>
+                        <button
+                          type="button"
+                          disabled={shareLinkBusy || !activeGroup || activeGroup.myRole === 'SPECTATOR'}
+                          onClick={() => void handleCreateShareLink()}
+                          className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                        >
+                          {shareLinkBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                          Create Link
+                        </button>
+                      </div>
+                    </>
+                  )}
                   {shareLinkError && (
                     <p className="text-[11px] text-rose-600 dark:text-rose-400">{shareLinkError}</p>
                   )}
@@ -3501,6 +3605,11 @@ export default function HomePage() {
                   HTTP Tracker Token
                 </span>
                 <span className="flex items-center gap-1.5">
+                  {!featurePolicies.trackerTokensEnabled && (
+                    <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[10px] font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      Disabled
+                    </span>
+                  )}
                   {trackerActive && (
                     <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100">
                       {Math.max(1, Math.ceil(trackerTtlSeconds / 86400))}d left
@@ -3516,32 +3625,41 @@ export default function HomePage() {
 
               {trackerOpen && (
                 <div className="mt-2 space-y-2.5 px-1">
+                  {!featurePolicies.trackerTokensEnabled && (
+                    <p className="rounded-lg border border-zinc-200/80 bg-zinc-50 px-2.5 py-2 text-[11px] leading-snug text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/80 dark:text-zinc-400">
+                      Issuing new HTTP tracker tokens is disabled by the Host Admin.
+                    </p>
+                  )}
                   <div className="flex items-center gap-1.5">
-                    <select
-                      value={trackerDays}
-                      onChange={(e) => setTrackerDays(Number(e.target.value))}
-                      className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
-                    >
-                      <option value={7}>7 days</option>
-                      <option value={30}>30 days</option>
-                      <option value={90}>90 days</option>
-                      <option value={365}>1 year</option>
-                    </select>
-                    <button
-                      type="button"
-                      disabled={trackerLoading}
-                      onClick={() => void handleGenerateTrackerToken()}
-                      className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
-                    >
-                      {trackerLoading && <Loader2 className="h-3 w-3 animate-spin" />}
-                      <span>
-                        {trackerLoading
-                          ? 'Saving...'
-                          : trackerActive
-                            ? 'Rotate'
-                            : 'Generate'}
-                      </span>
-                    </button>
+                    {featurePolicies.trackerTokensEnabled && (
+                      <>
+                        <select
+                          value={trackerDays}
+                          onChange={(e) => setTrackerDays(Number(e.target.value))}
+                          className="rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[11px] text-zinc-800 focus:border-zinc-400 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:bg-zinc-800"
+                        >
+                          <option value={7}>7 days</option>
+                          <option value={30}>30 days</option>
+                          <option value={90}>90 days</option>
+                          <option value={365}>1 year</option>
+                        </select>
+                        <button
+                          type="button"
+                          disabled={trackerLoading}
+                          onClick={() => void handleGenerateTrackerToken()}
+                          className="lo-press flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                        >
+                          {trackerLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                          <span>
+                            {trackerLoading
+                              ? 'Saving...'
+                              : trackerActive
+                                ? 'Rotate'
+                                : 'Generate'}
+                          </span>
+                        </button>
+                      </>
+                    )}
                     {trackerActive && (
                       <button
                         type="button"

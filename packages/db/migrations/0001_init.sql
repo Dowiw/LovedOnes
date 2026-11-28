@@ -275,6 +275,29 @@ CREATE TABLE IF NOT EXISTS server_settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS map_download_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    requester_username VARCHAR(64) NOT NULL,
+    latitude DOUBLE PRECISION NOT NULL,
+    longitude DOUBLE PRECISION NOT NULL,
+    city_name VARCHAR(120) NULL,
+    display_name VARCHAR(200) NULL,
+    radius_km DOUBLE PRECISION NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    job_id VARCHAR(64) NULL,
+    reviewed_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_by_username VARCHAR(64) NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reviewed_at TIMESTAMPTZ NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_map_download_requests_status_created
+    ON map_download_requests (status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_map_download_requests_requester
+    ON map_download_requests (requester_id, created_at DESC);
+
 DO $$ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_indexes

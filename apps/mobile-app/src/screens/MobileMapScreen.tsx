@@ -439,6 +439,12 @@ export function MobileMapScreen({
   const [localPmtilesUri, setLocalPmtilesUri] = useState<string | null>(null);
   const [mapRegions, setMapRegions] = useState<MapRegion[]>([]);
   const [mapRegionsLoaded, setMapRegionsLoaded] = useState(false);
+  const [tileDownloadPolicy, setTileDownloadPolicy] = useState<'auto' | 'manual' | 'disabled'>('auto');
+  const [shareLinksEnabled, setShareLinksEnabled] = useState(true);
+  const [myTileRequestStatus, setMyTileRequestStatus] = useState<{
+    hasRequested: boolean;
+    status: 'PENDING' | 'APPROVED' | 'DENIED' | null;
+  }>({ hasRequested: false, status: null });
   const [activeMapJob, setActiveMapJob] = useState<MapDownloadJob | null>(null);
   const [dismissedUncoveredKey, setDismissedUncoveredKey] = useState<string | null>(null);
   const [permissionInfo, setPermissionInfo] = useState<LocationPermissionResult | null>(null);
@@ -1008,17 +1014,54 @@ export function MobileMapScreen({
     void fetchGroups().catch(() => {});
     void fetch(`${serverUrl}/api/maps/regions`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { regions?: MapRegion[]; jobs?: MapDownloadJob[] } | null) => {
-        if (!data) return;
-        if (data.regions) {
-          setMapRegions(data.regions);
-          setMapRegionsLoaded(true);
-        }
-        const running = data.jobs?.find(
-          (j) => j.status === 'queued' || j.status === 'resolving' || j.status === 'downloading',
-        );
-        if (running) setActiveMapJob(running);
-      })
+      .then(
+        (
+          data: {
+            regions?: MapRegion[];
+            jobs?: MapDownloadJob[];
+            tileDownloadPolicy?: 'auto' | 'manual' | 'disabled';
+            featurePolicies?: { shareLinksEnabled?: boolean; tileDownloadPolicy?: 'auto' | 'manual' | 'disabled' };
+          } | null,
+        ) => {
+          if (!data) return;
+          if (data.regions) {
+            setMapRegions(data.regions);
+            setMapRegionsLoaded(true);
+          }
+          if (data.tileDownloadPolicy) {
+            setTileDownloadPolicy(data.tileDownloadPolicy);
+          } else if (data.featurePolicies?.tileDownloadPolicy) {
+            setTileDownloadPolicy(data.featurePolicies.tileDownloadPolicy);
+          }
+          if (typeof data.featurePolicies?.shareLinksEnabled === 'boolean') {
+            setShareLinksEnabled(data.featurePolicies.shareLinksEnabled);
+          }
+          const running = data.jobs?.find(
+            (j) => j.status === 'queued' || j.status === 'resolving' || j.status === 'downloading',
+          );
+          if (running) setActiveMapJob(running);
+        },
+      )
+      .catch(() => {});
+
+    void fetch(`${serverUrl}/api/maps/requests/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (
+          data: {
+            hasRequested?: boolean;
+            request?: { status?: 'PENDING' | 'APPROVED' | 'DENIED' } | null;
+          } | null,
+        ) => {
+          if (!data) return;
+          setMyTileRequestStatus({
+            hasRequested: Boolean(data.hasRequested),
+            status: data.request?.status ?? null,
+          });
+        },
+      )
       .catch(() => {});
   }, [serverUrl, accessToken, fetchGroups]);
 
@@ -1899,12 +1942,19 @@ export function MobileMapScreen({
       });
       const data = (await res.json()) as {
         alreadyCovered?: boolean;
+        pendingApproval?: boolean;
+        request?: { status?: 'PENDING' | 'APPROVED' | 'DENIED' };
         job?: MapDownloadJob;
         regions?: MapRegion[];
         error?: string;
       };
       if (!res.ok) {
         setHubStatusMsg(data.error ?? 'Failed to request city map');
+        return;
+      }
+      if (data.pendingApproval) {
+        setMyTileRequestStatus({ hasRequested: true, status: 'PENDING' });
+        setHubStatusMsg('Tile download request sent for Host Admin approval');
         return;
       }
       if (data.alreadyCovered && data.regions) {
@@ -3461,11 +3511,29 @@ export function MobileMapScreen({
             );
           }
 
-          if (uncoveredMobileTarget && dismissedUncoveredKey !== uncoveredMobileTarget.key) {
+          const isHostAdminUser = userProfile?.role === 'HOST_ADMIN';
+          const canRequestServerTiles =
+            isHostAdminUser ||
+            tileDownloadPolicy === 'auto' ||
+            (tileDownloadPolicy === 'manual' && !myTileRequestStatus.hasRequested);
+
+          if (
+            uncoveredMobileTarget &&
+            dismissedUncoveredKey !== uncoveredMobileTarget.key &&
+            (canRequestServerTiles ||
+              (!isHostAdminUser &&
+                tileDownloadPolicy === 'manual' &&
+                myTileRequestStatus.status === 'PENDING'))
+          ) {
+            const isPendingManual =
+              !isHostAdminUser &&
+              tileDownloadPolicy === 'manual' &&
+              myTileRequestStatus.status === 'PENDING';
             return (
               <View style={styles.chatToastBanner}>
                 <TouchableOpacity
                   activeOpacity={0.9}
+                  disabled={isPendingManual}
                   style={styles.chatToastTextWrap}
                   onPress={() =>
                     void handleRequestServerCityMap(
@@ -3475,10 +3543,16 @@ export function MobileMapScreen({
                   }
                 >
                   <Text style={styles.chatToastSender} numberOfLines={1}>
-                    No map behind coordinates
+                    {isPendingManual
+                      ? 'Tile request awaiting approval'
+                      : 'No map behind coordinates'}
                   </Text>
                   <Text style={styles.chatToastBody} numberOfLines={1}>
-                    Tap to download city tiles on server
+                    {isPendingManual
+                      ? 'A Host Admin will review your tile download request'
+                      : !isHostAdminUser && tileDownloadPolicy === 'manual'
+                        ? 'Tap to request city tiles (Admin approval · 1 request max)'
+                        : 'Tap to download city tiles on server'}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -4674,7 +4748,11 @@ export function MobileMapScreen({
                     </Text>
                   </View>
                   <Text style={styles.menuRowAction}>
-                    {shareLinks.length > 0 ? `${shareLinks.length} active →` : 'Create →'}
+                    {!shareLinksEnabled
+                      ? 'Disabled'
+                      : shareLinks.length > 0
+                        ? `${shareLinks.length} active →`
+                        : 'Create →'}
                   </Text>
                 </TouchableOpacity>
 
@@ -5500,13 +5578,27 @@ export function MobileMapScreen({
                 <Text style={styles.menuRowAction}>{shareAllowMutual ? 'On' : 'Off'}</Text>
               </TouchableOpacity>
 
+              {!shareLinksEnabled && (
+                <Text style={styles.errorText}>
+                  Creating new public share links is disabled by the Host Admin. You can still
+                  view or revoke existing links below.
+                </Text>
+              )}
+
               <TouchableOpacity
-                style={[styles.openMapsBtn, { alignItems: 'center', paddingVertical: 11 }]}
-                disabled={shareBusy || !activeGroup}
+                style={[
+                  styles.openMapsBtn,
+                  { alignItems: 'center', paddingVertical: 11, opacity: !shareLinksEnabled ? 0.45 : 1 },
+                ]}
+                disabled={!shareLinksEnabled || shareBusy || !activeGroup}
                 onPress={() => void handleCreateMobileShareLink()}
               >
                 <Text style={[styles.openMapsBtnText, { fontSize: 13 }]}>
-                  {shareBusy ? 'Creating...' : 'Create Share Link'}
+                  {!shareLinksEnabled
+                    ? 'Disabled by Admin'
+                    : shareBusy
+                      ? 'Creating...'
+                      : 'Create Share Link'}
                 </Text>
               </TouchableOpacity>
 

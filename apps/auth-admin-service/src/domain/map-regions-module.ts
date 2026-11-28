@@ -13,6 +13,8 @@ import {
   RequestMapDownloadInput,
   RequestMapDownloadSchema,
   slugifyCityName,
+  TileDownloadPolicy,
+  TileDownloadRequestItem,
   WORLD_OVERVIEW_MAX_ZOOM,
   WORLD_OVERVIEW_REGION_ID,
 } from '@loved-ones/shared';
@@ -96,12 +98,105 @@ interface LoadedArchive {
   pmtiles: PMTiles;
 }
 
+export interface TileDownloadRequestStore {
+  create(input: {
+    requesterId: string;
+    requesterUsername: string;
+    latitude: number;
+    longitude: number;
+    cityName?: string | null;
+    displayName?: string | null;
+    radiusKm?: number | null;
+  }): Promise<TileDownloadRequestItem>;
+  list(): Promise<TileDownloadRequestItem[]>;
+  listForUser(userId: string): Promise<TileDownloadRequestItem[]>;
+  getById(id: string): Promise<TileDownloadRequestItem | null>;
+  resolve(input: {
+    id: string;
+    status: 'APPROVED' | 'DENIED';
+    reviewedBy: string;
+    reviewedByUsername: string;
+    jobId?: string | null;
+  }): Promise<TileDownloadRequestItem | null>;
+}
+
+class InMemoryTileDownloadRequestStore implements TileDownloadRequestStore {
+  private readonly items: TileDownloadRequestItem[] = [];
+
+  async create(input: {
+    requesterId: string;
+    requesterUsername: string;
+    latitude: number;
+    longitude: number;
+    cityName?: string | null;
+    displayName?: string | null;
+    radiusKm?: number | null;
+  }): Promise<TileDownloadRequestItem> {
+    const item: TileDownloadRequestItem = {
+      id: crypto.randomUUID(),
+      requesterId: input.requesterId,
+      requesterUsername: input.requesterUsername,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      cityName: input.cityName ?? null,
+      displayName: input.displayName ?? null,
+      radiusKm: input.radiusKm ?? null,
+      status: 'PENDING',
+      jobId: null,
+      createdAt: new Date().toISOString(),
+      reviewedAt: null,
+      reviewedByUsername: null,
+    };
+    this.items.unshift(item);
+    return item;
+  }
+
+  async list(): Promise<TileDownloadRequestItem[]> {
+    return [...this.items].sort((a, b) => {
+      const pa = a.status === 'PENDING' ? 0 : 1;
+      const pb = b.status === 'PENDING' ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+  }
+
+  async listForUser(userId: string): Promise<TileDownloadRequestItem[]> {
+    return this.items
+      .filter((item) => item.requesterId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async getById(id: string): Promise<TileDownloadRequestItem | null> {
+    return this.items.find((item) => item.id === id) ?? null;
+  }
+
+  async resolve(input: {
+    id: string;
+    status: 'APPROVED' | 'DENIED';
+    reviewedBy: string;
+    reviewedByUsername: string;
+    jobId?: string | null;
+  }): Promise<TileDownloadRequestItem | null> {
+    const found = this.items.find((item) => item.id === input.id && item.status === 'PENDING');
+    if (!found) return null;
+    found.status = input.status;
+    found.reviewedByUsername = input.reviewedByUsername;
+    found.reviewedAt = new Date().toISOString();
+    if (input.jobId !== undefined) {
+      found.jobId = input.jobId;
+    }
+    return { ...found };
+  }
+}
+
 export interface MapRegionsModuleOptions {
   tilesDir?: string;
   pmtilesBin?: string;
   protomapsSourceUrl?: string;
   protomapsBuildsUrl?: string;
   allowMemberDownloads?: boolean;
+  getTileDownloadPolicy?: () => Promise<TileDownloadPolicy>;
+  requestStore?: TileDownloadRequestStore;
   maxExtractMb?: number;
   maxMapStorageMb?: number;
   getMaxMapStorageMb?: () => Promise<number>;
@@ -372,6 +467,8 @@ export class MapRegionsModule {
   readonly regionsDir: string;
   readonly manifestPath: string;
   readonly allowMemberDownloads: boolean;
+  private readonly getTileDownloadPolicy?: () => Promise<TileDownloadPolicy>;
+  private readonly requestStore: TileDownloadRequestStore;
   private readonly maxExtractBytes: number;
   private readonly maxMapStorageMb: number;
   private readonly getMaxMapStorageMb?: () => Promise<number>;
@@ -392,6 +489,8 @@ export class MapRegionsModule {
     this.manifestPath = path.join(this.regionsDir, 'manifest.json');
     this.allowMemberDownloads =
       options.allowMemberDownloads ?? process.env.ALLOW_MEMBER_MAP_DOWNLOADS !== 'false';
+    this.getTileDownloadPolicy = options.getTileDownloadPolicy;
+    this.requestStore = options.requestStore ?? new InMemoryTileDownloadRequestStore();
     const maxMb = options.maxExtractMb ?? (Number.parseInt(process.env.MAX_MAP_EXTRACT_MB ?? '1024', 10) || 1024);
     const minFreeMb =
       options.minFreeDiskMb ?? (Number.parseInt(process.env.MIN_FREE_DISK_MB ?? '500', 10) || 500);
@@ -409,6 +508,29 @@ export class MapRegionsModule {
         options.protomapsBuildsUrl ?? process.env.PROTOMAPS_BUILDS_URL,
       );
     this.onLog = options.onLog;
+  }
+
+  async resolveTileDownloadPolicy(): Promise<TileDownloadPolicy> {
+    if (this.getTileDownloadPolicy) {
+      return this.getTileDownloadPolicy();
+    }
+    return this.allowMemberDownloads ? 'auto' : 'disabled';
+  }
+
+  async listManualRequests(): Promise<TileDownloadRequestItem[]> {
+    return this.requestStore.list();
+  }
+
+  async getManualRequestStatusForUser(userId: string): Promise<{
+    hasRequested: boolean;
+    request: TileDownloadRequestItem | null;
+  }> {
+    const list = await this.requestStore.listForUser(userId);
+    const pending = list.find((item) => item.status === 'PENDING') ?? null;
+    return {
+      hasRequested: list.length > 0,
+      request: pending ?? list[0] ?? null,
+    };
   }
 
   private async readManifest(): Promise<Record<string, ManifestEntry>> {
@@ -688,10 +810,13 @@ export class MapRegionsModule {
   }
 
   async requestCityDownload(
-    actor: { id: string; role: string },
+    actor: { id: string; role: string; username?: string },
     rawInput: unknown,
+    options?: { bypassManualPolicy?: boolean },
   ): Promise<{
     alreadyCovered: boolean;
+    pendingApproval?: boolean;
+    request?: TileDownloadRequestItem;
     region?: MapRegion;
     regions?: MapRegion[];
     job?: MapDownloadJob;
@@ -702,7 +827,10 @@ export class MapRegionsModule {
     }
     const input: RequestMapDownloadInput = parsed.data;
 
-    if (!this.allowMemberDownloads && actor.role !== 'HOST_ADMIN') {
+    const isHostAdmin = actor.role === 'HOST_ADMIN' || Boolean(options?.bypassManualPolicy);
+    const policy = await this.resolveTileDownloadPolicy();
+
+    if (!isHostAdmin && policy === 'disabled') {
       throw new DomainError(
         403,
         'Only Host Admins can trigger new server map downloads on this instance',
@@ -716,6 +844,40 @@ export class MapRegionsModule {
         alreadyCovered: true,
         region: matching[0],
         regions,
+      };
+    }
+
+    if (!isHostAdmin && policy === 'manual') {
+      const existingRequests = await this.requestStore.listForUser(actor.id);
+      if (existingRequests.length > 0) {
+        const latest = existingRequests[0]!;
+        throw new DomainError(
+          409,
+          latest.status === 'PENDING'
+            ? 'You already have a pending manual tile download request awaiting Host Admin approval'
+            : 'Non-admin members are limited to one manual tile download request',
+          { code: 'MANUAL_TILE_REQUEST_LIMIT_REACHED', existingRequestId: latest.id },
+        );
+      }
+
+      const cityInfo = await this.cityResolver
+        .resolve(input.latitude, input.longitude, input.cityName, input.radiusKm)
+        .catch(() => null);
+
+      const created = await this.requestStore.create({
+        requesterId: actor.id,
+        requesterUsername: actor.username?.trim() || 'member',
+        latitude: input.latitude,
+        longitude: input.longitude,
+        cityName: cityInfo?.cityName ?? input.cityName ?? null,
+        displayName: cityInfo?.displayName ?? input.cityName ?? null,
+        radiusKm: input.radiusKm ?? null,
+      });
+
+      return {
+        alreadyCovered: false,
+        pendingApproval: true,
+        request: created,
       };
     }
 
@@ -1037,6 +1199,85 @@ export class MapRegionsModule {
 
     await this.ensureLoaded();
     return { deleted: true, id: regionId };
+  }
+
+  async approveManualRequest(
+    adminActor: { id: string; username: string; role: string },
+    requestId: string,
+  ): Promise<{
+    request: TileDownloadRequestItem;
+    alreadyCovered: boolean;
+    job?: MapDownloadJob;
+    region?: MapRegion;
+    regions?: MapRegion[];
+  }> {
+    if (adminActor.role !== 'HOST_ADMIN') {
+      throw new DomainError(403, 'Only Host Admins can approve manual tile download requests');
+    }
+    const existing = await this.requestStore.getById(requestId);
+    if (!existing) {
+      throw new DomainError(404, 'Tile download request not found');
+    }
+    if (existing.status !== 'PENDING') {
+      throw new DomainError(409, `Tile download request is already ${existing.status.toLowerCase()}`);
+    }
+
+    const downloadRes = await this.requestCityDownload(
+      { id: adminActor.id, role: 'HOST_ADMIN', username: adminActor.username },
+      {
+        latitude: existing.latitude,
+        longitude: existing.longitude,
+        ...(existing.cityName ? { cityName: existing.cityName } : {}),
+        ...(existing.radiusKm !== null ? { radiusKm: existing.radiusKm } : {}),
+      },
+      { bypassManualPolicy: true },
+    );
+
+    const resolved = await this.requestStore.resolve({
+      id: existing.id,
+      status: 'APPROVED',
+      reviewedBy: adminActor.id,
+      reviewedByUsername: adminActor.username,
+      jobId: downloadRes.job?.id ?? null,
+    });
+    if (!resolved) {
+      throw new DomainError(409, 'Tile download request was already reviewed');
+    }
+
+    return {
+      request: resolved,
+      alreadyCovered: downloadRes.alreadyCovered,
+      job: downloadRes.job,
+      region: downloadRes.region,
+      regions: downloadRes.regions,
+    };
+  }
+
+  async denyManualRequest(
+    adminActor: { id: string; username: string; role: string },
+    requestId: string,
+  ): Promise<{ request: TileDownloadRequestItem }> {
+    if (adminActor.role !== 'HOST_ADMIN') {
+      throw new DomainError(403, 'Only Host Admins can deny manual tile download requests');
+    }
+    const existing = await this.requestStore.getById(requestId);
+    if (!existing) {
+      throw new DomainError(404, 'Tile download request not found');
+    }
+    if (existing.status !== 'PENDING') {
+      throw new DomainError(409, `Tile download request is already ${existing.status.toLowerCase()}`);
+    }
+    const resolved = await this.requestStore.resolve({
+      id: existing.id,
+      status: 'DENIED',
+      reviewedBy: adminActor.id,
+      reviewedByUsername: adminActor.username,
+      jobId: null,
+    });
+    if (!resolved) {
+      throw new DomainError(409, 'Tile download request was already reviewed');
+    }
+    return { request: resolved };
   }
 
   async getCompositeTile(z: number, x: number, y: number): Promise<Uint8Array | null> {
